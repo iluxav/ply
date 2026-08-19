@@ -30,6 +30,12 @@ pub struct ContainerSpec {
     pub sync_rx: std::os::fd::OwnedFd,
     /// Keep CAP_NET_BIND_SERVICE (a declared port is < 1024).
     pub keep_net_bind: bool,
+    /// Skip rights stripping entirely — ONLY for `ply craft` authoring
+    /// sessions, where installing packages needs real root inside.
+    pub privileged: bool,
+    /// Running in a user namespace as an unprivileged user: /dev nodes are
+    /// bind-mounted from the host (mknod is denied), devpts is best-effort.
+    pub rootless: bool,
 }
 
 /// Child entry point. Never returns on success (execve).
@@ -96,14 +102,37 @@ fn setup_and_exec(spec: &ContainerSpec) -> Result<isize> {
         })?;
     }
 
+    // /dev nodes before pivot: the bind-mount fallback needs host paths.
+    setup_dev_nodes(&root, spec.rootless)?;
+
+    // Rootless: a fresh proc mount in a user ns is refused (EPERM) while
+    // the current /proc carries overmounts (binfmt_misc, systemd bits).
+    // Our mount table is private — detaching them here touches nothing
+    // on the host.
+    if spec.rootless {
+        if let Ok(mountinfo) = std::fs::read_to_string("/proc/self/mountinfo") {
+            for line in mountinfo.lines() {
+                if let Some(mountpoint) = line.split(' ').nth(4) {
+                    if mountpoint.starts_with("/proc/") {
+                        mount::unmount_detach(Path::new(mountpoint));
+                    }
+                }
+            }
+        }
+    }
+
+    // proc must mount BEFORE pivot_root: an unprivileged user ns may only
+    // mount a new proc while a fully-visible one still exists in the mount
+    // namespace (the host's). Reflects the child's fresh pid ns either way.
+    mount::mount_proc(&root.join("proc"))?;
+
     nix::unistd::pivot_root(&root, &root.join(".pivot"))
         .map_err(|e| crate::Error::Runtime(format!("pivot_root: {e}")))?;
     nix::unistd::chdir("/").map_err(|e| crate::Error::Runtime(format!("chdir /: {e}")))?;
     mount::unmount_detach(Path::new("/.pivot"));
     let _ = std::fs::remove_dir("/.pivot");
 
-    mount::mount_proc(Path::new("/proc"))?;
-    setup_dev()?;
+    setup_dev_mounts(spec.rootless)?;
     mount::mount_tmpfs_flags(
         Path::new("/tmp"),
         "mode=1777",
@@ -140,9 +169,11 @@ fn setup_and_exec(spec: &ContainerSpec) -> Result<isize> {
     let program = CString::new(resolved.as_str()).unwrap();
 
     // Rights stripping LAST — everything above needed privilege.
-    crate::runtime::security::drop_capabilities(spec.keep_net_bind)?;
-    crate::runtime::security::no_new_privs()?;
-    crate::runtime::security::apply_seccomp()?;
+    if !spec.privileged {
+        crate::runtime::security::drop_capabilities(spec.keep_net_bind)?;
+        crate::runtime::security::no_new_privs()?;
+        crate::runtime::security::apply_seccomp()?;
+    }
 
     let e = nix::unistd::execve(&program, &argv, &env).unwrap_err();
     Err(crate::Error::Runtime(format!(
@@ -170,26 +201,43 @@ pub fn resolve_program(name: &str, path: &str) -> String {
     name.to_string() // let execve produce the honest ENOENT
 }
 
-/// Minimal /dev: tmpfs + ~10 nodes, per spec.
-fn setup_dev() -> Result<()> {
-    let dev = Path::new("/dev");
-    mount::mount_tmpfs(dev, "mode=755")?;
+/// Minimal /dev, phase 1 (pre-pivot): tmpfs + ~10 nodes. Root uses mknod;
+/// rootless bind-mounts the host's nodes (mknod is denied in a user ns).
+fn setup_dev_nodes(root: &Path, rootless: bool) -> Result<()> {
+    let dev = root.join("dev");
+    std::fs::create_dir_all(&dev).ok();
+    mount::mount_tmpfs(&dev, "mode=755")?;
 
-    let chr = |name: &str, major: u64, minor: u64| -> Result<()> {
-        mknod(
-            &dev.join(name),
-            SFlag::S_IFCHR,
-            Mode::from_bits_truncate(0o666),
-            makedev(major, minor),
-        )
-        .map_err(|e| crate::Error::Runtime(format!("mknod /dev/{name}: {e}")))
-    };
-    chr("null", 1, 3)?;
-    chr("zero", 1, 5)?;
-    chr("full", 1, 7)?;
-    chr("random", 1, 8)?;
-    chr("urandom", 1, 9)?;
-    chr("tty", 5, 0)?;
+    for (name, major, minor) in [
+        ("null", 1, 3),
+        ("zero", 1, 5),
+        ("full", 1, 7),
+        ("random", 1, 8),
+        ("urandom", 1, 9),
+        ("tty", 5, 0),
+    ] {
+        let target = dev.join(name);
+        if rootless {
+            std::fs::write(&target, b"")
+                .map_err(|e| crate::Error::Runtime(format!("create /dev/{name} stub: {e}")))?;
+            nix::mount::mount(
+                Some(&PathBuf::from("/dev").join(name)),
+                &target,
+                None::<&str>,
+                nix::mount::MsFlags::MS_BIND,
+                None::<&str>,
+            )
+            .map_err(|e| crate::Error::Runtime(format!("bind /dev/{name}: {e}")))?;
+        } else {
+            mknod(
+                &target,
+                SFlag::S_IFCHR,
+                Mode::from_bits_truncate(0o666),
+                makedev(major, minor),
+            )
+            .map_err(|e| crate::Error::Runtime(format!("mknod /dev/{name}: {e}")))?;
+        }
+    }
 
     for (link, target) in [
         ("fd", "/proc/self/fd"),
@@ -200,10 +248,20 @@ fn setup_dev() -> Result<()> {
     ] {
         let _ = std::os::unix::fs::symlink(target, dev.join(link));
     }
-
     std::fs::create_dir_all(dev.join("pts")).ok();
     std::fs::create_dir_all(dev.join("shm")).ok();
-    mount::mount_devpts(&dev.join("pts"))?;
+    Ok(())
+}
+
+/// Minimal /dev, phase 2 (post-pivot): devpts + shm. devpts is best-effort
+/// rootless (some kernels refuse a fresh instance in a user ns).
+fn setup_dev_mounts(rootless: bool) -> Result<()> {
+    let dev = Path::new("/dev");
+    match mount::mount_devpts(&dev.join("pts")) {
+        Ok(()) => {}
+        Err(e) if rootless => eprintln!("ply: warning: no /dev/pts in rootless mode ({e})"),
+        Err(e) => return Err(e),
+    }
     mount::mount_tmpfs_flags(
         &dev.join("shm"),
         "mode=1777",

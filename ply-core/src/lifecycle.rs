@@ -8,7 +8,6 @@ use crate::error::{Error, Result};
 use crate::image::name::{Arch, ImageName, Os};
 use crate::image::read::{read_lockfile, read_manifest};
 use crate::policy::Policy;
-use crate::runtime::run::VOLUMES_DIR;
 use crate::runtime::state;
 use crate::source::Source;
 use crate::store::Store;
@@ -100,7 +99,7 @@ pub fn rm(app: &str, volumes: bool) -> Result<RmReport> {
     let record_removed = AppRecord::remove(app);
     let mut volumes_removed = false;
     if volumes {
-        let dir = Path::new(VOLUMES_DIR).join(app);
+        let dir = crate::paths::volumes_dir().join(app);
         if dir.exists() {
             std::fs::remove_dir_all(&dir).map_err(|source| Error::Io { path: dir, source })?;
             volumes_removed = true;
@@ -200,7 +199,7 @@ pub fn audit() -> Result<AuditReport> {
         findings: Vec::new(),
     };
 
-    if let Ok(apps) = std::fs::read_dir(VOLUMES_DIR) {
+    if let Ok(apps) = std::fs::read_dir(crate::paths::volumes_dir()) {
         for app in apps.filter_map(|e| e.ok()) {
             if let Ok(vols) = std::fs::read_dir(app.path()) {
                 for vol in vols.filter_map(|e| e.ok()) {

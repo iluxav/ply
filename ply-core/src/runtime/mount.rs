@@ -40,7 +40,12 @@ pub fn mount_overlay(lower: &[&Path], upper: &Path, work: &Path, target: &Path) 
         MsFlags::empty(),
         Some(options.as_str()),
     )
-    .map_err(|e| merr("overlay", target, e))
+    .map_err(|e| {
+        Error::Runtime(format!(
+            "mount overlay at {}: {e} (unprivileged overlayfs needs kernel >= 5.11)",
+            target.display()
+        ))
+    })
 }
 
 pub fn mount_tmpfs(target: &Path, options: &str) -> Result<()> {

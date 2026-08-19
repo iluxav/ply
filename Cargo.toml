@@ -29,6 +29,15 @@ tempfile = "3"
 tar = "0.4"
 flate2 = "1"
 
+# backhand 0.25.1 writes zero-length files with a dangling fragment ref that
+# the kernel rejects (EINVAL on stat). Until the fix lands upstream
+# (PR from iluxav/backhand fix/empty-file-no-fragment), we build against a
+# fork branch: v0.25.1 + that one fix. Guarded by ply-core's
+# empty_files_have_no_fragment_ref test — drop this section once upstream
+# ships a fixed release.
+[patch.crates-io]
+backhand = { git = "https://github.com/iluxav/backhand", branch = "fix-0.25.1" }
+
 [profile.dev]
 debug = "line-tables-only"
 

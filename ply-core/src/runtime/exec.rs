@@ -15,13 +15,19 @@ use crate::error::{Error, Result};
 use crate::runtime::state::{self, InstanceState};
 
 pub fn exec(target: &str, cmd: &[String]) -> Result<i32> {
-    if !nix::unistd::geteuid().is_root() {
-        return Err(Error::Runtime(
-            "ply exec needs root for now — try `sudo ply exec …`".into(),
-        ));
-    }
     let instance = find_instance(target)?;
     let pid = instance.pid;
+
+    // Rootless instances live in a user namespace we must join FIRST (it
+    // grants the capabilities for the other setns calls). Root instances
+    // have no user ns — skip.
+    let target_userns = std::fs::read_link(format!("/proc/{pid}/ns/user")).ok();
+    let own_userns = std::fs::read_link("/proc/self/ns/user").ok();
+    if target_userns == own_userns && !nix::unistd::geteuid().is_root() {
+        return Err(Error::Runtime(
+            "ply exec needs root for root-started instances — try `sudo ply exec …`".into(),
+        ));
+    }
 
     // Join the instance's cgroup before entering namespaces (limits apply
     // to exec'd commands too).
@@ -48,11 +54,19 @@ pub fn exec(target: &str, cmd: &[String]) -> Result<i32> {
         })
     };
     let (ipc, uts, net, pidns, mnt) = (ns("ipc")?, ns("uts")?, ns("net")?, ns("pid")?, ns("mnt")?);
+    let userns = if target_userns != own_userns {
+        Some(ns("user")?)
+    } else {
+        None
+    };
 
     let join = |file: &std::fs::File, flag: CloneFlags, what: &str| -> Result<()> {
         nix::sched::setns(file.as_fd(), flag)
             .map_err(|e| Error::Runtime(format!("setns {what}: {e}")))
     };
+    if let Some(userns) = &userns {
+        join(userns, CloneFlags::CLONE_NEWUSER, "user")?;
+    }
     join(&ipc, CloneFlags::CLONE_NEWIPC, "ipc")?;
     join(&uts, CloneFlags::CLONE_NEWUTS, "uts")?;
     join(&net, CloneFlags::CLONE_NEWNET, "net")?;

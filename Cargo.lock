@@ -67,8 +67,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 [[package]]
 name = "backhand"
 version = "0.25.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72e7812fe72262dd26c2b4309c8e8f2c028db1ffbeb21054f009f847f09ca92c"
+source = "git+https://github.com/iluxav/backhand?branch=fix-0.25.1#b8e4addb75db9f9779c5724ab84df6acba246f65"
 dependencies = [
  "deku",
  "no_std_io2",
@@ -553,6 +552,7 @@ dependencies = [
  "anyhow",
  "clap",
  "ply-core",
+ "semver",
  "serde_json",
 ]
 

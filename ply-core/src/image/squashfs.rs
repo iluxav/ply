@@ -189,6 +189,41 @@ mod tests {
     }
 
     #[test]
+    fn empty_files_have_no_fragment_ref() {
+        // backhand 0.25.1 gave zero-length files a dangling fragment ref;
+        // the kernel EINVALs such inodes (vendor/backhand carries the fix).
+        let src = tempfile::tempdir().unwrap();
+        std::fs::write(src.path().join("empty"), b"").unwrap();
+        std::fs::write(src.path().join("full"), b"data").unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let img = out.path().join("t.img");
+        let tree = TreeSource {
+            dir: src.path(),
+            prefix: "",
+            filter: None,
+        };
+        write_image(std::slice::from_ref(&tree), &[], &img).unwrap();
+
+        let file = std::fs::File::open(&img).unwrap();
+        let fs = backhand::FilesystemReader::from_reader(std::io::BufReader::new(file)).unwrap();
+        let node = fs
+            .files()
+            .find(|n| n.fullpath.to_string_lossy() == "/empty")
+            .expect("empty file present");
+        let backhand::InnerNode::File(f) = &node.inner else {
+            panic!("not a file");
+        };
+        let backhand::SquashfsFileReader::Basic(basic) = f else {
+            panic!("expected basic file inode");
+        };
+        assert_eq!(basic.file_size, 0);
+        assert_eq!(
+            basic.frag_index, 0xffffffff,
+            "empty file must not reference a fragment"
+        );
+    }
+
+    #[test]
     fn content_change_changes_hash() {
         let src = tempfile::tempdir().unwrap();
         make_tree(src.path());

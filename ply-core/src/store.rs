@@ -46,6 +46,30 @@ impl Store {
         path.exists().then_some(path)
     }
 
+    /// Rootless fallback: a store entry extracted to a plain dir (same hash
+    /// identity — extraction is a cache of the image's contents). Extracts
+    /// on first use; a marker file makes partial extractions retry.
+    pub fn extracted_rootfs(&self, image: &Path, digest: &str) -> Result<PathBuf> {
+        let entry = self.root.join(digest);
+        let rootfs = entry.join("rootfs");
+        let marker = entry.join(".rootfs-ok");
+        if marker.exists() {
+            return Ok(rootfs);
+        }
+        let _ = std::fs::remove_dir_all(&rootfs);
+        std::fs::create_dir_all(&entry).map_err(|source| Error::Io {
+            path: entry.clone(),
+            source,
+        })?;
+        eprintln!("ply: extracting {digest} (rootless runs use extracted layers)");
+        crate::image::extract::extract_rootfs(image, &rootfs)?;
+        std::fs::write(&marker, b"").map_err(|source| Error::Io {
+            path: marker,
+            source,
+        })?;
+        Ok(rootfs)
+    }
+
     /// Move a verified file into the store. `digest` must already be the
     /// file's sha256 (callers verify before insertion). Idempotent.
     pub fn insert(&self, file: &Path, digest: &str) -> Result<PathBuf> {

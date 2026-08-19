@@ -5,6 +5,7 @@
 pub mod apps;
 pub mod build;
 pub mod bundle;
+pub mod craft;
 pub mod digest;
 pub mod env;
 pub mod error;
@@ -13,6 +14,7 @@ pub mod lifecycle;
 pub mod lockfile;
 pub mod manifest;
 pub mod oci;
+pub mod paths;
 pub mod policy;
 pub mod rebase;
 pub mod resolve;
@@ -21,3 +23,11 @@ pub mod source;
 pub mod store;
 
 pub use error::{Error, Result};
+
+/// Rust ignores SIGPIPE by default, which turns `ply … | head` into a
+/// panic on stdout. CLIs want the Unix default (die quietly).
+pub fn restore_default_sigpipe() {
+    unsafe {
+        nix::libc::signal(nix::libc::SIGPIPE, nix::libc::SIG_DFL);
+    }
+}

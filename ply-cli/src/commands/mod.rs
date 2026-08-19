@@ -1,6 +1,7 @@
 // One module per command as they are implemented (per TASKS.md phase).
 
 mod build;
+mod craft;
 mod exec;
 mod images;
 mod lb;
@@ -21,6 +22,7 @@ pub fn dispatch(command: Command) -> Result<()> {
         Command::Check(args) => lifecycle::check(args),
         Command::Import(args) => images::import(args),
         Command::Bundle(args) => images::bundle(args),
+        Command::Craft(command) => craft::dispatch(command),
         Command::Rebase(args) => images::rebase(args),
         Command::Systemd(args) => lifecycle::systemd(args),
         Command::Proxy(args) => lb::proxy(args),

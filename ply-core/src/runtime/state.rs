@@ -3,12 +3,11 @@
 
 use std::collections::BTreeMap;
 use std::net::Ipv4Addr;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
-use crate::runtime::run::RUN_DIR;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstanceState {
@@ -23,7 +22,7 @@ pub struct InstanceState {
 }
 
 fn state_dir() -> PathBuf {
-    Path::new(RUN_DIR).join("state")
+    crate::paths::run_dir().join("state")
 }
 
 impl InstanceState {
@@ -80,7 +79,7 @@ pub fn reap_stale() -> Result<Vec<InstanceState>> {
         if state.alive() {
             continue;
         }
-        let instance_dir = Path::new(RUN_DIR)
+        let instance_dir = crate::paths::run_dir()
             .join("instances")
             .join(format!("{}.{}", state.app, state.n));
         if instance_dir.exists() {

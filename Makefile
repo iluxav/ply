@@ -30,6 +30,13 @@ install: release
 	sudo install -m 755 $(BIN) /usr/local/bin/ply
 	@echo "installed $$(ply --version) to /usr/local/bin/ply"
 
+# Ubuntu >= 24.04: unprivileged user namespaces (rootless `ply run`) need an
+# AppArmor profile granting `userns` — same requirement as Docker/Chrome.
+install-apparmor:
+	printf 'abi <abi/4.0>,\ninclude <tunables/global>\n\nprofile ply /usr/local/bin/ply flags=(unconfined) {\n  userns,\n}\n' | sudo tee /etc/apparmor.d/ply >/dev/null
+	sudo apparmor_parser -r /etc/apparmor.d/ply
+	@echo "AppArmor profile installed — rootless ply run enabled"
+
 uninstall:
-	sudo rm -f /usr/local/bin/ply
+	sudo rm -f /usr/local/bin/ply /etc/apparmor.d/ply
 	@echo "removed /usr/local/bin/ply"

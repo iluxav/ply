@@ -3,13 +3,11 @@
 //! Written on every `ply run`; removed by `ply rm`. Reachability for the
 //! store is defined by these records plus currently-running instances.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
-
-pub const APPS_DIR: &str = "/var/lib/ply/apps";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppRecord {
@@ -23,13 +21,14 @@ pub struct AppRecord {
 }
 
 fn record_path(name: &str) -> PathBuf {
-    Path::new(APPS_DIR).join(format!("{name}.json"))
+    crate::paths::apps_dir().join(format!("{name}.json"))
 }
 
 impl AppRecord {
     pub fn save(&self) -> Result<()> {
-        std::fs::create_dir_all(APPS_DIR).map_err(|source| Error::Io {
-            path: APPS_DIR.into(),
+        let dir = crate::paths::apps_dir();
+        std::fs::create_dir_all(&dir).map_err(|source| Error::Io {
+            path: dir.clone(),
             source,
         })?;
         let path = record_path(&self.name);
@@ -49,15 +48,11 @@ impl AppRecord {
 
 pub fn list() -> Result<Vec<AppRecord>> {
     let mut records = Vec::new();
-    let entries = match std::fs::read_dir(APPS_DIR) {
+    let dir = crate::paths::apps_dir();
+    let entries = match std::fs::read_dir(&dir) {
         Ok(entries) => entries,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(records),
-        Err(source) => {
-            return Err(Error::Io {
-                path: APPS_DIR.into(),
-                source,
-            })
-        }
+        Err(source) => return Err(Error::Io { path: dir, source }),
     };
     for entry in entries.filter_map(|e| e.ok()) {
         if let Ok(text) = std::fs::read_to_string(entry.path()) {

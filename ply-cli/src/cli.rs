@@ -41,6 +41,14 @@ pub enum Command {
     /// Flatten an image and its dependencies into one self-sufficient image
     Bundle(BundleArgs),
 
+    /// Author a package interactively: shell in, install, commit the diff
+    ///
+    /// The overlay upperdir is the layer: `craft new` opens a persistent
+    /// session on a base, `changes` shows what you added, `commit` packs it
+    /// as a normal, inert, content-addressed package image.
+    #[command(subcommand)]
+    Craft(CraftCommand),
+
     /// Swap a runtime under an app without rebuilding it
     ///
     /// Fleet security patching as a metadata operation: only the embedded
@@ -162,6 +170,95 @@ pub struct BundleArgs {
     /// Output image path
     #[arg(short, long, value_name = "FILE")]
     pub output: PathBuf,
+}
+
+#[derive(Subcommand)]
+pub enum CraftCommand {
+    /// Start a new session on a base and open a shell in it
+    New(CraftNewArgs),
+    /// Re-enter an existing session (state persists between shells)
+    Shell(CraftShellArgs),
+    /// Reconstruct a session from a committed package image (resume anywhere)
+    Edit(CraftEditArgs),
+    /// List files added/modified/deleted by the session
+    Changes(CraftNameArg),
+    /// Pack the session's changes as a package image
+    Commit(CraftCommitArgs),
+    /// List sessions
+    Ls,
+    /// Discard a session (its rw layer is deleted; committed images stay)
+    Rm(CraftNameArg),
+}
+
+#[derive(Args)]
+pub struct CraftNewArgs {
+    /// Session name (becomes the package name at commit)
+    #[arg(value_name = "NAME")]
+    pub name: String,
+
+    /// Base to build on, as pkg@constraint (e.g. alpine@3.20)
+    #[arg(long, value_name = "PKG@CONSTRAINT")]
+    pub from: String,
+
+    /// Where to fetch the base from (e.g. http://127.0.0.1:8321)
+    #[arg(long, value_name = "URL")]
+    pub source: Option<String>,
+
+    /// Command to run instead of /bin/sh
+    #[arg(value_name = "CMD", trailing_var_arg = true)]
+    pub cmd: Vec<String>,
+
+    /// Allow plain-http sources on public hosts
+    #[arg(long)]
+    pub insecure_source: bool,
+}
+
+#[derive(Args)]
+pub struct CraftShellArgs {
+    /// Session name
+    #[arg(value_name = "NAME")]
+    pub name: String,
+
+    /// Command to run instead of /bin/sh
+    #[arg(value_name = "CMD", trailing_var_arg = true)]
+    pub cmd: Vec<String>,
+}
+
+#[derive(Args)]
+pub struct CraftEditArgs {
+    /// A package image previously produced by `ply craft commit`
+    #[arg(value_name = "IMAGE")]
+    pub image: PathBuf,
+
+    /// Override the base's source URL recorded in the image
+    #[arg(long, value_name = "URL")]
+    pub source: Option<String>,
+
+    /// Allow plain-http sources on public hosts
+    #[arg(long)]
+    pub insecure_source: bool,
+}
+
+#[derive(Args)]
+pub struct CraftNameArg {
+    /// Session name
+    #[arg(value_name = "NAME")]
+    pub name: String,
+}
+
+#[derive(Args)]
+pub struct CraftCommitArgs {
+    /// Session name (= package name)
+    #[arg(value_name = "NAME")]
+    pub name: String,
+
+    /// Version of the resulting package
+    #[arg(long, value_name = "SEMVER")]
+    pub version: semver::Version,
+
+    /// Output image path (defaults to the canonical filename in cwd)
+    #[arg(short, long, value_name = "FILE")]
+    pub output: Option<PathBuf>,
 }
 
 #[derive(Args)]

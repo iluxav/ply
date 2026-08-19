@@ -22,8 +22,6 @@ use crate::runtime::{hosts, loopdev, mount, network, state};
 use crate::source::Source;
 use crate::store::Store;
 
-pub const RUN_DIR: &str = "/run/ply";
-
 pub struct RunOptions {
     pub image: PathBuf,
     /// CLI -e KEY=VALUE overrides (highest precedence).
@@ -35,14 +33,26 @@ pub struct RunOptions {
     pub links: Vec<(PathBuf, String)>,
 }
 
-pub const VOLUMES_DIR: &str = "/var/lib/ply/volumes";
-
 pub fn run(opts: &RunOptions) -> Result<i32> {
-    if !nix::unistd::geteuid().is_root() {
-        return Err(Error::Runtime(
-            "ply run needs root for now (mounts, namespaces) — try `sudo ply run …`; rootless mode is planned"
-                .into(),
-        ));
+    let rootless = !crate::paths::is_root();
+    if rootless {
+        eprintln!(
+            "ply: rootless mode — extracted layers, host network (no .ply names), no cgroup limits"
+        );
+        // Ubuntu >= 24.04 strips capabilities from unprivileged user
+        // namespaces unless an AppArmor profile grants `userns`.
+        let restricted =
+            std::fs::read_to_string("/proc/sys/kernel/apparmor_restrict_unprivileged_userns")
+                .map(|v| v.trim() == "1")
+                .unwrap_or(false);
+        if restricted && !Path::new("/etc/apparmor.d/ply").exists() {
+            return Err(Error::Runtime(
+                "this kernel restricts unprivileged user namespaces (AppArmor) — install ply's profile once:\n  \
+                 sudo make install-apparmor   (from the ply repo)\n  \
+                 or: run with sudo instead"
+                    .into(),
+            ));
+        }
     }
 
     let manifest = read_manifest(&opts.image)?;
@@ -125,7 +135,9 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
     }
     let env: Vec<(String, String)> = env.into_iter().collect();
 
-    network::ensure_bridge()?;
+    if !rootless {
+        network::ensure_bridge()?;
+    }
     let _ = state::reap_stale(); // free IPs/dirs leaked by killed runs
 
     // Forward SIGTERM/SIGINT to every instance.
@@ -143,6 +155,8 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
             &opts.image,
             &dep_images,
             &opts.links,
+            &store,
+            rootless,
         )?;
         register_child(instance.child.as_raw());
         instances.push(instance);
@@ -183,7 +197,7 @@ struct Instance {
     app: String,
     n: u32,
     child: Pid,
-    _cgroup: Cgroup,
+    _cgroup: Option<Cgroup>,
     guard: InstanceGuard,
 }
 
@@ -195,6 +209,7 @@ impl Drop for Instance {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn launch_instance(
     manifest: &Manifest,
     entrypoint: &[String],
@@ -202,6 +217,8 @@ fn launch_instance(
     app_image: &Path,
     dep_images: &[PathBuf],
     links: &[(PathBuf, String)],
+    store: &Store,
+    rootless: bool,
 ) -> Result<Instance> {
     let app = &manifest.package.name;
     let (instance_dir, n) = allocate_instance(app)?;
@@ -215,7 +232,7 @@ fn launch_instance(
         } else {
             n.to_string()
         };
-        let host_dir = Path::new(VOLUMES_DIR)
+        let host_dir = crate::paths::volumes_dir()
             .join(app)
             .join(format!("{name}.{suffix}"));
         std::fs::create_dir_all(&host_dir).map_err(|source| Error::Io {
@@ -242,18 +259,32 @@ fn launch_instance(
         mounted_layers: std::cell::RefCell::new(Vec::new()),
     };
 
-    // Loop-mount every squashfs layer.
+    // Layers: root loop-mounts squashfs; rootless uses store-cached
+    // extractions (unprivileged kernels can't mount squashfs).
     let mut layers: Vec<PathBuf> = Vec::new();
     let all_images: Vec<PathBuf> = std::iter::once(app_image.to_path_buf())
         .chain(dep_images.iter().cloned())
         .collect();
     for (i, img) in all_images.iter().enumerate() {
-        let target = instance_dir.join("layers").join(i.to_string());
-        let (device, dev_fd) = loopdev::attach_ro(img)?;
-        mount::mount_squashfs_ro(&device, &target)?;
-        drop(dev_fd); // mount holds the device now; autoclear arms for unmount
-        guard.mounted_layers.borrow_mut().push(target.clone());
-        layers.push(target);
+        if rootless {
+            let digest = crate::digest::sha256_file(img)?;
+            let rootfs = store.extracted_rootfs(img, &digest)?;
+            // overlayfs splits lowerdir at `:` — store paths contain
+            // `sha256:`, so hand the kernel a colon-free symlink instead
+            let link = instance_dir.join("layers").join(i.to_string());
+            std::os::unix::fs::symlink(&rootfs, &link).map_err(|source| Error::Io {
+                path: link.clone(),
+                source,
+            })?;
+            layers.push(link);
+        } else {
+            let target = instance_dir.join("layers").join(i.to_string());
+            let (device, dev_fd) = loopdev::attach_ro(img)?;
+            mount::mount_squashfs_ro(&device, &target)?;
+            drop(dev_fd); // mount holds the device now; autoclear arms for unmount
+            guard.mounted_layers.borrow_mut().push(target.clone());
+            layers.push(target);
+        }
     }
 
     // Sync pipe: the child waits for cgroup + network before setup.
@@ -271,14 +302,21 @@ fn launch_instance(
         binds,
         sync_rx,
         keep_net_bind,
+        privileged: false,
+        rootless,
     };
 
     let mut stack = vec![0u8; 1024 * 1024];
-    let flags = CloneFlags::CLONE_NEWNS
+    let mut flags = CloneFlags::CLONE_NEWNS
         | CloneFlags::CLONE_NEWPID
         | CloneFlags::CLONE_NEWUTS
-        | CloneFlags::CLONE_NEWIPC
-        | CloneFlags::CLONE_NEWNET;
+        | CloneFlags::CLONE_NEWIPC;
+    if rootless {
+        // user ns grants the mount rights; host netns (no veth privileges)
+        flags |= CloneFlags::CLONE_NEWUSER;
+    } else {
+        flags |= CloneFlags::CLONE_NEWNET;
+    }
     let child = unsafe {
         nix::sched::clone(
             Box::new(|| child_main(&spec)),
@@ -289,14 +327,19 @@ fn launch_instance(
     }
     .map_err(|e| Error::Runtime(format!("clone: {e}")))?;
 
-    // cgroup + veth while the child is parked on the pipe.
-    let prepared = (|| -> Result<(Cgroup, Ipv4Addr)> {
+    // cgroup + veth (root) / uid maps (rootless) while the child is parked
+    // on the pipe.
+    let prepared = (|| -> Result<(Option<Cgroup>, Ipv4Addr)> {
+        if rootless {
+            write_id_maps(child.as_raw())?;
+            return Ok((None, Ipv4Addr::new(127, 0, 0, 1)));
+        }
         let cgroup = Cgroup::create(&format!("{app}.{n}"), manifest.resources.as_ref())?;
         cgroup.add_pid(child.as_raw())?;
         let used: Vec<Ipv4Addr> = state::list()?.iter().map(|s| s.ip).collect();
         let ip = network::allocate_ip(&used)?;
         network::setup_instance(child.as_raw(), ip)?;
-        Ok((cgroup, ip))
+        Ok((Some(cgroup), ip))
     })();
     let (cgroup, ip) = match prepared {
         Ok(ok) => ok,
@@ -322,7 +365,9 @@ fn launch_instance(
         started,
     };
     state.save()?;
-    hosts::add_entry(app, n, ip)?;
+    if !rootless {
+        hosts::add_entry(app, n, ip)?; // /etc/hosts needs root
+    }
 
     // Release the child.
     let _ = nix::unistd::write(&sync_tx, &[1u8]);
@@ -335,6 +380,23 @@ fn launch_instance(
         _cgroup: cgroup,
         guard,
     })
+}
+
+/// Map the invoking user to root inside the child's user namespace.
+fn write_id_maps(pid: i32) -> Result<()> {
+    let uid = nix::unistd::getuid().as_raw();
+    let gid = nix::unistd::getgid().as_raw();
+    let write = |file: &str, contents: String| -> Result<()> {
+        let path = format!("/proc/{pid}/{file}");
+        std::fs::write(&path, contents).map_err(|source| Error::Io {
+            path: path.into(),
+            source,
+        })
+    };
+    write("setgroups", "deny".into())?;
+    write("gid_map", format!("0 {gid} 1"))?;
+    write("uid_map", format!("0 {uid} 1"))?;
+    Ok(())
 }
 
 const MAX_CHILDREN: usize = 256;
@@ -360,7 +422,7 @@ extern "C" fn forward_signal(sig: i32) {
 
 /// `/run/ply/instances/<app>.<n>` with rw/, work/, root/, layers/.
 fn allocate_instance(app: &str) -> Result<(PathBuf, u32)> {
-    let instances = Path::new(RUN_DIR).join("instances");
+    let instances = crate::paths::run_dir().join("instances");
     std::fs::create_dir_all(&instances).map_err(|source| Error::Io {
         path: instances.clone(),
         source,
