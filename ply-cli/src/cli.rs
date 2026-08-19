@@ -64,6 +64,13 @@ pub enum Command {
     /// Emit load-balancer config for one app
     Lb(LbArgs),
 
+    /// One-time host preparation (idempotent; run with sudo)
+    ///
+    /// Installs an AppArmor profile enabling rootless `ply run` on kernels
+    /// that restrict unprivileged user namespaces (Ubuntu 24.04+). On hosts
+    /// without the restriction it does nothing.
+    Setup,
+
     /// Pre-fetch every package in the host policy into the store
     ///
     /// Reads /etc/ply/runtimes.toml (or --policy FILE). A freshly synced

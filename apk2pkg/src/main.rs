@@ -1,0 +1,321 @@
+//! apk2pkg — repackage Alpine's prebuilt artifacts as ply packages.
+//!
+//! An .apk is a tar.gz. This tool resolves the requested package plus its
+//! runtime dependency closure from APKINDEX, unpacks everything into one keg
+//! (`/opt/<name>-<version>/…`), writes a ply.toml with `[layer]` env
+//! contributions, and produces a deterministic image via ply-core's builder.
+//! Packages the alpine base already provides (musl, busybox, …) are skipped.
+
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::io::Read;
+use std::path::{Path, PathBuf};
+
+use anyhow::{bail, Context, Result};
+use clap::Parser;
+
+/// Convert an Alpine package (+ runtime deps) into a ply package image.
+#[derive(Parser)]
+#[command(version, about)]
+struct Args {
+    /// Alpine package name, e.g. ffmpeg, jq, imagemagick
+    package: String,
+
+    /// Alpine release branch
+    #[arg(long, default_value = "3.20")]
+    alpine: String,
+
+    /// Output directory for the image
+    #[arg(short, long, default_value = ".")]
+    outdir: PathBuf,
+
+    /// Override the ply package name (default: sanitized apk name)
+    #[arg(long)]
+    name: Option<String>,
+}
+
+/// Provided by the alpine base package — never vendored into kegs.
+const BASE_PROVIDES: &[&str] = &[
+    "musl",
+    "musl-utils",
+    "busybox",
+    "busybox-binsh",
+    "alpine-baselayout",
+    "alpine-baselayout-data",
+    "alpine-keys",
+    "alpine-release",
+    "libc-utils",
+];
+
+#[derive(Debug, Clone)]
+struct ApkEntry {
+    name: String,
+    version: String,
+    depends: Vec<String>,
+    provides: Vec<String>,
+    repo_url: String,
+}
+
+fn main() -> Result<()> {
+    ply_core::restore_default_sigpipe();
+    let args = Args::parse();
+
+    let mirror = format!("https://dl-cdn.alpinelinux.org/alpine/v{}", args.alpine);
+    let arch = match std::env::consts::ARCH {
+        "x86_64" => "x86_64",
+        "aarch64" => "aarch64",
+        other => bail!("unsupported arch {other}"),
+    };
+
+    // Load both standard repos' indexes.
+    let mut index: BTreeMap<String, ApkEntry> = BTreeMap::new();
+    for repo in ["main", "community"] {
+        let url = format!("{mirror}/{repo}/{arch}");
+        eprintln!("apk2pkg: reading {url}/APKINDEX.tar.gz");
+        match load_index(&url) {
+            Ok(entries) => {
+                for entry in entries {
+                    index.entry(entry.name.clone()).or_insert(entry);
+                }
+            }
+            Err(e) => eprintln!("apk2pkg: warning: {repo} index unavailable: {e}"),
+        }
+    }
+    let root = index
+        .get(&args.package)
+        .with_context(|| {
+            format!(
+                "`{}` not found in Alpine {} main/community",
+                args.package, args.alpine
+            )
+        })?
+        .clone();
+
+    // `so:libfoo.so.5` deps name shared-library PROVIDERS — build the
+    // provider map from the index's `p:` fields so they resolve to packages.
+    let mut so_providers: BTreeMap<String, String> = BTreeMap::new();
+    for entry in index.values() {
+        for provide in &entry.provides {
+            if let Some(so) = provide.strip_prefix("so:") {
+                let so_name = so.split('=').next().unwrap_or(so);
+                so_providers
+                    .entry(format!("so:{so_name}"))
+                    .or_insert(entry.name.clone());
+            }
+        }
+    }
+
+    // Runtime dependency closure.
+    let mut wanted: Vec<ApkEntry> = Vec::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let mut queue: VecDeque<String> = VecDeque::from([root.name.clone()]);
+    while let Some(name) = queue.pop_front() {
+        if !seen.insert(name.clone()) || BASE_PROVIDES.contains(&name.as_str()) {
+            continue;
+        }
+        let Some(entry) = index.get(&name) else {
+            eprintln!("apk2pkg: warning: dependency `{name}` not in index — skipped");
+            continue;
+        };
+        wanted.push(entry.clone());
+        for dep in &entry.depends {
+            // strip version constraints: "zlib>=1.2" → "zlib"
+            let dep_name: String = dep
+                .chars()
+                .take_while(|c| !matches!(c, '<' | '>' | '=' | '~'))
+                .collect();
+            let resolved = if let Some(so) = dep_name.strip_prefix("so:") {
+                let key = format!("so:{}", so.split('=').next().unwrap_or(so));
+                match so_providers.get(&key) {
+                    Some(provider) => provider.clone(),
+                    None => continue, // provided by musl/base
+                }
+            } else if dep_name.contains(':') || dep_name.starts_with('/') {
+                continue; // pc:, cmd:, /bin/sh — not packages
+            } else {
+                dep_name
+            };
+            if !BASE_PROVIDES.contains(&resolved.as_str()) {
+                queue.push_back(resolved);
+            }
+        }
+    }
+    eprintln!(
+        "apk2pkg: vendoring {} apk(s): {}",
+        wanted.len(),
+        wanted
+            .iter()
+            .map(|e| e.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+
+    // Stage: apk contents merge into one dir; ply's builder kegs it at
+    // /opt/<name>-<version> automatically (package = no entrypoint).
+    let ply_name = args.name.unwrap_or_else(|| sanitize_name(&root.name));
+    let ply_version = semverize(&root.version)?;
+    let staging = tempfile_dir()?;
+    for entry in &wanted {
+        let apk_url = format!("{}/{}-{}.apk", entry.repo_url, entry.name, entry.version);
+        eprintln!("apk2pkg: unpacking {}-{}", entry.name, entry.version);
+        let response = ureq::get(&apk_url)
+            .call()
+            .with_context(|| format!("download {apk_url}"))?;
+        unpack_apk(response.into_body().into_reader(), &staging)?;
+    }
+
+    // Env contributions from whatever the keg actually contains.
+    let prefix = format!("/opt/{ply_name}-{ply_version}");
+    let mut paths = Vec::new();
+    let mut lib_paths = Vec::new();
+    for rel in ["usr/bin", "bin", "usr/sbin", "sbin"] {
+        if staging.join(rel).is_dir() {
+            paths.push(format!("{prefix}/{rel}"));
+        }
+    }
+    for rel in ["usr/lib", "lib"] {
+        if staging.join(rel).is_dir() {
+            lib_paths.push(format!("{prefix}/{rel}"));
+        }
+    }
+
+    let mut manifest =
+        format!("[package]\nname = \"{ply_name}\"\nversion = \"{ply_version}\"\n\n[layer]\n");
+    manifest.push_str(&format!("path = {}\n", toml_array(&paths)));
+    if !lib_paths.is_empty() {
+        manifest.push_str(&format!("ld_library_path = {}\n", toml_array(&lib_paths)));
+    }
+    manifest.push_str(&format!("\n[dependencies]\nalpine = \"{}\"\n", args.alpine));
+    std::fs::write(staging.join("ply.toml"), &manifest)?;
+
+    let outcome = ply_core::build::build(&ply_core::build::BuildOptions {
+        dir: staging.clone(),
+        output: Some(args.outdir.join(format!(
+            "{ply_name}-{ply_version}-linux-{}.img",
+            host_arch()
+        ))),
+        allow_insecure: false,
+    })?;
+    println!(
+        "built {} ({:.1} MiB)",
+        outcome.image_path.display(),
+        outcome.size_bytes as f64 / (1024.0 * 1024.0)
+    );
+    println!("{}", outcome.digest);
+    println!("\nuse it:\n  [dependencies]\n  {ply_name} = \"{ply_version}\"");
+    let _ = std::fs::remove_dir_all(&staging);
+    Ok(())
+}
+
+fn load_index(repo_url: &str) -> Result<Vec<ApkEntry>> {
+    let response = ureq::get(format!("{repo_url}/APKINDEX.tar.gz").as_str()).call()?;
+    let gz = flate2::read::MultiGzDecoder::new(response.into_body().into_reader());
+    let mut archive = tar::Archive::new(gz);
+    for file in archive.entries()? {
+        let mut file = file?;
+        if file.path()?.to_string_lossy() == "APKINDEX" {
+            let mut text = String::new();
+            file.read_to_string(&mut text)?;
+            return Ok(parse_index(&text, repo_url));
+        }
+    }
+    bail!("no APKINDEX inside {repo_url}/APKINDEX.tar.gz")
+}
+
+fn parse_index(text: &str, repo_url: &str) -> Vec<ApkEntry> {
+    let mut entries = Vec::new();
+    for block in text.split("\n\n") {
+        let field = |tag: &str| -> Option<&str> {
+            block
+                .lines()
+                .find(|l| l.starts_with(tag))
+                .map(|l| l[tag.len()..].trim())
+        };
+        if let (Some(name), Some(version)) = (field("P:"), field("V:")) {
+            entries.push(ApkEntry {
+                name: name.to_string(),
+                version: version.to_string(),
+                depends: field("D:")
+                    .map(|d| d.split_whitespace().map(String::from).collect())
+                    .unwrap_or_default(),
+                provides: field("p:")
+                    .map(|p| p.split_whitespace().map(String::from).collect())
+                    .unwrap_or_default(),
+                repo_url: repo_url.to_string(),
+            });
+        }
+    }
+    entries
+}
+
+/// Unpack an .apk (tar.gz), skipping its metadata files (.PKGINFO, .SIGN.*).
+fn unpack_apk(reader: impl Read, dest: &Path) -> Result<()> {
+    let gz = flate2::read::MultiGzDecoder::new(reader);
+    let mut archive = tar::Archive::new(gz);
+    archive.set_preserve_permissions(true);
+    archive.set_unpack_xattrs(false);
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        let path = entry.path()?.into_owned();
+        let top = path
+            .components()
+            .next()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if top.starts_with('.') {
+            continue; // .PKGINFO, .SIGN.*, .pre-install (ignored: no hooks, ever)
+        }
+        match entry.header().entry_type() {
+            tar::EntryType::Char | tar::EntryType::Block | tar::EntryType::Fifo => continue,
+            _ => {}
+        }
+        let target = dest.join(&path);
+        if target.exists() && !target.is_dir() {
+            let _ = std::fs::remove_file(&target);
+        }
+        entry
+            .unpack_in(dest)
+            .with_context(|| format!("unpack {}", path.display()))?;
+    }
+    Ok(())
+}
+
+/// ply names: lowercase, no `+`, no `-<digit>`.
+fn sanitize_name(apk_name: &str) -> String {
+    apk_name
+        .to_lowercase()
+        .replace("++", "pp")
+        .replace('+', "p")
+        .replace('_', "-")
+}
+
+/// "6.1.1-r5" → 6.1.1; "1.7" → 1.7.0; "9.1_p1-r0" → 9.1.0
+fn semverize(apk_version: &str) -> Result<semver::Version> {
+    let core: String = apk_version
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+    let parts: Vec<&str> = core.trim_matches('.').split('.').collect();
+    let get = |i: usize| -> u64 { parts.get(i).and_then(|p| p.parse().ok()).unwrap_or(0) };
+    if parts.is_empty() || parts[0].is_empty() {
+        bail!("cannot derive a semver from Alpine version `{apk_version}`");
+    }
+    Ok(semver::Version::new(get(0), get(1), get(2)))
+}
+
+fn toml_array(items: &[String]) -> String {
+    let quoted: Vec<String> = items.iter().map(|i| format!("\"{i}\"")).collect();
+    format!("[{}]", quoted.join(", "))
+}
+
+fn host_arch() -> &'static str {
+    match std::env::consts::ARCH {
+        "aarch64" => "arm64",
+        _ => "x64",
+    }
+}
+
+fn tempfile_dir() -> Result<PathBuf> {
+    let dir = std::env::temp_dir().join(format!("apk2pkg-{}", std::process::id()));
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
+}

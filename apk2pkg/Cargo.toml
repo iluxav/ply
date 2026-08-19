@@ -1,0 +1,20 @@
+[package]
+name = "apk2pkg"
+description = "Convert Alpine packages (.apk) into ply package images — piggyback on Alpine's ~30k prebuilt musl packages"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "apk2pkg"
+path = "src/main.rs"
+
+[dependencies]
+ply-core.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+ureq.workspace = true
+tar.workspace = true
+flate2.workspace = true
+semver.workspace = true

@@ -47,9 +47,9 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                 .unwrap_or(false);
         if restricted && !Path::new("/etc/apparmor.d/ply").exists() {
             return Err(Error::Runtime(
-                "this kernel restricts unprivileged user namespaces (AppArmor) — install ply's profile once:\n  \
-                 sudo make install-apparmor   (from the ply repo)\n  \
-                 or: run with sudo instead"
+                "this kernel restricts unprivileged user namespaces — one-time fix:\n  \
+                 sudo ply setup\n  \
+                 (or run with sudo instead)"
                     .into(),
             ));
         }

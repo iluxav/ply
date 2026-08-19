@@ -65,6 +65,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
+name = "apk2pkg"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "flate2",
+ "ply-core",
+ "semver",
+ "tar",
+ "ureq",
+]
+
+[[package]]
 name = "backhand"
 version = "0.25.1"
 source = "git+https://github.com/iluxav/backhand?branch=fix-0.25.1#b8e4addb75db9f9779c5724ab84df6acba246f65"

@@ -1,0 +1,33 @@
+# Reusable action: build a ply image from a directory and attach it to the
+# release that triggered the workflow. `ply build` names the artifact
+# correctly by construction, so publishing is upload — nothing more.
+#
+#   - uses: iluxav/ply@v1
+#     with:
+#       dir: .
+name: ply-build-publish
+description: Build a ply image and upload it to the current GitHub release
+inputs:
+  dir:
+    description: Directory containing ply.toml
+    default: "."
+  upload:
+    description: Upload the image to the triggering release (needs GH_TOKEN)
+    default: "true"
+runs:
+  using: composite
+  steps:
+    - name: install ply
+      shell: bash
+      run: curl -fsSL https://raw.githubusercontent.com/iluxav/ply/main/install.sh | sh
+    - name: build image
+      shell: bash
+      run: |
+        ply build "${{ inputs.dir }}"
+        ls "${{ inputs.dir }}"/*.img
+    - name: upload to release
+      if: inputs.upload == 'true' && startsWith(github.ref, 'refs/tags/')
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: gh release upload "${GITHUB_REF_NAME}" "${{ inputs.dir }}"/*.img --clobber

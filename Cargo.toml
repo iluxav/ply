@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["ply-core", "ply-cli"]
+members = ["ply-core", "ply-cli", "apk2pkg"]
 
 [workspace.package]
 version = "0.1.0"

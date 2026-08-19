@@ -1,0 +1,59 @@
+#!/bin/sh
+# ply installer:  curl -fsSL https://plybox.sh/install.sh | sh
+#
+# As root  → /usr/local/bin/ply + automatic host setup.
+# As user  → ~/.local/bin/ply, prints the one-time `sudo ply setup` hint
+#            only if this host actually needs it.
+#
+# Overrides: PLY_VERSION (default: latest), PLY_REPO, PLY_BINARY (install a
+# local file instead of downloading — used by CI and development).
+set -eu
+
+PLY_REPO="${PLY_REPO:-iluxav/ply}"
+PLY_VERSION="${PLY_VERSION:-latest}"
+
+arch=$(uname -m)
+case "$arch" in
+    x86_64)  target="x64" ;;
+    aarch64) target="arm64" ;;
+    *) echo "error: unsupported architecture: $arch (ply supports x86_64 and aarch64)"; exit 1 ;;
+esac
+[ "$(uname -s)" = "Linux" ] || { echo "error: ply is Linux-only"; exit 1; }
+
+# --- fetch (or take a local binary) -----------------------------------------
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+if [ -n "${PLY_BINARY:-}" ]; then
+    cp "$PLY_BINARY" "$tmp/ply"
+else
+    if [ "$PLY_VERSION" = "latest" ]; then
+        url="https://github.com/$PLY_REPO/releases/latest/download/ply-linux-$target"
+    else
+        url="https://github.com/$PLY_REPO/releases/download/$PLY_VERSION/ply-linux-$target"
+    fi
+    echo "downloading $url"
+    curl -fsSL -o "$tmp/ply" "$url"
+fi
+chmod 755 "$tmp/ply"
+
+# --- install ----------------------------------------------------------------
+if [ "$(id -u)" = "0" ]; then
+    install -m 755 "$tmp/ply" /usr/local/bin/ply
+    echo "installed /usr/local/bin/ply ($(/usr/local/bin/ply --version))"
+    /usr/local/bin/ply setup
+else
+    mkdir -p "$HOME/.local/bin"
+    install -m 755 "$tmp/ply" "$HOME/.local/bin/ply"
+    echo "installed $HOME/.local/bin/ply ($("$HOME/.local/bin/ply" --version))"
+    case ":$PATH:" in
+        *":$HOME/.local/bin:"*) ;;
+        *) echo "note: add ~/.local/bin to your PATH" ;;
+    esac
+    # rootless containers need one-time host prep only on restricted kernels
+    if [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null)" = "1" ] \
+        && [ ! -f /etc/apparmor.d/ply ]; then
+        echo ""
+        echo "! rootless containers need one-time host setup:  sudo ply setup"
+    fi
+fi
