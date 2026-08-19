@@ -20,6 +20,9 @@ ureq.workspace = true
 nix.workspace = true
 caps.workspace = true
 seccompiler.workspace = true
+tempfile.workspace = true
+tar.workspace = true
+flate2.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

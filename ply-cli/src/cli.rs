@@ -41,6 +41,12 @@ pub enum Command {
     /// Flatten an image and its dependencies into one self-sufficient image
     Bundle(BundleArgs),
 
+    /// Swap a runtime under an app without rebuilding it
+    ///
+    /// Fleet security patching as a metadata operation: only the embedded
+    /// lockfile changes; the manifest's version constraint still applies.
+    Rebase(RebaseArgs),
+
     /// Emit a systemd unit file for an image (supervision is systemd's job)
     Systemd(SystemdArgs),
 
@@ -156,6 +162,25 @@ pub struct BundleArgs {
     /// Output image path
     #[arg(short, long, value_name = "FILE")]
     pub output: PathBuf,
+}
+
+#[derive(Args)]
+pub struct RebaseArgs {
+    /// Image to rebase
+    #[arg(value_name = "IMAGE")]
+    pub image: PathBuf,
+
+    /// Runtime to swap in, as name@exact.version (e.g. node@24.6.1)
+    #[arg(long, value_name = "NAME@VERSION")]
+    pub runtime: String,
+
+    /// Output image path (defaults to rewriting IMAGE in place)
+    #[arg(short, long, value_name = "FILE")]
+    pub output: Option<PathBuf>,
+
+    /// Allow plain-http sources on public hosts
+    #[arg(long)]
+    pub insecure_source: bool,
 }
 
 #[derive(Args)]

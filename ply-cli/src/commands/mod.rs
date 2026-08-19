@@ -1,14 +1,14 @@
 // One module per command as they are implemented (per TASKS.md phase).
-// Unimplemented commands fall through to `todo`.
 
 mod build;
 mod exec;
+mod images;
 mod lb;
 mod lifecycle;
 mod ps;
 mod run;
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 
 use crate::cli::Command;
 
@@ -19,8 +19,9 @@ pub fn dispatch(command: Command) -> Result<()> {
         Command::Exec(args) => exec::exec(args),
         Command::Ps(args) => ps::exec(args),
         Command::Check(args) => lifecycle::check(args),
-        Command::Import(_) => todo("import", "Phase 8"),
-        Command::Bundle(_) => todo("bundle", "Phase 8"),
+        Command::Import(args) => images::import(args),
+        Command::Bundle(args) => images::bundle(args),
+        Command::Rebase(args) => images::rebase(args),
         Command::Systemd(args) => lifecycle::systemd(args),
         Command::Proxy(args) => lb::proxy(args),
         Command::Lb(args) => lb::exec(args),
@@ -30,8 +31,4 @@ pub fn dispatch(command: Command) -> Result<()> {
         Command::Audit(args) => lifecycle::audit(args),
         Command::Outdated(args) => lifecycle::outdated(args),
     }
-}
-
-fn todo(name: &str, phase: &str) -> Result<()> {
-    bail!("`ply {name}` is not implemented yet (planned: {phase} — see TASKS.md)")
 }

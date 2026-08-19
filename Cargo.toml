@@ -26,6 +26,8 @@ seccompiler = "0.5"
 semver = { version = "1", features = ["serde"] }
 walkdir = "2"
 tempfile = "3"
+tar = "0.4"
+flate2 = "1"
 
 [profile.dev]
 debug = "line-tables-only"
