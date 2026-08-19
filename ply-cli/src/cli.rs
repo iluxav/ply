@@ -50,6 +50,12 @@ pub enum Command {
     /// Emit load-balancer config for one app
     Lb(LbArgs),
 
+    /// Pre-fetch every package in the host policy into the store
+    ///
+    /// Reads /etc/ply/runtimes.toml (or --policy FILE). A freshly synced
+    /// host deploys with zero fetches.
+    Sync(SyncArgs),
+
     /// Delete store entries unreferenced by any installed or running app
     Gc(GcArgs),
 
@@ -175,6 +181,17 @@ pub struct LbArgs {
     /// Config format
     #[arg(long, value_name = "FORMAT", default_value = "nginx")]
     pub format: String,
+}
+
+#[derive(Args)]
+pub struct SyncArgs {
+    /// Policy file (defaults to /etc/ply/runtimes.toml)
+    #[arg(long, value_name = "FILE")]
+    pub policy: Option<PathBuf>,
+
+    /// Allow plain-http sources on public hosts
+    #[arg(long)]
+    pub insecure_source: bool,
 }
 
 #[derive(Args)]

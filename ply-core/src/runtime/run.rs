@@ -86,6 +86,37 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
         }
     }
 
+    // Host policy: refused runtimes don't run; deprecated ones warn.
+    if let Some(lockfile) = &lockfile {
+        if let Some(policy) = crate::policy::Policy::load_default()? {
+            for finding in policy.check_lockfile(lockfile) {
+                match finding.severity {
+                    crate::policy::Severity::Error => {
+                        return Err(Error::Runtime(format!("host policy: {}", finding.message)))
+                    }
+                    crate::policy::Severity::Warning => {
+                        eprintln!("ply: warning: {}", finding.message)
+                    }
+                }
+            }
+        }
+    }
+
+    // Record the app as installed — the GC root set.
+    let record = crate::apps::AppRecord {
+        name: manifest.package.name.clone(),
+        image: std::path::absolute(&opts.image).unwrap_or_else(|_| opts.image.clone()),
+        digests: lockfile
+            .as_ref()
+            .map(|l| l.packages.iter().map(|p| p.sha256.clone()).collect())
+            .unwrap_or_default(),
+        updated: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+    };
+    record.save()?;
+
     let layer_refs: Vec<&Layer> = dep_layers.iter().collect();
     let mut env = compose_env(&layer_refs, &manifest.env, &opts.cli_env);
     env.entry("HOME".into()).or_insert("/root".into());

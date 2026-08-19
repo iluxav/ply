@@ -4,6 +4,7 @@
 mod build;
 mod exec;
 mod lb;
+mod lifecycle;
 mod ps;
 mod run;
 
@@ -17,16 +18,17 @@ pub fn dispatch(command: Command) -> Result<()> {
         Command::Run(args) => run::exec(args),
         Command::Exec(args) => exec::exec(args),
         Command::Ps(args) => ps::exec(args),
-        Command::Check(_) => todo("check", "Phase 7"),
+        Command::Check(args) => lifecycle::check(args),
         Command::Import(_) => todo("import", "Phase 8"),
         Command::Bundle(_) => todo("bundle", "Phase 8"),
-        Command::Systemd(_) => todo("systemd", "Phase 7"),
+        Command::Systemd(args) => lifecycle::systemd(args),
         Command::Proxy(args) => lb::proxy(args),
         Command::Lb(args) => lb::exec(args),
-        Command::Gc(_) => todo("gc", "Phase 7"),
-        Command::Rm(_) => todo("rm", "Phase 7"),
-        Command::Audit(_) => todo("audit", "Phase 7"),
-        Command::Outdated(_) => todo("outdated", "Phase 7"),
+        Command::Sync(args) => lifecycle::sync(args),
+        Command::Gc(args) => lifecycle::gc(args),
+        Command::Rm(args) => lifecycle::rm(args),
+        Command::Audit(args) => lifecycle::audit(args),
+        Command::Outdated(args) => lifecycle::outdated(args),
     }
 }
 
