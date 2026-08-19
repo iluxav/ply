@@ -1,21 +1,30 @@
 //! `ply build` — dir + ply.toml → deterministic image.
 //!
-//! Phase 1 scope: thin mode only (app files + embedded manifest, no
-//! dependency resolution yet). App files live under `/opt/<name>` — the app
-//! owns its prefix, like every other package.
+//! Three kinds of builds, one command:
+//! - app (has entrypoint): files under `/opt/<name>`, deps resolved, lockfile
+//!   written next to ply.toml and embedded as `/.lock.toml`
+//! - package (no entrypoint): files under `/opt/<name>-<version>` (kegs),
+//!   `[layer]` env contributions embedded as `/.layer.toml`
+//! - base package (`base = true`): files pack at `/` — owns FHS, /bin/sh, libc
 
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
 use crate::image::name::{Arch, ImageName, Os};
+use crate::image::read::{LOCKFILE_PATH, MANIFEST_PATH};
 use crate::image::squashfs::{write_image, ExtraFile, TreeSource};
+use crate::lockfile::{LockedPackage, Lockfile};
 use crate::manifest::Manifest;
+use crate::resolve::Resolver;
+use crate::store::Store;
 
 pub struct BuildOptions {
     /// Directory containing ply.toml.
     pub dir: PathBuf,
     /// Output image path; defaults to `<dir>/<canonical-filename>`.
     pub output: Option<PathBuf>,
+    /// Allow plain-http sources on public hosts.
+    pub allow_insecure: bool,
 }
 
 #[derive(Debug)]
@@ -24,6 +33,8 @@ pub struct BuildOutcome {
     pub image_name: ImageName,
     pub digest: String,
     pub size_bytes: u64,
+    /// Resolved dependencies (empty for packages and dep-less apps).
+    pub locked: Vec<(String, String)>,
 }
 
 pub fn build(opts: &BuildOptions) -> Result<BuildOutcome> {
@@ -36,11 +47,29 @@ pub fn build(opts: &BuildOptions) -> Result<BuildOutcome> {
     }
     let manifest = Manifest::load(&manifest_path)?;
 
-    if !manifest.dependencies.is_empty() {
-        return Err(Error::Unimplemented(
-            "[dependencies] resolution (Phase 3) — for now build thin images: vendor static binaries in the app dir",
-        ));
-    }
+    // Only apps resolve at build time. A dep package's [dependencies] are
+    // metadata consumed when an app's graph is resolved.
+    let lockfile = if !manifest.is_app() || manifest.dependencies.is_empty() {
+        None
+    } else {
+        let store = Store::open_default()?;
+        let mut resolver = Resolver::new(&manifest, &store, Arch::host(), opts.allow_insecure);
+        let resolution = resolver.resolve()?;
+        let lockfile = Lockfile {
+            packages: resolution
+                .packages
+                .iter()
+                .map(|p| LockedPackage {
+                    name: p.name.clone(),
+                    version: p.version.clone(),
+                    source: p.source_spec.clone(),
+                    sha256: p.digest.clone(),
+                })
+                .collect(),
+        };
+        lockfile.save(&opts.dir.join("ply.lock"))?;
+        Some(lockfile)
+    };
 
     let image_name = ImageName::new(
         &manifest.package.name,
@@ -58,29 +87,87 @@ pub fn build(opts: &BuildOptions) -> Result<BuildOutcome> {
         path: image_path.clone(),
         source,
     })?;
-    let filter = move |top: &Path| -> bool {
-        let name = top.file_name().unwrap_or_default().to_string_lossy();
-        if name == "ply.toml" || name == "ply.lock" || name == ".git" || name.ends_with(".img") {
-            return false;
+
+    // `[package] include` whitelist: only listed paths ship. Typos fail loudly.
+    let include: Vec<PathBuf> = manifest
+        .package
+        .include
+        .iter()
+        .map(|e| PathBuf::from(e.trim_end_matches('/')))
+        .collect();
+    for entry in &include {
+        if opts.dir.join(entry).symlink_metadata().is_err() {
+            return Err(Error::Build(format!(
+                "package.include entry `{}` not found in {} — remove it or create it (did the app's own build step run?)",
+                entry.display(),
+                opts.dir.display()
+            )));
         }
-        std::path::absolute(top)
-            .map(|p| p != output_abs)
-            .unwrap_or(true)
+    }
+
+    let dir_abs = std::path::absolute(&opts.dir).map_err(|source| Error::Io {
+        path: opts.dir.clone(),
+        source,
+    })?;
+    let filter = move |rel: &Path| -> bool {
+        if rel.components().count() == 1 {
+            let name = rel.file_name().unwrap_or_default().to_string_lossy();
+            if name == "ply.toml" || name == "ply.lock" || name == ".git" || name.ends_with(".img")
+            {
+                return false;
+            }
+            if dir_abs.join(rel) == output_abs {
+                return false;
+            }
+        }
+        if include.is_empty() {
+            return true;
+        }
+        // Inside an included subtree, or an ancestor dir the walker must
+        // descend through to reach one.
+        include
+            .iter()
+            .any(|entry| rel.starts_with(entry) || entry.starts_with(rel))
     };
 
-    let prefix = format!("/opt/{}", manifest.package.name);
+    let prefix = if manifest.package.base {
+        String::new() // base owns the image root
+    } else if manifest.is_app() {
+        format!("/opt/{}", manifest.package.name)
+    } else {
+        format!(
+            "/opt/{}-{}",
+            manifest.package.name, manifest.package.version
+        )
+    };
     let trees = [TreeSource {
         dir: &opts.dir,
         prefix: &prefix,
         filter: Some(&filter),
     }];
-    let extra = [ExtraFile {
-        path: "/.manifest.toml".into(),
+
+    let mut extra = vec![ExtraFile {
+        path: MANIFEST_PATH.into(),
         bytes: manifest.to_toml()?.into_bytes(),
         mode: 0o444,
     }];
+    if let Some(lockfile) = &lockfile {
+        extra.push(ExtraFile {
+            path: LOCKFILE_PATH.into(),
+            bytes: lockfile.to_toml().into_bytes(),
+            mode: 0o444,
+        });
+    }
+    if let Some(layer) = &manifest.layer {
+        let layer_toml = toml::to_string_pretty(layer).map_err(|e| Error::Build(e.to_string()))?;
+        extra.push(ExtraFile {
+            path: "/.layer.toml".into(),
+            bytes: layer_toml.into_bytes(),
+            mode: 0o444,
+        });
+    }
 
-    // Build to a temp name, fsync-rename into place (a half-written .img must
+    // Build to a temp name, rename into place (a half-written .img must
     // never be mistaken for an image).
     let tmp_path = image_path.with_extension("img.tmp");
     write_image(&trees, &extra, &tmp_path)?;
@@ -102,6 +189,14 @@ pub fn build(opts: &BuildOptions) -> Result<BuildOutcome> {
         image_name,
         digest,
         size_bytes,
+        locked: lockfile
+            .map(|l| {
+                l.packages
+                    .iter()
+                    .map(|p| (p.name.clone(), p.version.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default(),
     })
 }
 
@@ -130,6 +225,7 @@ mod tests {
         let opts = BuildOptions {
             dir: dir.path().to_path_buf(),
             output: None,
+            allow_insecure: false,
         };
         let one = build(&opts).unwrap();
         assert!(one
@@ -138,30 +234,86 @@ mod tests {
             .ends_with(&format!("hello-0.1.0-linux-{}.img", Arch::host().as_str())));
         let two = build(&opts).unwrap();
         assert_eq!(one.digest, two.digest, "rebuild must be byte-identical");
-        // the previously built image must not have been packed into the rebuild
         assert_eq!(one.size_bytes, two.size_bytes);
     }
 
     #[test]
-    fn build_refuses_dependencies_for_now() {
+    fn include_whitelist_limits_and_validates() {
         let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("dist/deep")).unwrap();
+        std::fs::write(dir.path().join("dist/deep/app.js"), b"js").unwrap();
+        std::fs::write(dir.path().join("junk.log"), b"junk").unwrap();
         std::fs::write(
             dir.path().join("ply.toml"),
             r#"
             [package]
             name = "app"
-            version = "0.1.0"
-            entrypoint = ["./app"]
-            [dependencies]
-            node = "22"
+            version = "1.0.0"
+            entrypoint = ["node", "dist/deep/app.js"]
+            include = ["dist/deep/"]
             "#,
         )
         .unwrap();
-        let err = build(&BuildOptions {
+        let opts = BuildOptions {
             dir: dir.path().to_path_buf(),
             output: None,
+            allow_insecure: false,
+        };
+        let outcome = build(&opts).unwrap();
+        let listing: Vec<String> = {
+            let file = std::fs::File::open(&outcome.image_path).unwrap();
+            let fs =
+                backhand::FilesystemReader::from_reader(std::io::BufReader::new(file)).unwrap();
+            fs.files()
+                .map(|n| n.fullpath.to_string_lossy().into_owned())
+                .collect()
+        };
+        assert!(listing.contains(&"/opt/app/dist/deep/app.js".to_string()));
+        assert!(!listing.iter().any(|p| p.contains("junk")));
+
+        // typo in include → hard error
+        std::fs::write(
+            dir.path().join("ply.toml"),
+            r#"
+            [package]
+            name = "app"
+            version = "1.0.0"
+            entrypoint = ["node", "dist/deep/app.js"]
+            include = ["dost/"]
+            "#,
+        )
+        .unwrap();
+        assert!(build(&opts).unwrap_err().to_string().contains("dost"));
+    }
+
+    #[test]
+    fn package_build_uses_keg_prefix_and_layer_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("bin")).unwrap();
+        std::fs::write(dir.path().join("bin/tool"), b"bin").unwrap();
+        std::fs::write(
+            dir.path().join("ply.toml"),
+            r#"
+            [package]
+            name = "tool"
+            version = "2.0.0"
+
+            [layer]
+            path = ["/opt/tool-2.0.0/bin"]
+            "#,
+        )
+        .unwrap();
+        let outcome = build(&BuildOptions {
+            dir: dir.path().to_path_buf(),
+            output: None,
+            allow_insecure: false,
         })
-        .unwrap_err();
-        assert!(err.to_string().contains("Phase 3"));
+        .unwrap();
+        let layer = crate::image::read::read_embedded(&outcome.image_path, "/.layer.toml")
+            .unwrap()
+            .expect("layer.toml embedded");
+        assert!(String::from_utf8_lossy(&layer).contains("/opt/tool-2.0.0/bin"));
+        let manifest = crate::image::read::read_manifest(&outcome.image_path).unwrap();
+        assert!(!manifest.is_app());
     }
 }

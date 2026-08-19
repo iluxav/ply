@@ -4,8 +4,13 @@
 
 pub mod build;
 pub mod digest;
+pub mod env;
 pub mod error;
 pub mod image;
+pub mod lockfile;
 pub mod manifest;
+pub mod resolve;
+pub mod source;
+pub mod store;
 
 pub use error::{Error, Result};

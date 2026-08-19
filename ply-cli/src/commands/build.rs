@@ -7,7 +7,11 @@ pub fn run(args: BuildArgs) -> Result<()> {
     let outcome = build(&BuildOptions {
         dir: args.dir,
         output: args.output,
+        allow_insecure: args.insecure_source,
     })?;
+    for (name, version) in &outcome.locked {
+        println!("locked {name} {version}");
+    }
     println!(
         "built {} ({})",
         outcome.image_path.display(),

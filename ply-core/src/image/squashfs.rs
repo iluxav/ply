@@ -20,16 +20,17 @@ pub struct ExtraFile {
     pub mode: u16,
 }
 
-/// Filter applied to top-level entries of a source tree (return false to skip).
-pub type TopLevelFilter<'a> = &'a dyn Fn(&Path) -> bool;
+/// Filter over paths relative to the tree root (return false to skip; a
+/// skipped directory prunes its whole subtree).
+pub type TreeFilter<'a> = &'a dyn Fn(&Path) -> bool;
 
 pub struct TreeSource<'a> {
     /// Host directory to pack.
     pub dir: &'a Path,
     /// Destination prefix inside the image, e.g. `/opt/myapp` ("" = root).
     pub prefix: &'a str,
-    /// Skip top-level entries for which this returns false.
-    pub filter: Option<TopLevelFilter<'a>>,
+    /// Skip entries (relative paths) for which this returns false.
+    pub filter: Option<TreeFilter<'a>>,
 }
 
 fn header(mode: u16) -> NodeHeader {
@@ -73,9 +74,9 @@ pub fn write_image(trees: &[TreeSource], extra: &[ExtraFile], out: &Path) -> Res
             .sort_by_file_name()
             .into_iter()
             .filter_entry(|e| {
-                if e.depth() == 1 {
-                    if let Some(filter) = tree.filter {
-                        return filter(e.path());
+                if let Some(filter) = tree.filter {
+                    if let Ok(rel) = e.path().strip_prefix(tree.dir) {
+                        return filter(rel);
                     }
                 }
                 true

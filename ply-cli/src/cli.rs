@@ -72,6 +72,10 @@ pub struct BuildArgs {
     /// Output image path (defaults to the canonical filename in DIR)
     #[arg(short, long, value_name = "FILE")]
     pub output: Option<PathBuf>,
+
+    /// Allow plain-http sources on public hosts (hash still verifies content)
+    #[arg(long)]
+    pub insecure_source: bool,
 }
 
 #[derive(Args)]

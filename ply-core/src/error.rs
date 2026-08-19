@@ -20,6 +20,15 @@ pub enum Error {
     #[error("build error: {0}")]
     Build(String),
 
+    #[error("store error: {0}")]
+    Store(String),
+
+    #[error("source error: {0}")]
+    Source(String),
+
+    #[error("resolve error: {0}")]
+    Resolve(String),
+
     #[error("not implemented yet: {0}")]
     Unimplemented(&'static str),
 }

@@ -33,6 +33,26 @@ pub struct Manifest {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requires: Option<Requires>,
+
+    /// Env contributions this package exposes to dependents; embedded into
+    /// the built image as `/.layer.toml`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layer: Option<Layer>,
+
+    /// Where to fetch dependencies from. `default` applies to deps without an
+    /// explicit source; other keys are aliases usable as `source = "<alias>"`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub sources: BTreeMap<String, String>,
+}
+
+/// Package env contributions (`/.layer.toml` inside dep images).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Layer {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub path: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ld_library_path: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,8 +60,22 @@ pub struct Manifest {
 pub struct Package {
     pub name: String,
     pub version: Version,
-    /// argv of the process to exec, e.g. ["node", "server.js"]
-    pub entrypoint: Vec<String>,
+    /// argv of the process to exec, e.g. ["node", "server.js"].
+    /// Absent = this is a library/runtime package, not an app.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entrypoint: Option<Vec<String>>,
+    /// True for the one package per graph that owns `/` (FHS, /bin/sh, libc).
+    /// Its files pack at the image root instead of an /opt prefix.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub base: bool,
+    /// ABI a runtime package provides, e.g. "linux-x64-musl" (matched
+    /// against app [requires] abi).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provides_abi: Option<String>,
+    /// Paths (relative to the app dir) that go into the image. When set,
+    /// ONLY these ship — like npm's "files" field. Absent = pack everything.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub include: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,6 +89,33 @@ pub enum Dependency {
         source: Option<String>,
         version: String,
     },
+}
+
+/// A dependency, normalized: the manifest key is an alias; the value may name
+/// a different package (`base = "alpine@3.20"` → package `alpine`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DepSpec {
+    pub package: String,
+    pub constraint: String,
+    pub source: Option<String>,
+}
+
+impl Dependency {
+    pub fn spec(&self, alias: &str) -> DepSpec {
+        let (version, source) = match self {
+            Dependency::Constraint(v) => (v.as_str(), None),
+            Dependency::Detailed { source, version } => (version.as_str(), source.clone()),
+        };
+        let (package, constraint) = match version.split_once('@') {
+            Some((name, constraint)) => (name.to_string(), constraint.to_string()),
+            None => (alias.to_string(), version.to_string()),
+        };
+        DepSpec {
+            package,
+            constraint,
+            source,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -116,13 +177,20 @@ impl Manifest {
         toml::to_string_pretty(self).map_err(|e| Error::Manifest(e.to_string()))
     }
 
+    /// An app has an entrypoint; a package (runtime/library/base) does not.
+    pub fn is_app(&self) -> bool {
+        self.package.entrypoint.is_some()
+    }
+
     fn validate(&self) -> Result<()> {
         validate_package_name(&self.package.name)?;
-        if self.package.entrypoint.is_empty() {
-            return Err(Error::Manifest(
-                "package.entrypoint must have at least one element, e.g. [\"node\", \"server.js\"]"
-                    .into(),
-            ));
+        if let Some(entrypoint) = &self.package.entrypoint {
+            if entrypoint.is_empty() {
+                return Err(Error::Manifest(
+                    "package.entrypoint must have at least one element, e.g. [\"node\", \"server.js\"] (or omit it entirely for a library/runtime package)"
+                        .into(),
+                ));
+            }
         }
         for (name, volume) in &self.volumes {
             if !volume.path.starts_with('/') {
@@ -138,8 +206,22 @@ impl Manifest {
                 )));
             }
         }
-        for name in self.dependencies.keys() {
-            validate_package_name(name)?;
+        for (alias, dep) in &self.dependencies {
+            validate_package_name(alias)?;
+            validate_package_name(&dep.spec(alias).package)?;
+        }
+        for entry in &self.package.include {
+            let trimmed = entry.trim_end_matches('/');
+            if trimmed.is_empty()
+                || trimmed.starts_with('/')
+                || trimmed
+                    .split('/')
+                    .any(|part| part == ".." || part.is_empty())
+            {
+                return Err(Error::Manifest(format!(
+                    "package.include entry `{entry}`: must be a relative path inside the app dir (no leading `/`, no `..`)"
+                )));
+            }
         }
         Ok(())
     }
