@@ -4,8 +4,15 @@ use ply_core::runtime::run::{parse_env_file, run, RunOptions};
 use crate::cli::RunArgs;
 
 pub fn exec(args: RunArgs) -> Result<()> {
-    if !args.link.is_empty() {
-        bail!("--link is not implemented yet (planned: Phase 6 — see TASKS.md)");
+    let mut links: Vec<(std::path::PathBuf, String)> = Vec::new();
+    for link in &args.link {
+        let Some((host, container)) = link.split_once(':') else {
+            bail!("--link `{link}`: expected HOST:CONTAINER, e.g. ./src:/opt/myapp");
+        };
+        if !container.starts_with('/') {
+            bail!("--link `{link}`: container path must be absolute");
+        }
+        links.push((host.into(), container.to_string()));
     }
 
     let mut cli_env: Vec<(String, String)> = Vec::new();
@@ -24,6 +31,7 @@ pub fn exec(args: RunArgs) -> Result<()> {
         cli_env,
         allow_insecure: true, // lockfile digests pin content; run never resolves
         scale: args.scale,
+        links,
     })?;
     std::process::exit(code);
 }

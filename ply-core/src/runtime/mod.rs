@@ -1,5 +1,6 @@
 pub mod cgroup;
 pub mod container;
+pub mod exec;
 pub mod hosts;
 pub mod loopdev;
 pub mod mount;

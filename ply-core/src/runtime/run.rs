@@ -30,7 +30,12 @@ pub struct RunOptions {
     pub cli_env: Vec<(String, String)>,
     pub allow_insecure: bool,
     pub scale: u32,
+    /// Dev-mode bind mounts: (host path, container path). Same mechanism
+    /// as volumes.
+    pub links: Vec<(PathBuf, String)>,
 }
+
+pub const VOLUMES_DIR: &str = "/var/lib/ply/volumes";
 
 pub fn run(opts: &RunOptions) -> Result<i32> {
     if !nix::unistd::geteuid().is_root() {
@@ -100,7 +105,14 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
 
     let mut instances: Vec<Instance> = Vec::new();
     for _ in 0..opts.scale.max(1) {
-        let instance = launch_instance(&manifest, &entrypoint, &env, &opts.image, &dep_images)?;
+        let instance = launch_instance(
+            &manifest,
+            &entrypoint,
+            &env,
+            &opts.image,
+            &dep_images,
+            &opts.links,
+        )?;
         register_child(instance.child.as_raw());
         instances.push(instance);
     }
@@ -158,9 +170,42 @@ fn launch_instance(
     env: &[(String, String)],
     app_image: &Path,
     dep_images: &[PathBuf],
+    links: &[(PathBuf, String)],
 ) -> Result<Instance> {
     let app = &manifest.package.name;
     let (instance_dir, n) = allocate_instance(app)?;
+
+    // Named volumes: per-instance by default (scaling can never silently
+    // corrupt single-writer state); `scope = "shared"` is the explicit opt-in.
+    let mut binds: Vec<(PathBuf, String)> = Vec::new();
+    for (name, volume) in &manifest.volumes {
+        let suffix = if volume.scope == "shared" {
+            "shared".to_string()
+        } else {
+            n.to_string()
+        };
+        let host_dir = Path::new(VOLUMES_DIR)
+            .join(app)
+            .join(format!("{name}.{suffix}"));
+        std::fs::create_dir_all(&host_dir).map_err(|source| Error::Io {
+            path: host_dir.clone(),
+            source,
+        })?;
+        binds.push((host_dir, volume.path.clone()));
+    }
+    for (host, container) in links {
+        let host = std::path::absolute(host).map_err(|source| Error::Io {
+            path: host.clone(),
+            source,
+        })?;
+        if !host.exists() {
+            return Err(Error::Runtime(format!(
+                "--link source {} does not exist",
+                host.display()
+            )));
+        }
+        binds.push((host, container.clone()));
+    }
     let guard = InstanceGuard {
         dir: instance_dir.clone(),
         mounted_layers: std::cell::RefCell::new(Vec::new()),
@@ -192,6 +237,7 @@ fn launch_instance(
         cwd: PathBuf::from(format!("/opt/{app}")),
         env: env.to_vec(),
         argv: entrypoint.to_vec(),
+        binds,
         sync_rx,
         keep_net_bind,
     };

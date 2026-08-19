@@ -2,6 +2,7 @@
 // Unimplemented commands fall through to `todo`.
 
 mod build;
+mod exec;
 mod lb;
 mod ps;
 mod run;
@@ -14,7 +15,7 @@ pub fn dispatch(command: Command) -> Result<()> {
     match command {
         Command::Build(args) => build::run(args),
         Command::Run(args) => run::exec(args),
-        Command::Exec(_) => todo("exec", "Phase 6"),
+        Command::Exec(args) => exec::exec(args),
         Command::Ps(args) => ps::exec(args),
         Command::Check(_) => todo("check", "Phase 7"),
         Command::Import(_) => todo("import", "Phase 8"),

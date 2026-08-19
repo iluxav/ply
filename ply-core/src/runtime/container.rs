@@ -22,6 +22,9 @@ pub struct ContainerSpec {
     /// Composed environment, KEY=VALUE.
     pub env: Vec<(String, String)>,
     pub argv: Vec<String>,
+    /// Bind mounts: (host dir, absolute path inside the container).
+    /// Volumes and --link both come through here.
+    pub binds: Vec<(PathBuf, String)>,
     /// Read end of the parent's sync pipe: proceed on 1 byte (parent placed
     /// us in the cgroup), abort on EOF (parent failed).
     pub sync_rx: std::os::fd::OwnedFd,
@@ -70,6 +73,27 @@ fn setup_and_exec(spec: &ContainerSpec) -> Result<isize> {
     // image layers stay untouched.
     for file in ["hosts", "resolv.conf"] {
         let _ = std::fs::copy(format!("/etc/{file}"), root.join("etc").join(file));
+    }
+
+    // Volumes + dev links: bind host dirs over declared paths, pre-pivot
+    // while host paths are still reachable in our private mount table.
+    for (host_dir, container_path) in &spec.binds {
+        let target = root.join(container_path.trim_start_matches('/'));
+        std::fs::create_dir_all(&target)
+            .map_err(|e| crate::Error::Runtime(format!("volume target {container_path}: {e}")))?;
+        nix::mount::mount(
+            Some(host_dir),
+            &target,
+            None::<&str>,
+            nix::mount::MsFlags::MS_BIND,
+            None::<&str>,
+        )
+        .map_err(|e| {
+            crate::Error::Runtime(format!(
+                "bind {} -> {container_path}: {e}",
+                host_dir.display()
+            ))
+        })?;
     }
 
     nix::unistd::pivot_root(&root, &root.join(".pivot"))
@@ -129,7 +153,7 @@ fn setup_and_exec(spec: &ContainerSpec) -> Result<isize> {
 
 /// PATH lookup inside the container filesystem (post-pivot). Paths with `/`
 /// are used as-is (relative ones resolve against the cwd).
-fn resolve_program(name: &str, path: &str) -> String {
+pub fn resolve_program(name: &str, path: &str) -> String {
     if name.contains('/') {
         return name.to_string();
     }
