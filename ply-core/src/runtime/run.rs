@@ -579,6 +579,12 @@ fn launch_instance(
     let dep_images = &ctx.dep_images;
     let app = &manifest.package.name;
     let (instance_dir, n) = allocate_instance(app, slot)?;
+    let run_user = manifest
+        .package
+        .user
+        .as_deref()
+        .map(crate::manifest::parse_user)
+        .transpose()?;
 
     // Named volumes: per-instance by default (scaling can never silently
     // corrupt single-writer state); `scope = "shared"` is the explicit opt-in.
@@ -596,6 +602,10 @@ fn launch_instance(
             path: host_dir.clone(),
             source,
         })?;
+        // The app's user must be able to write its own volumes.
+        if let Some(user) = &run_user {
+            let _ = std::os::unix::fs::chown(&host_dir, Some(user.uid), Some(user.gid));
+        }
         binds.push((host_dir, volume.path.clone()));
     }
     for (host, container) in links {
@@ -649,18 +659,27 @@ fn launch_instance(
         nix::unistd::pipe().map_err(|e| Error::Runtime(format!("pipe: {e}")))?;
 
     let keep_net_bind = manifest.ports.values().any(|p| *p < 1024);
+    let mut spec_env = env.to_vec();
+    if let Some(user) = &run_user {
+        for pair in spec_env.iter_mut() {
+            if pair.0 == "HOME" {
+                pair.1 = format!("/home/{}", user.name);
+            }
+        }
+    }
     let spec = ContainerSpec {
         layers,
         instance_dir: instance_dir.clone(),
         hostname: app.clone(),
         cwd: PathBuf::from(format!("/opt/{app}")),
-        env: env.to_vec(),
+        env: spec_env,
         argv: entrypoint.to_vec(),
         binds,
         sync_rx,
         keep_net_bind,
         privileged: false,
         rootless,
+        run_user,
     };
 
     let mut stack = vec![0u8; 1024 * 1024];
@@ -819,6 +838,12 @@ fn allocate_instance(app: &str, slot: Option<u32>) -> Result<(PathBuf, u32)> {
         let dir = instances.join(format!("{app}.{n}"));
         if dir.exists() {
             // stale leftover from a crashed predecessor — self-heal
+            // (unmount any layer mounts first or removal fails on EBUSY)
+            if let Ok(entries) = std::fs::read_dir(dir.join("layers")) {
+                for entry in entries.filter_map(|e| e.ok()) {
+                    mount::unmount_detach(&entry.path());
+                }
+            }
             let _ = crate::paths::force_remove_dir_all(&dir);
         }
         std::fs::create_dir(&dir).map_err(|source| Error::Io {

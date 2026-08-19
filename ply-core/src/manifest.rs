@@ -146,6 +146,36 @@ pub struct Package {
     /// The same composed rootfs enters via pivot_root or virtio-fs.
     #[serde(default = "default_isolation", skip_serializing_if = "is_ns")]
     pub isolation: String,
+    /// Run the app as this user instead of root: "name:uid:gid"
+    /// (e.g. "postgres:70:70"). ply writes the passwd entry, chowns the
+    /// app's volumes, and switches uid/gid before rights-stripping.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
+}
+
+/// Parsed `package.user`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunUser {
+    pub name: String,
+    pub uid: u32,
+    pub gid: u32,
+}
+
+pub fn parse_user(s: &str) -> Result<RunUser> {
+    let parts: Vec<&str> = s.split(':').collect();
+    let bad = || {
+        Error::Manifest(format!(
+            "package.user `{s}`: expected \"name:uid:gid\", e.g. \"postgres:70:70\""
+        ))
+    };
+    match parts.as_slice() {
+        [name, uid, gid] if !name.is_empty() => Ok(RunUser {
+            name: name.to_string(),
+            uid: uid.parse().map_err(|_| bad())?,
+            gid: gid.parse().map_err(|_| bad())?,
+        }),
+        _ => Err(bad()),
+    }
 }
 
 fn default_isolation() -> String {
@@ -300,6 +330,9 @@ impl Manifest {
         }
         if let Some(health) = &self.health {
             parse_duration(&health.grace)?;
+        }
+        if let Some(user) = &self.package.user {
+            parse_user(user)?;
         }
         if self.package.isolation != "ns" && self.package.isolation != "vm" {
             return Err(Error::Manifest(format!(

@@ -272,6 +272,7 @@ pub fn import(spec: &str, output: &Path) -> Result<ImportOutcome> {
             entrypoint: Some(entrypoint),
             base: false,
             provides_abi: None,
+            user: None,
             include: vec![],
             isolation: "ns".into(),
         },

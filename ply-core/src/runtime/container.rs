@@ -36,6 +36,8 @@ pub struct ContainerSpec {
     /// Running in a user namespace as an unprivileged user: /dev nodes are
     /// bind-mounted from the host (mknod is denied), devpts is best-effort.
     pub rootless: bool,
+    /// Switch to this user before exec ([package] user = "name:uid:gid").
+    pub run_user: Option<crate::manifest::RunUser>,
 }
 
 /// Child entry point. Never returns on success (execve).
@@ -90,6 +92,33 @@ fn setup_and_exec(spec: &ContainerSpec) -> Result<isize> {
     {
         use std::io::Write;
         let _ = writeln!(hosts, "127.0.0.1\t{}", spec.hostname);
+    }
+
+    // A declared run user gets a passwd/group entry (getpwuid must work —
+    // postgres, sshd and friends insist) and a writable home.
+    if let Some(user) = &spec.run_user {
+        use std::io::Write;
+        if let Ok(mut passwd) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(root.join("etc/passwd"))
+        {
+            let _ = writeln!(
+                passwd,
+                "{}:x:{}:{}::/home/{}:/bin/sh",
+                user.name, user.uid, user.gid, user.name
+            );
+        }
+        if let Ok(mut group) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(root.join("etc/group"))
+        {
+            let _ = writeln!(group, "{}:x:{}:", user.name, user.gid);
+        }
+        let home = root.join("home").join(&user.name);
+        let _ = std::fs::create_dir_all(&home);
+        let _ = std::os::unix::fs::chown(&home, Some(user.uid), Some(user.gid));
     }
 
     // Volumes + dev links: bind host dirs over declared paths, pre-pivot
@@ -179,20 +208,48 @@ fn setup_and_exec(spec: &ContainerSpec) -> Result<isize> {
     let resolved = resolve_program(&spec.argv[0], composed_path);
     let program = CString::new(resolved.as_str()).unwrap();
 
-    // Rights stripping LAST — everything above needed privilege.
-    if !spec.privileged {
-        crate::runtime::security::drop_capabilities(spec.keep_net_bind)?;
-        crate::runtime::security::no_new_privs()?;
-        crate::runtime::security::apply_seccomp()?;
-    }
-
     // Mini-init: PID 1 in a pid namespace silently drops default-action
     // signals, so a handler-less app (python, shell scripts) would ignore
     // SIGTERM. Instead ply stays as a tiny PID 1 that forwards signals,
     // reaps zombies, and exits with the app's code — the app runs as PID 2
     // with completely normal signal semantics.
+    //
+    // Rights stripping happens INSIDE each branch, after the fork: the app
+    // child may first need CAP_SETUID/SETGID to become its [package] user.
     match unsafe { nix::unistd::fork() } {
         Ok(nix::unistd::ForkResult::Child) => {
+            // Order matters: the bounding-set drop needs CAP_SETPCAP, so it
+            // happens while still root (permitted caps survive it — setuid
+            // still works). setuid then clears effective/permitted; nnp +
+            // seccomp close the rest.
+            if !spec.privileged {
+                if let Err(e) = crate::runtime::security::drop_capabilities(spec.keep_net_bind) {
+                    eprintln!("ply: rights stripping failed: {e}");
+                    std::process::exit(126);
+                }
+            }
+            if let Some(user) = &spec.run_user {
+                let apply = || -> nix::Result<()> {
+                    nix::unistd::setgroups(&[nix::unistd::Gid::from_raw(user.gid)])?;
+                    nix::unistd::setgid(nix::unistd::Gid::from_raw(user.gid))?;
+                    nix::unistd::setuid(nix::unistd::Uid::from_raw(user.uid))?;
+                    Ok(())
+                };
+                if let Err(e) = apply() {
+                    eprintln!("ply: cannot switch to user {}: {e}", user.name);
+                    std::process::exit(126);
+                }
+            }
+            if !spec.privileged {
+                let clamps = || -> Result<()> {
+                    crate::runtime::security::no_new_privs()?;
+                    crate::runtime::security::apply_seccomp()
+                };
+                if let Err(e) = clamps() {
+                    eprintln!("ply: rights stripping failed: {e}");
+                    std::process::exit(126);
+                }
+            }
             let e = nix::unistd::execve(&program, &argv, &env).unwrap_err();
             eprintln!(
                 "ply: exec {:?} (resolved to {resolved}): {e} — not on the image's PATH, or its interpreter/libc is missing from the layers",
@@ -200,7 +257,14 @@ fn setup_and_exec(spec: &ContainerSpec) -> Result<isize> {
             );
             std::process::exit(127);
         }
-        Ok(nix::unistd::ForkResult::Parent { child }) => Ok(init_loop(child)),
+        Ok(nix::unistd::ForkResult::Parent { child }) => {
+            if !spec.privileged {
+                crate::runtime::security::drop_capabilities(false)?;
+                crate::runtime::security::no_new_privs()?;
+                crate::runtime::security::apply_seccomp()?;
+            }
+            Ok(init_loop(child))
+        }
         Err(e) => Err(crate::Error::Runtime(format!("init fork: {e}"))),
     }
 }
@@ -298,6 +362,10 @@ fn setup_dev_nodes(root: &Path, rootless: bool) -> Result<()> {
                 makedev(major, minor),
             )
             .map_err(|e| crate::Error::Runtime(format!("mknod /dev/{name}: {e}")))?;
+            // umask clips the mknod mode — non-root apps must still be able
+            // to write /dev/null & friends
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o666));
         }
     }
 

@@ -266,6 +266,7 @@ pub fn shell(name: &str, cmd: &[String]) -> Result<i32> {
         keep_net_bind: false,
         privileged: true, // authoring needs real root; host netns for apk/apt
         rootless: false,
+        run_user: None,
     };
 
     // Host network (no CLONE_NEWNET): package managers need the internet,
@@ -407,6 +408,7 @@ pub fn commit(name: &str, version: &Version, output: Option<&Path>) -> Result<Co
             entrypoint: None,
             base: false,
             provides_abi: None,
+            user: None,
             include: vec![],
             isolation: "ns".into(),
         },

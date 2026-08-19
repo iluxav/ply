@@ -90,15 +90,22 @@ fn main() -> Result<()> {
         })?
         .clone();
 
-    // `so:libfoo.so.5` deps name shared-library PROVIDERS — build the
-    // provider map from the index's `p:` fields so they resolve to packages.
+    // Deps may name PROVIDERS rather than packages: `so:libfoo.so.5`
+    // (shared libs) or plain virtuals like `icu-data`. Build the provider
+    // map from the index's `p:` fields.
     let mut so_providers: BTreeMap<String, String> = BTreeMap::new();
+    let mut virtual_providers: BTreeMap<String, String> = BTreeMap::new();
     for entry in index.values() {
         for provide in &entry.provides {
             if let Some(so) = provide.strip_prefix("so:") {
                 let so_name = so.split('=').next().unwrap_or(so);
                 so_providers
                     .entry(format!("so:{so_name}"))
+                    .or_insert(entry.name.clone());
+            } else if !provide.contains(':') {
+                let name = provide.split('=').next().unwrap_or(provide);
+                virtual_providers
+                    .entry(name.to_string())
                     .or_insert(entry.name.clone());
             }
         }
@@ -112,10 +119,17 @@ fn main() -> Result<()> {
         if !seen.insert(name.clone()) || BASE_PROVIDES.contains(&name.as_str()) {
             continue;
         }
-        let Some(entry) = index.get(&name) else {
+        let Some(entry) = index.get(&name).or_else(|| {
+            // not a real package — maybe a virtual satisfied by a provider
+            virtual_providers.get(&name).and_then(|p| index.get(p))
+        }) else {
             eprintln!("apk2pkg: warning: dependency `{name}` not in index — skipped");
             continue;
         };
+        if seen.contains(&entry.name) && entry.name != name {
+            continue; // provider already vendored under its real name
+        }
+        seen.insert(entry.name.clone());
         wanted.push(entry.clone());
         for dep in &entry.depends {
             // strip version constraints: "zlib>=1.2" → "zlib"
