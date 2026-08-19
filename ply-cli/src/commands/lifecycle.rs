@@ -47,6 +47,27 @@ pub fn rm(args: RmArgs) -> Result<()> {
     Ok(())
 }
 
+pub fn deploy(args: crate::cli::DeployArgs) -> Result<()> {
+    println!("deploying {} …", args.image.display());
+    let report = lifecycle::deploy(&args.image, args.timeout)?;
+    for name in &report.rolled {
+        println!("rolled {name}");
+    }
+    if report.complete {
+        println!(
+            "deploy complete: {} instance(s) of {} on the new image",
+            report.rolled.len(),
+            report.app
+        );
+        Ok(())
+    } else {
+        bail!(
+            "deploy incomplete after timeout — {} instance(s) rolled; check the `ply run` output / `ply ps --json` for what happened",
+            report.rolled.len()
+        );
+    }
+}
+
 pub fn systemd(args: SystemdArgs) -> Result<()> {
     print!("{}", lifecycle::systemd_unit(&args.image)?);
     Ok(())

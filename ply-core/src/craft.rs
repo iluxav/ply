@@ -416,6 +416,7 @@ pub fn commit(name: &str, version: &Version, output: Option<&Path>) -> Result<Co
         volumes: Default::default(),
         resources: None,
         requires: None,
+        health: None,
         restart: None,
         layer: None,
         sources: Default::default(),

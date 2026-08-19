@@ -154,8 +154,10 @@ impl Source {
             }
             _ => {
                 let url = self.url_for(&filename, &image.version);
-                http_get_file(&url, &tmp)
-                    .map_err(|e| Error::Source(format!("download {url} failed: {e}")))?;
+                if let Err(e) = http_get_file(&url, &tmp) {
+                    let _ = std::fs::remove_file(&tmp); // no partial downloads left behind
+                    return Err(Error::Source(format!("download {url} failed: {e}")));
+                }
             }
         }
 

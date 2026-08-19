@@ -38,6 +38,10 @@ pub struct Manifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub restart: Option<Restart>,
 
+    /// Health gate used by rolling deploys (`ply deploy`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health: Option<Health>,
+
     /// Env contributions this package exposes to dependents; embedded into
     /// the built image as `/.layer.toml`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -69,6 +73,22 @@ fn default_backoff() -> String {
 }
 fn default_max_backoff() -> String {
     "30s".into()
+}
+
+/// `[health]` — when is a fresh instance considered good?
+/// With `port`: a TCP connect must succeed within `grace`.
+/// Without: the process merely has to survive `grace`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Health {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+    #[serde(default = "default_grace")]
+    pub grace: String,
+}
+
+fn default_grace() -> String {
+    "10s".into()
 }
 
 /// "500ms" | "2s" | "1m" → Duration.
@@ -277,6 +297,9 @@ impl Manifest {
             }
             parse_duration(&restart.backoff)?;
             parse_duration(&restart.max_backoff)?;
+        }
+        if let Some(health) = &self.health {
+            parse_duration(&health.grace)?;
         }
         if self.package.isolation != "ns" && self.package.isolation != "vm" {
             return Err(Error::Manifest(format!(

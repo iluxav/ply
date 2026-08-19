@@ -54,6 +54,14 @@ pub enum Command {
     #[command(subcommand)]
     Craft(CraftCommand),
 
+    /// Rolling-deploy a new image version to a running app
+    ///
+    /// Writes the deploy pointer, signals the app's run parent (SIGHUP),
+    /// and watches the roll: instances restart one at a time from the new
+    /// image, gated by [health]. A failed gate aborts the roll and reverts
+    /// that slot; untouched instances keep serving the old version.
+    Deploy(DeployArgs),
+
     /// Swap a runtime under an app without rebuilding it
     ///
     /// Fleet security patching as a metadata operation: only the embedded
@@ -286,6 +294,17 @@ pub struct CraftCommitArgs {
     /// Output image path (defaults to the canonical filename in cwd)
     #[arg(short, long, value_name = "FILE")]
     pub output: Option<PathBuf>,
+}
+
+#[derive(Args)]
+pub struct DeployArgs {
+    /// The new image version to roll out
+    #[arg(value_name = "IMAGE")]
+    pub image: PathBuf,
+
+    /// Seconds to wait for the roll before reporting partial progress
+    #[arg(long, default_value_t = 120)]
+    pub timeout: u64,
 }
 
 #[derive(Args)]

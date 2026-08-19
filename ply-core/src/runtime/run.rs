@@ -55,100 +55,46 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
         }
     }
 
-    let manifest = read_manifest(&opts.image)?;
-    let entrypoint = manifest.package.entrypoint.clone().ok_or_else(|| {
-        Error::Runtime(format!(
-            "{} is a library/runtime package (no entrypoint) — only app images run",
-            opts.image.display()
-        ))
-    })?;
-    if manifest.package.isolation == "vm" {
-        return Err(Error::Runtime(
-            "isolation = \"vm\" is not implemented yet — only \"ns\" runs today".into(),
-        ));
-    }
-    let lockfile = read_lockfile(&opts.image)?;
-
-    // Ensure the store has every locked digest; fetch by hash if missing.
     let store = Store::open_default()?;
-    let mut dep_images: Vec<PathBuf> = Vec::new();
-    let mut dep_layers: Vec<Layer> = Vec::new();
-    if let Some(lockfile) = &lockfile {
-        for pkg in &lockfile.packages {
-            let path = match store.image_path(&pkg.sha256) {
-                Some(path) => path,
-                None => {
-                    let source = Source::parse(&pkg.source, opts.allow_insecure)?;
-                    let image =
-                        ImageName::new(&pkg.name, pkg.version.clone(), Os::Linux, Arch::host())?;
-                    eprintln!("ply: fetching {image} ({})", pkg.sha256);
-                    source.fetch(&image, Some(&pkg.sha256), &store)?.1
-                }
-            };
-            if let Some(bytes) = read_embedded(&path, "/.layer.toml")? {
-                dep_layers.push(
-                    toml::from_str(&String::from_utf8_lossy(&bytes)).map_err(|e| {
-                        Error::Runtime(format!("{}: bad /.layer.toml: {e}", pkg.name))
-                    })?,
-                );
-            }
-            dep_images.push(path);
-        }
-    }
-
-    // Host policy: refused runtimes don't run; deprecated ones warn.
-    if let Some(lockfile) = &lockfile {
-        if let Some(policy) = crate::policy::Policy::load_default()? {
-            for finding in policy.check_lockfile(lockfile) {
-                match finding.severity {
-                    crate::policy::Severity::Error => {
-                        return Err(Error::Runtime(format!("host policy: {}", finding.message)))
-                    }
-                    crate::policy::Severity::Warning => {
-                        eprintln!("ply: warning: {}", finding.message)
-                    }
-                }
-            }
-        }
-    }
-
-    // Record the app as installed — the GC root set.
-    let record = crate::apps::AppRecord {
-        name: manifest.package.name.clone(),
-        image: std::path::absolute(&opts.image).unwrap_or_else(|_| opts.image.clone()),
-        digests: lockfile
-            .as_ref()
-            .map(|l| l.packages.iter().map(|p| p.sha256.clone()).collect())
-            .unwrap_or_default(),
-        updated: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0),
-    };
-    record.save()?;
-
-    let layer_refs: Vec<&Layer> = dep_layers.iter().collect();
-    let mut env = compose_env(&layer_refs, &manifest.env, &opts.cli_env);
-    env.entry("HOME".into()).or_insert("/root".into());
-    if let Ok(term) = std::env::var("TERM") {
-        env.entry("TERM".into()).or_insert(term);
-    }
-    let env: Vec<(String, String)> = env.into_iter().collect();
+    let mut ctx = prepare_app(&opts.image, &opts.cli_env, opts.allow_insecure, &store)?;
 
     if !rootless {
         network::ensure_bridge()?;
     }
     let _ = state::reap_stale(); // free IPs/dirs leaked by killed runs
 
-    // Forward SIGTERM/SIGINT to every instance.
+    // Same app already running? That's legal (canary: old + new side by
+    // side) — but say so, and point at deploy for the replace case.
+    let already_running = state::list()?
+        .iter()
+        .filter(|s| s.app == ctx.manifest.package.name && s.alive())
+        .count();
+    if already_running > 0 {
+        eprintln!(
+            "ply: note: {} already has {already_running} running instance(s) — this run ADDS instances (canary).\n\
+             ply:       to replace the running version instead: ply deploy {}",
+            ctx.manifest.package.name,
+            opts.image.display()
+        );
+    }
+
+    // Forward SIGTERM/SIGINT to every instance. SIGHUP is overloaded:
+    // user-sent (ply deploy / kill -HUP) = rolling reload; kernel-sent
+    // (terminal hangup) = stop, like any daemonless foreground process.
     unsafe {
         signal::signal(Signal::SIGTERM, signal::SigHandler::Handler(forward_signal)).ok();
         signal::signal(Signal::SIGINT, signal::SigHandler::Handler(forward_signal)).ok();
+        let hup = signal::SigAction::new(
+            signal::SigHandler::SigAction(hup_dispatch),
+            signal::SaFlags::SA_SIGINFO,
+            nix::sys::signal::SigSet::empty(),
+        );
+        signal::sigaction(Signal::SIGHUP, &hup).ok();
     }
 
     // [restart] policy: the parent respawns instances it started. If the
     // parent itself dies, that's systemd's layer.
-    let restart_policy = manifest.restart.clone();
+    let restart_policy = ctx.manifest.restart.clone();
     let initial_backoff = restart_policy
         .as_ref()
         .map(|r| crate::manifest::parse_duration(&r.backoff))
@@ -171,18 +117,7 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
 
     let mut instances: Vec<Instance> = Vec::new();
     for _ in 0..opts.scale.max(1) {
-        let instance = launch_instance(
-            &manifest,
-            &entrypoint,
-            &env,
-            &opts.image,
-            &dep_images,
-            &opts.links,
-            &store,
-            rootless,
-            None,
-            0,
-        )?;
+        let instance = launch_instance(&ctx, &opts.links, &store, rootless, None, 0)?;
         let sig_idx = register_child(instance.child.as_raw());
         slots.insert(
             instance.n,
@@ -195,6 +130,11 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
         );
         instances.push(instance);
     }
+
+    // Rolling deploy state (SIGHUP): slots still to roll + the previous
+    // context to fall back to if a new instance flunks its health gate.
+    let mut roll_queue: Vec<u32> = Vec::new();
+    let mut old_ctx: Option<AppContext> = None;
 
     // Reap, respawn per policy, exit when nothing is left to wait for.
     let mut exit_code = 0;
@@ -259,7 +199,7 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
             info.restarts += 1;
             eprintln!(
                 "ply: restarting {}.{slot} (restart #{}, policy {})",
-                manifest.package.name,
+                ctx.manifest.package.name,
                 info.restarts,
                 restart_policy
                     .as_ref()
@@ -267,11 +207,7 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                     .unwrap_or("?"),
             );
             match launch_instance(
-                &manifest,
-                &entrypoint,
-                &env,
-                &opts.image,
-                &dep_images,
+                &ctx,
                 &opts.links,
                 &store,
                 rootless,
@@ -288,10 +224,122 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                     // doubled backoff rather than crash-looping the parent.
                     eprintln!(
                         "ply: restart of {}.{slot} failed: {e}",
-                        manifest.package.name
+                        ctx.manifest.package.name
                     );
                     info.backoff = (info.backoff * 2).min(max_backoff);
                     pending.push((slot, std::time::Instant::now() + info.backoff));
+                }
+            }
+        }
+
+        // Deploy requested: consume the pointer file, prepare the new
+        // version while the old one keeps serving.
+        if RELOAD_REQUESTED.swap(false, Ordering::SeqCst) && !shutting_down {
+            let pointer = crate::paths::apps_dir()
+                .join(&ctx.manifest.package.name)
+                .join("next-image");
+            match std::fs::read_to_string(&pointer) {
+                Ok(text) => {
+                    let _ = std::fs::remove_file(&pointer); // consumed either way
+                    let new_image = PathBuf::from(text.trim());
+                    eprintln!("ply: deploy -> {}", new_image.display());
+                    match prepare_app(&new_image, &opts.cli_env, opts.allow_insecure, &store) {
+                        Ok(new_ctx) => {
+                            let mut queue: Vec<u32> = instances.iter().map(|i| i.n).collect();
+                            queue.sort_unstable();
+                            roll_queue = queue;
+                            old_ctx = Some(std::mem::replace(&mut ctx, new_ctx));
+                        }
+                        Err(e) => {
+                            eprintln!("ply: deploy aborted — new image unusable: {e}");
+                        }
+                    }
+                }
+                Err(_) => eprintln!(
+                    "ply: SIGHUP received but no deploy pointer at {} — ignoring",
+                    pointer.display()
+                ),
+            }
+        }
+
+        // One roll step per iteration: stop old instance, start new, gate.
+        if !roll_queue.is_empty() && !shutting_down {
+            let slot = roll_queue.remove(0);
+            if let Some(pos) = instances.iter().position(|i| i.n == slot) {
+                let old_instance = instances.remove(pos);
+                if let Some(info) = slots.get(&slot) {
+                    update_child(info.sig_idx, 0);
+                }
+                stop_instance(old_instance);
+
+                let restarts = slots.get(&slot).map(|s| s.restarts).unwrap_or(0);
+                let outcome =
+                    launch_instance(&ctx, &opts.links, &store, rootless, Some(slot), restarts)
+                        .and_then(|instance| {
+                            if wait_healthy(&ctx, &instance) {
+                                Ok(instance)
+                            } else {
+                                let app = instance.app.clone();
+                                stop_instance(instance);
+                                Err(Error::Runtime(format!(
+                                    "{app}.{slot} failed its health gate"
+                                )))
+                            }
+                        });
+                match outcome {
+                    Ok(instance) => {
+                        if let Some(info) = slots.get_mut(&slot) {
+                            update_child(info.sig_idx, instance.child.as_raw());
+                            info.started = std::time::Instant::now();
+                        }
+                        eprintln!(
+                            "ply: {}.{slot} now on {}",
+                            ctx.manifest.package.name,
+                            ctx.image.display()
+                        );
+                        instances.push(instance);
+                        if roll_queue.is_empty() {
+                            old_ctx = None;
+                            eprintln!(
+                                "ply: deploy complete — all instances on {}",
+                                ctx.image.display()
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("ply: deploy aborted: {e}");
+                        roll_queue.clear();
+                        if let Some(prev) = old_ctx.take() {
+                            ctx = prev; // untouched + reverted slots stay on the old version
+                        }
+                        eprintln!(
+                            "ply: reverting {}.{slot} to {}",
+                            ctx.manifest.package.name,
+                            ctx.image.display()
+                        );
+                        match launch_instance(
+                            &ctx,
+                            &opts.links,
+                            &store,
+                            rootless,
+                            Some(slot),
+                            restarts,
+                        ) {
+                            Ok(instance) => {
+                                if let Some(info) = slots.get_mut(&slot) {
+                                    update_child(info.sig_idx, instance.child.as_raw());
+                                    info.started = std::time::Instant::now();
+                                }
+                                instances.push(instance);
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "ply: revert launch failed ({e}) — retrying via restart path"
+                                );
+                                pending.push((slot, std::time::Instant::now() + initial_backoff));
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -303,6 +351,201 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
     }
     drop(instances); // unmount, remove state + hosts entries
     Ok(exit_code)
+}
+
+/// Deliberate stop: TERM, up to 10s to comply, then KILL. Reaps the child so
+/// its death never reaches the policy loop.
+fn stop_instance(instance: Instance) {
+    use nix::sys::wait::WaitPidFlag;
+    let child = instance.child;
+    let _ = signal::kill(child, Signal::SIGTERM);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while let Ok(WaitStatus::StillAlive) = waitpid(child, Some(WaitPidFlag::WNOHANG)) {
+        if std::time::Instant::now() >= deadline {
+            let _ = signal::kill(child, Signal::SIGKILL);
+            let _ = waitpid(child, None);
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    drop(instance); // unmount, remove state + hosts
+}
+
+/// The deploy health gate. With [health] port: TCP connect within grace.
+/// Without: the process just has to be alive after a short settle.
+fn wait_healthy(ctx: &AppContext, instance: &Instance) -> bool {
+    let (port, grace) = match &ctx.manifest.health {
+        Some(health) => (
+            health.port,
+            crate::manifest::parse_duration(&health.grace)
+                .unwrap_or(std::time::Duration::from_secs(10)),
+        ),
+        None => (None, std::time::Duration::from_secs(1)),
+    };
+    let ip = InstanceState::path(&instance.app, instance.n)
+        .exists()
+        .then(|| std::fs::read_to_string(InstanceState::path(&instance.app, instance.n)).ok())
+        .flatten()
+        .and_then(|text| serde_json::from_str::<InstanceState>(&text).ok())
+        .map(|s| s.ip);
+
+    let deadline = std::time::Instant::now() + grace;
+    let mut last_err: Option<std::io::Error> = None;
+    loop {
+        let alive = unsafe { nix::libc::kill(instance.child.as_raw(), 0) == 0 };
+        if !alive {
+            eprintln!(
+                "ply: health gate: {}.{} died during grace",
+                instance.app, instance.n
+            );
+            return false;
+        }
+        if let (Some(port), Some(ip)) = (port, ip) {
+            let addr = std::net::SocketAddr::from((ip, port));
+            match std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300))
+            {
+                Ok(_) => return true,
+                Err(e) => last_err = Some(e),
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            if let Some(port) = port {
+                eprintln!(
+                    "ply: health gate: no answer on {}:{port} within {grace:?} — last error: {}",
+                    ip.map(|i| i.to_string())
+                        .unwrap_or_else(|| "<no ip in state!>".into()),
+                    last_err
+                        .map(|e| e.to_string())
+                        .unwrap_or_else(|| "none".into()),
+                );
+                return false;
+            }
+            return true; // no port to probe: surviving the grace window is the bar
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+}
+
+static RELOAD_REQUESTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// SIGHUP with SA_SIGINFO: si_code tells apart a process-sent signal
+/// (SI_USER/SI_QUEUE, <= 0 — a deploy) from a kernel-generated hangup
+/// (terminal closed — treat exactly like SIGTERM).
+extern "C" fn hup_dispatch(
+    sig: i32,
+    info: *mut nix::libc::siginfo_t,
+    _ctx: *mut nix::libc::c_void,
+) {
+    let user_sent = unsafe { !info.is_null() && (*info).si_code <= 0 };
+    if user_sent {
+        RELOAD_REQUESTED.store(true, Ordering::SeqCst);
+    } else {
+        forward_signal(sig); // sets SHUTTING_DOWN + forwards (as SIGTERM-ish)
+    }
+}
+
+/// Everything needed to launch instances of one app version. Rebuilt from a
+/// new image on deploy (SIGHUP) — respawns then use the new context.
+pub struct AppContext {
+    pub manifest: Manifest,
+    pub entrypoint: Vec<String>,
+    pub env: Vec<(String, String)>,
+    pub image: PathBuf,
+    pub dep_images: Vec<PathBuf>,
+}
+
+/// The pre-launch phase: read manifest + lockfile, fetch missing store
+/// digests, enforce host policy, compose env, record the app (GC roots).
+fn prepare_app(
+    image: &Path,
+    cli_env: &[(String, String)],
+    allow_insecure: bool,
+    store: &Store,
+) -> Result<AppContext> {
+    let manifest = read_manifest(image)?;
+    let entrypoint = manifest.package.entrypoint.clone().ok_or_else(|| {
+        Error::Runtime(format!(
+            "{} is a library/runtime package (no entrypoint) — only app images run",
+            image.display()
+        ))
+    })?;
+    if manifest.package.isolation == "vm" {
+        return Err(Error::Runtime(
+            "isolation = \"vm\" is not implemented yet — only \"ns\" runs today".into(),
+        ));
+    }
+    let lockfile = read_lockfile(image)?;
+
+    let mut dep_images: Vec<PathBuf> = Vec::new();
+    let mut dep_layers: Vec<Layer> = Vec::new();
+    if let Some(lockfile) = &lockfile {
+        for pkg in &lockfile.packages {
+            let path = match store.image_path(&pkg.sha256) {
+                Some(path) => path,
+                None => {
+                    let source = Source::parse(&pkg.source, allow_insecure)?;
+                    let img =
+                        ImageName::new(&pkg.name, pkg.version.clone(), Os::Linux, Arch::host())?;
+                    eprintln!("ply: fetching {img} ({})", pkg.sha256);
+                    source.fetch(&img, Some(&pkg.sha256), store)?.1
+                }
+            };
+            if let Some(bytes) = read_embedded(&path, "/.layer.toml")? {
+                dep_layers.push(
+                    toml::from_str(&String::from_utf8_lossy(&bytes)).map_err(|e| {
+                        Error::Runtime(format!("{}: bad /.layer.toml: {e}", pkg.name))
+                    })?,
+                );
+            }
+            dep_images.push(path);
+        }
+    }
+
+    // Host policy: refused runtimes don't run; deprecated ones warn.
+    if let Some(lockfile) = &lockfile {
+        if let Some(policy) = crate::policy::Policy::load_default()? {
+            for finding in policy.check_lockfile(lockfile) {
+                match finding.severity {
+                    crate::policy::Severity::Error => {
+                        return Err(Error::Runtime(format!("host policy: {}", finding.message)))
+                    }
+                    crate::policy::Severity::Warning => {
+                        eprintln!("ply: warning: {}", finding.message)
+                    }
+                }
+            }
+        }
+    }
+
+    // Record the app as installed — the GC root set.
+    let record = crate::apps::AppRecord {
+        name: manifest.package.name.clone(),
+        image: std::path::absolute(image).unwrap_or_else(|_| image.to_path_buf()),
+        digests: lockfile
+            .as_ref()
+            .map(|l| l.packages.iter().map(|p| p.sha256.clone()).collect())
+            .unwrap_or_default(),
+        updated: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+    };
+    record.save()?;
+
+    let layer_refs: Vec<&Layer> = dep_layers.iter().collect();
+    let mut env = compose_env(&layer_refs, &manifest.env, cli_env);
+    env.entry("HOME".into()).or_insert("/root".into());
+    if let Ok(term) = std::env::var("TERM") {
+        env.entry("TERM".into()).or_insert(term);
+    }
+
+    Ok(AppContext {
+        entrypoint,
+        env: env.into_iter().collect(),
+        image: image.to_path_buf(),
+        dep_images,
+        manifest,
+    })
 }
 
 struct Instance {
@@ -321,19 +564,19 @@ impl Drop for Instance {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn launch_instance(
-    manifest: &Manifest,
-    entrypoint: &[String],
-    env: &[(String, String)],
-    app_image: &Path,
-    dep_images: &[PathBuf],
+    ctx: &AppContext,
     links: &[(PathBuf, String)],
     store: &Store,
     rootless: bool,
     slot: Option<u32>,
     restarts: u32,
 ) -> Result<Instance> {
+    let manifest = &ctx.manifest;
+    let entrypoint = &ctx.entrypoint;
+    let env = &ctx.env;
+    let app_image = &ctx.image;
+    let dep_images = &ctx.dep_images;
     let app = &manifest.package.name;
     let (instance_dir, n) = allocate_instance(app, slot)?;
 

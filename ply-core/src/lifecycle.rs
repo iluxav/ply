@@ -138,6 +138,120 @@ pub fn rm(app: &str, volumes: bool) -> Result<RmReport> {
     })
 }
 
+/// `ply deploy` — rolling deploy via the run parent: validate the new image,
+/// write the pointer file, SIGHUP the parents, watch the roll through state
+/// files. On any failure before the signal, the pointer is cleaned up.
+pub struct DeployReport {
+    pub app: String,
+    pub parents: usize,
+    pub rolled: Vec<String>,
+    pub complete: bool,
+}
+
+pub fn deploy(image: &Path, timeout_secs: u64) -> Result<DeployReport> {
+    // Validate before touching anything on disk.
+    let manifest = read_manifest(image)?;
+    if manifest.package.entrypoint.is_none() {
+        return Err(Error::Build(format!(
+            "{}: not an app image (no entrypoint)",
+            image.display()
+        )));
+    }
+    let app = manifest.package.name.clone();
+    if let (Some(policy), Ok(Some(lock))) = (Policy::load_default()?, read_lockfile(image)) {
+        for finding in policy.check_lockfile(&lock) {
+            if matches!(finding.severity, crate::policy::Severity::Error) {
+                return Err(Error::Runtime(format!("host policy: {}", finding.message)));
+            }
+        }
+    }
+
+    // Find the app's run parents.
+    let mut parents: BTreeSet<i32> = BTreeSet::new();
+    for instance in state::list()? {
+        if instance.app == app && instance.alive() {
+            if let Some(ppid) = parent_pid(instance.pid) {
+                if ppid > 1 {
+                    parents.insert(ppid);
+                }
+            }
+        }
+    }
+    if parents.is_empty() {
+        return Err(Error::Runtime(format!(
+            "no running instances of `{app}` — nothing to roll (just `ply run {}`)",
+            image.display()
+        )));
+    }
+
+    // Pointer file + signal. Clean the pointer up if signalling fails.
+    let image_abs = std::path::absolute(image).map_err(|source| Error::Io {
+        path: image.to_path_buf(),
+        source,
+    })?;
+    let dir = crate::paths::apps_dir().join(&app);
+    std::fs::create_dir_all(&dir).map_err(|source| Error::Io {
+        path: dir.clone(),
+        source,
+    })?;
+    let pointer = dir.join("next-image");
+    std::fs::write(&pointer, format!("{}\n", image_abs.display())).map_err(|source| Error::Io {
+        path: pointer.clone(),
+        source,
+    })?;
+    for ppid in &parents {
+        let rc = unsafe { nix::libc::kill(*ppid, nix::libc::SIGHUP) };
+        if rc != 0 {
+            let _ = std::fs::remove_file(&pointer); // leave no stale pointer
+            return Err(Error::Runtime(format!(
+                "cannot signal run parent (pid {ppid}) — deploy must run as the same user that runs the app"
+            )));
+        }
+    }
+
+    // Watch the roll: done when every slot that was live at the start runs
+    // the new image (a mid-roll slot is briefly absent from state — counting
+    // only visible instances would declare victory early).
+    let expected: usize = state::list()?
+        .iter()
+        .filter(|s| s.app == app && s.alive())
+        .count();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+    let want = image_abs.display().to_string();
+    let mut rolled: BTreeSet<String> = BTreeSet::new();
+    loop {
+        let mut all = true;
+        for instance in state::list()? {
+            if instance.app != app || !instance.alive() {
+                continue;
+            }
+            let name = format!("{}.{}", instance.app, instance.n);
+            if instance.image == want {
+                rolled.insert(name);
+            } else {
+                all = false;
+            }
+        }
+        if all && rolled.len() >= expected {
+            return Ok(DeployReport {
+                app,
+                parents: parents.len(),
+                rolled: rolled.into_iter().collect(),
+                complete: true,
+            });
+        }
+        if std::time::Instant::now() >= deadline {
+            return Ok(DeployReport {
+                app,
+                parents: parents.len(),
+                rolled: rolled.into_iter().collect(),
+                complete: false,
+            });
+        }
+        std::thread::sleep(std::time::Duration::from_millis(300));
+    }
+}
+
 /// Parent pid from /proc/<pid>/stat (field 4, after the comm parens).
 fn parent_pid(pid: i32) -> Option<i32> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;

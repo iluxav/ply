@@ -80,6 +80,17 @@ fn setup_and_exec(spec: &ContainerSpec) -> Result<isize> {
     for file in ["hosts", "resolv.conf"] {
         let _ = std::fs::copy(format!("/etc/{file}"), root.join("etc").join(file));
     }
+    // The container's own hostname MUST resolve locally: anything calling
+    // getfqdn()/gethostbyname(hostname) otherwise stalls ~5s in DNS
+    // (python's http.server does this at bind).
+    if let Ok(mut hosts) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(root.join("etc/hosts"))
+    {
+        use std::io::Write;
+        let _ = writeln!(hosts, "127.0.0.1\t{}", spec.hostname);
+    }
 
     // Volumes + dev links: bind host dirs over declared paths, pre-pivot
     // while host paths are still reachable in our private mount table.
@@ -175,11 +186,62 @@ fn setup_and_exec(spec: &ContainerSpec) -> Result<isize> {
         crate::runtime::security::apply_seccomp()?;
     }
 
-    let e = nix::unistd::execve(&program, &argv, &env).unwrap_err();
-    Err(crate::Error::Runtime(format!(
-        "exec {:?} (resolved to {resolved}): {e} — not on the image's PATH, or its interpreter/libc is missing from the layers",
-        spec.argv
-    )))
+    // Mini-init: PID 1 in a pid namespace silently drops default-action
+    // signals, so a handler-less app (python, shell scripts) would ignore
+    // SIGTERM. Instead ply stays as a tiny PID 1 that forwards signals,
+    // reaps zombies, and exits with the app's code — the app runs as PID 2
+    // with completely normal signal semantics.
+    match unsafe { nix::unistd::fork() } {
+        Ok(nix::unistd::ForkResult::Child) => {
+            let e = nix::unistd::execve(&program, &argv, &env).unwrap_err();
+            eprintln!(
+                "ply: exec {:?} (resolved to {resolved}): {e} — not on the image's PATH, or its interpreter/libc is missing from the layers",
+                spec.argv
+            );
+            std::process::exit(127);
+        }
+        Ok(nix::unistd::ForkResult::Parent { child }) => Ok(init_loop(child)),
+        Err(e) => Err(crate::Error::Runtime(format!("init fork: {e}"))),
+    }
+}
+
+/// The in-container init: forward TERM/INT/HUP/USR1/USR2/QUIT to the app,
+/// reap orphans, exit with the app's status.
+fn init_loop(app: nix::unistd::Pid) -> isize {
+    use nix::sys::signal::{SigHandler, Signal};
+    use nix::sys::wait::{waitpid, WaitStatus};
+
+    APP_PID.store(app.as_raw(), std::sync::atomic::Ordering::SeqCst);
+    unsafe {
+        for sig in [
+            Signal::SIGTERM,
+            Signal::SIGINT,
+            Signal::SIGHUP,
+            Signal::SIGQUIT,
+            Signal::SIGUSR1,
+            Signal::SIGUSR2,
+        ] {
+            let _ = nix::sys::signal::signal(sig, SigHandler::Handler(init_forward));
+        }
+    }
+    loop {
+        match waitpid(nix::unistd::Pid::from_raw(-1), None) {
+            Ok(WaitStatus::Exited(pid, code)) if pid == app => return code as isize,
+            Ok(WaitStatus::Signaled(pid, sig, _)) if pid == app => return 128 + sig as isize,
+            Ok(_) => continue,                         // reaped an orphan
+            Err(nix::errno::Errno::EINTR) => continue, // signal forwarded
+            Err(_) => return 0,
+        }
+    }
+}
+
+static APP_PID: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
+extern "C" fn init_forward(sig: i32) {
+    let pid = APP_PID.load(std::sync::atomic::Ordering::SeqCst);
+    if pid > 0 {
+        unsafe { nix::libc::kill(pid, sig) };
+    }
 }
 
 /// PATH lookup inside the container filesystem (post-pivot). Paths with `/`

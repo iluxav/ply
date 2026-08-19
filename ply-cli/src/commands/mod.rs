@@ -26,6 +26,7 @@ pub fn dispatch(command: Command) -> Result<()> {
         Command::Import(args) => images::import(args),
         Command::Bundle(args) => images::bundle(args),
         Command::Craft(command) => craft::dispatch(command),
+        Command::Deploy(args) => lifecycle::deploy(args),
         Command::Rebase(args) => images::rebase(args),
         Command::Systemd(args) => lifecycle::systemd(args),
         Command::Proxy(args) => lb::proxy(args),

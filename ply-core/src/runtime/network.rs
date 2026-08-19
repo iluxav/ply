@@ -110,5 +110,12 @@ pub fn setup_instance(pid: i32, ip: Ipv4Addr) -> Result<()> {
     ns(&["addr", "add", &format!("{ip}/16"), "dev", "eth0"])?;
     ns(&["link", "set", "eth0", "up"])?;
     ns(&["route", "add", "default", "via", &GATEWAY.to_string()])?;
+
+    // A respawn reuses a freed IP behind a NEW veth MAC. The host's stale
+    // neighbor entry would blackhole traffic (health gates, LBs) until ARP
+    // expires — drop it now.
+    let _ = Command::new("ip")
+        .args(["neigh", "del", &ip.to_string(), "dev", BRIDGE])
+        .output();
     Ok(())
 }
