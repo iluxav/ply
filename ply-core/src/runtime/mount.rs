@@ -44,11 +44,16 @@ pub fn mount_overlay(lower: &[&Path], upper: &Path, work: &Path, target: &Path) 
 }
 
 pub fn mount_tmpfs(target: &Path, options: &str) -> Result<()> {
+    mount_tmpfs_flags(target, options, MsFlags::empty())
+}
+
+/// Scratch tmpfs: always nosuid; callers add noexec/nodev where appropriate.
+pub fn mount_tmpfs_flags(target: &Path, options: &str, extra: MsFlags) -> Result<()> {
     mount(
         Some("tmpfs"),
         target,
         Some("tmpfs"),
-        MsFlags::MS_NOSUID,
+        MsFlags::MS_NOSUID | extra,
         Some(options),
     )
     .map_err(|e| merr("tmpfs", target, e))

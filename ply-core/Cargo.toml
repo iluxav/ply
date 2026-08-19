@@ -18,6 +18,8 @@ walkdir.workspace = true
 serde_json.workspace = true
 ureq.workspace = true
 nix.workspace = true
+caps.workspace = true
+seccompiler.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

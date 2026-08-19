@@ -22,10 +22,23 @@ pub struct ContainerSpec {
     /// Composed environment, KEY=VALUE.
     pub env: Vec<(String, String)>,
     pub argv: Vec<String>,
+    /// Read end of the parent's sync pipe: proceed on 1 byte (parent placed
+    /// us in the cgroup), abort on EOF (parent failed).
+    pub sync_rx: std::os::fd::OwnedFd,
+    /// Keep CAP_NET_BIND_SERVICE (a declared port is < 1024).
+    pub keep_net_bind: bool,
 }
 
 /// Child entry point. Never returns on success (execve).
 pub fn child_main(spec: &ContainerSpec) -> isize {
+    let mut byte = [0u8; 1];
+    match nix::unistd::read(&spec.sync_rx, &mut byte) {
+        Ok(1) => {}
+        _ => {
+            // parent died or failed before releasing us
+            return 125;
+        }
+    }
     match setup_and_exec(spec) {
         Ok(never) => never,
         Err(e) => {
@@ -60,7 +73,12 @@ fn setup_and_exec(spec: &ContainerSpec) -> Result<isize> {
 
     mount::mount_proc(Path::new("/proc"))?;
     setup_dev()?;
-    mount::mount_tmpfs(Path::new("/tmp"), "mode=1777")?;
+    mount::mount_tmpfs_flags(
+        Path::new("/tmp"),
+        "mode=1777",
+        nix::mount::MsFlags::MS_NOEXEC | nix::mount::MsFlags::MS_NODEV,
+    )?;
+    crate::runtime::security::mask_proc()?;
 
     nix::unistd::sethostname(&spec.hostname)
         .map_err(|e| crate::Error::Runtime(format!("sethostname: {e}")))?;
@@ -89,6 +107,12 @@ fn setup_and_exec(spec: &ContainerSpec) -> Result<isize> {
         .unwrap_or("");
     let resolved = resolve_program(&spec.argv[0], composed_path);
     let program = CString::new(resolved.as_str()).unwrap();
+
+    // Rights stripping LAST — everything above needed privilege.
+    crate::runtime::security::drop_capabilities(spec.keep_net_bind)?;
+    crate::runtime::security::no_new_privs()?;
+    crate::runtime::security::apply_seccomp()?;
+
     let e = nix::unistd::execve(&program, &argv, &env).unwrap_err();
     Err(crate::Error::Runtime(format!(
         "exec {:?} (resolved to {resolved}): {e} — not on the image's PATH, or its interpreter/libc is missing from the layers",
@@ -149,6 +173,10 @@ fn setup_dev() -> Result<()> {
     std::fs::create_dir_all(dev.join("pts")).ok();
     std::fs::create_dir_all(dev.join("shm")).ok();
     mount::mount_devpts(&dev.join("pts"))?;
-    mount::mount_tmpfs(&dev.join("shm"), "mode=1777")?;
+    mount::mount_tmpfs_flags(
+        &dev.join("shm"),
+        "mode=1777",
+        nix::mount::MsFlags::MS_NOEXEC | nix::mount::MsFlags::MS_NODEV,
+    )?;
     Ok(())
 }

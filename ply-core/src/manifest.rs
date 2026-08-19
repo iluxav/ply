@@ -76,6 +76,18 @@ pub struct Package {
     /// ONLY these ship — like npm's "files" field. Absent = pack everything.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub include: Vec<String>,
+    /// Isolation seam: "ns" (namespaces, default) or "vm" (microVM, future).
+    /// The same composed rootfs enters via pivot_root or virtio-fs.
+    #[serde(default = "default_isolation", skip_serializing_if = "is_ns")]
+    pub isolation: String,
+}
+
+fn default_isolation() -> String {
+    "ns".into()
+}
+
+fn is_ns(s: &String) -> bool {
+    s == "ns"
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -209,6 +221,12 @@ impl Manifest {
         for (alias, dep) in &self.dependencies {
             validate_package_name(alias)?;
             validate_package_name(&dep.spec(alias).package)?;
+        }
+        if self.package.isolation != "ns" && self.package.isolation != "vm" {
+            return Err(Error::Manifest(format!(
+                "package.isolation must be \"ns\" or \"vm\", got `{}`",
+                self.package.isolation
+            )));
         }
         for entry in &self.package.include {
             let trimmed = entry.trim_end_matches('/');

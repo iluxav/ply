@@ -41,6 +41,11 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
             opts.image.display()
         ))
     })?;
+    if manifest.package.isolation == "vm" {
+        return Err(Error::Runtime(
+            "isolation = \"vm\" is not implemented yet — only \"ns\" runs today".into(),
+        ));
+    }
     let lockfile = read_lockfile(&opts.image)?;
 
     // Ensure the store has every locked digest; fetch by hash if missing.
@@ -98,6 +103,11 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
         env.entry("TERM".into()).or_insert(term);
     }
 
+    // Sync pipe: the child waits to be placed into its cgroup before setup.
+    let (sync_rx, sync_tx) =
+        nix::unistd::pipe().map_err(|e| Error::Runtime(format!("pipe: {e}")))?;
+
+    let keep_net_bind = manifest.ports.values().any(|p| *p < 1024);
     let spec = ContainerSpec {
         layers,
         instance_dir: instance.clone(),
@@ -105,6 +115,8 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
         cwd: PathBuf::from(format!("/opt/{}", manifest.package.name)),
         env: env.into_iter().collect(),
         argv: entrypoint,
+        sync_rx,
+        keep_net_bind,
     };
 
     // clone(2) into fresh namespaces; the child becomes PID 1 in its pidns.
@@ -122,6 +134,32 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
         )
     }
     .map_err(|e| Error::Runtime(format!("clone: {e}")))?;
+
+    // cgroup v2 limits; the child stays parked on the pipe until this holds.
+    let instance_name = instance
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let cgroup =
+        crate::runtime::cgroup::Cgroup::create(&instance_name, manifest.resources.as_ref())
+            .and_then(|cg| {
+                cg.add_pid(child.as_raw())?;
+                Ok(cg)
+            });
+    let _cgroup = match cgroup {
+        Ok(cg) => {
+            // release the child: one byte, then close our write end
+            let _ = nix::unistd::write(&sync_tx, &[1u8]);
+            drop(sync_tx);
+            Some(cg)
+        }
+        Err(e) => {
+            drop(sync_tx); // EOF → child aborts
+            let _ = nix::sys::signal::kill(child, Signal::SIGKILL);
+            let _ = waitpid(child, None);
+            return Err(e);
+        }
+    };
 
     // Forward SIGTERM/SIGINT to the container.
     CHILD_PID.store(child.as_raw(), Ordering::SeqCst);
