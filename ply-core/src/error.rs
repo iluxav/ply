@@ -29,6 +29,9 @@ pub enum Error {
     #[error("resolve error: {0}")]
     Resolve(String),
 
+    #[error("runtime error: {0}")]
+    Runtime(String),
+
     #[error("not implemented yet: {0}")]
     Unimplemented(&'static str),
 }

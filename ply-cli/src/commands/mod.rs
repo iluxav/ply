@@ -2,6 +2,7 @@
 // Unimplemented commands fall through to `todo`.
 
 mod build;
+mod run;
 
 use anyhow::{bail, Result};
 
@@ -10,7 +11,7 @@ use crate::cli::Command;
 pub fn dispatch(command: Command) -> Result<()> {
     match command {
         Command::Build(args) => build::run(args),
-        Command::Run(_) => todo("run", "Phase 2"),
+        Command::Run(args) => run::exec(args),
         Command::Exec(_) => todo("exec", "Phase 6"),
         Command::Ps(_) => todo("ps", "Phase 5"),
         Command::Check(_) => todo("check", "Phase 7"),

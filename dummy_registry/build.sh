@@ -40,6 +40,25 @@ fetch "https://unofficial-builds.nodejs.org/download/release/v$NODE_VERSION/node
 
 rm -rf "$WORK/node"; mkdir -p "$WORK/node"
 tar -xJf "$NODE_TAR" -C "$WORK/node" --strip-components=1
+
+# node's musl build links libstdc++/libgcc, which the minirootfs base lacks —
+# vendor them into the keg from alpine's own apks (an apk is just a tar.gz).
+APK_REPO="https://dl-cdn.alpinelinux.org/alpine/$ALPINE_MINOR/main/x86_64"
+fetch "$APK_REPO/APKINDEX.tar.gz" "$CACHE/APKINDEX.tar.gz"
+apk_version() { # package-name → version from APKINDEX
+    tar -xzOf "$CACHE/APKINDEX.tar.gz" APKINDEX 2>/dev/null | \
+        awk -v pkg="$1" '$0=="P:"pkg {found=1} found && /^V:/ {print substr($0,3); exit}'
+}
+for lib in libstdc++ libgcc; do
+    ver=$(apk_version "$lib")
+    [ -n "$ver" ] || { echo "cannot find $lib in APKINDEX"; exit 1; }
+    fetch "$APK_REPO/$lib-$ver.apk" "$CACHE/$lib-$ver.apk"
+    tar -xzf "$CACHE/$lib-$ver.apk" -C "$WORK/node" --warning=no-unknown-keyword usr/lib 2>/dev/null || true
+done
+mkdir -p "$WORK/node/lib"
+mv "$WORK/node/usr/lib/"*.so* "$WORK/node/lib/"
+rm -rf "$WORK/node/usr"
+
 cat > "$WORK/node/ply.toml" <<EOF
 [package]
 name = "node"
@@ -48,6 +67,7 @@ provides_abi = "linux-x64-musl"
 
 [layer]
 path = ["/opt/node-$NODE_VERSION/bin"]
+ld_library_path = ["/opt/node-$NODE_VERSION/lib"]
 
 [dependencies]
 alpine = "3.20"

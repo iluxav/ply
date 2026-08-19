@@ -10,6 +10,7 @@ pub mod image;
 pub mod lockfile;
 pub mod manifest;
 pub mod resolve;
+pub mod runtime;
 pub mod source;
 pub mod store;
 
