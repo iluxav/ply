@@ -1,0 +1,25 @@
+[workspace]
+resolver = "2"
+members = ["ply-core", "ply-cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/iluxa/ply"
+
+[workspace.dependencies]
+ply-core = { path = "ply-core" }
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+sha2 = "0.10"
+hex = "0.4"
+clap = { version = "4", features = ["derive", "wrap_help"] }
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+panic = "abort"
