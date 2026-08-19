@@ -4,9 +4,6 @@ use ply_core::runtime::run::{parse_env_file, run, RunOptions};
 use crate::cli::RunArgs;
 
 pub fn exec(args: RunArgs) -> Result<()> {
-    if args.scale != 1 {
-        bail!("--scale is not implemented yet (planned: Phase 5 — see TASKS.md)");
-    }
     if !args.link.is_empty() {
         bail!("--link is not implemented yet (planned: Phase 6 — see TASKS.md)");
     }
@@ -26,6 +23,7 @@ pub fn exec(args: RunArgs) -> Result<()> {
         image: args.image,
         cli_env,
         allow_insecure: true, // lockfile digests pin content; run never resolves
+        scale: args.scale,
     })?;
     std::process::exit(code);
 }

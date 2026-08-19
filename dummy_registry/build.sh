@@ -74,6 +74,26 @@ alpine = "3.20"
 EOF
 "$PLY" build "$WORK/node" -o "$REGISTRY/node-$NODE_VERSION-linux-x64.img"
 
+# ---- caddy (proxy-as-a-package: static Go binary, keg + layer) ----
+CADDY_VERSION=2.10.0
+CADDY_TAR=$CACHE/caddy_${CADDY_VERSION}_linux_amd64.tar.gz
+fetch "https://github.com/caddyserver/caddy/releases/download/v$CADDY_VERSION/caddy_${CADDY_VERSION}_linux_amd64.tar.gz" "$CADDY_TAR"
+
+rm -rf "$WORK/caddy"; mkdir -p "$WORK/caddy/bin"
+tar -xzf "$CADDY_TAR" -C "$WORK/caddy/bin" caddy
+cat > "$WORK/caddy/ply.toml" <<EOF
+[package]
+name = "caddy"
+version = "$CADDY_VERSION"
+
+[layer]
+path = ["/opt/caddy-$CADDY_VERSION/bin"]
+
+[dependencies]
+alpine = "3.20"
+EOF
+"$PLY" build "$WORK/caddy" -o "$REGISTRY/caddy-$CADDY_VERSION-linux-x64.img"
+
 # ---- index.json (version listing for dumb http hosts) ----
 (cd "$REGISTRY" && ls *.img | python3 -c 'import json,sys; print(json.dumps([l.strip() for l in sys.stdin]))') > "$REGISTRY/index.json"
 

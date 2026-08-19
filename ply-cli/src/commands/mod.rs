@@ -2,6 +2,8 @@
 // Unimplemented commands fall through to `todo`.
 
 mod build;
+mod lb;
+mod ps;
 mod run;
 
 use anyhow::{bail, Result};
@@ -13,13 +15,13 @@ pub fn dispatch(command: Command) -> Result<()> {
         Command::Build(args) => build::run(args),
         Command::Run(args) => run::exec(args),
         Command::Exec(_) => todo("exec", "Phase 6"),
-        Command::Ps(_) => todo("ps", "Phase 5"),
+        Command::Ps(args) => ps::exec(args),
         Command::Check(_) => todo("check", "Phase 7"),
         Command::Import(_) => todo("import", "Phase 8"),
         Command::Bundle(_) => todo("bundle", "Phase 8"),
         Command::Systemd(_) => todo("systemd", "Phase 7"),
-        Command::Proxy(_) => todo("proxy", "Phase 5"),
-        Command::Lb(_) => todo("lb", "Phase 5"),
+        Command::Proxy(args) => lb::proxy(args),
+        Command::Lb(args) => lb::exec(args),
         Command::Gc(_) => todo("gc", "Phase 7"),
         Command::Rm(_) => todo("rm", "Phase 7"),
         Command::Audit(_) => todo("audit", "Phase 7"),

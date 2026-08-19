@@ -61,8 +61,15 @@ fn setup_and_exec(spec: &ContainerSpec) -> Result<isize> {
     )?;
 
     // Skeleton dirs land in the upperdir when a thin image lacks them.
-    for dir in ["proc", "dev", "tmp", ".pivot"] {
+    for dir in ["proc", "dev", "tmp", "etc", ".pivot"] {
         let _ = std::fs::create_dir(root.join(dir));
+    }
+
+    // Containers see the host's name database: `<app>.ply` entries ply
+    // manages plus the host's DNS config. Written to the upperdir, so the
+    // image layers stay untouched.
+    for file in ["hosts", "resolv.conf"] {
+        let _ = std::fs::copy(format!("/etc/{file}"), root.join("etc").join(file));
     }
 
     nix::unistd::pivot_root(&root, &root.join(".pivot"))

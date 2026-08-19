@@ -508,6 +508,7 @@ dependencies = [
  "anyhow",
  "clap",
  "ply-core",
+ "serde_json",
 ]
 
 [[package]]
