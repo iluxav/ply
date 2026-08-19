@@ -40,3 +40,26 @@ pub fn apps_dir() -> PathBuf {
 pub fn craft_dir() -> PathBuf {
     data_dir().join("craft")
 }
+
+/// remove_dir_all that survives mode-000 directories (overlayfs creates its
+/// `work/work` dir unreadable; without CAP_DAC_OVERRIDE a plain removal
+/// fails). Heals permissions on the way down, then removes.
+pub fn force_remove_dir_all(path: &std::path::Path) -> std::io::Result<()> {
+    if std::fs::remove_dir_all(path).is_ok() {
+        return Ok(());
+    }
+    fn heal(dir: &std::path::Path) {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.filter_map(|e| e.ok()) {
+                let p = entry.path();
+                if p.is_dir() && !p.is_symlink() {
+                    heal(&p);
+                }
+            }
+        }
+    }
+    heal(path);
+    std::fs::remove_dir_all(path)
+}

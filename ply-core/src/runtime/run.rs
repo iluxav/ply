@@ -146,6 +146,29 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
         signal::signal(Signal::SIGINT, signal::SigHandler::Handler(forward_signal)).ok();
     }
 
+    // [restart] policy: the parent respawns instances it started. If the
+    // parent itself dies, that's systemd's layer.
+    let restart_policy = manifest.restart.clone();
+    let initial_backoff = restart_policy
+        .as_ref()
+        .map(|r| crate::manifest::parse_duration(&r.backoff))
+        .transpose()?
+        .unwrap_or(std::time::Duration::from_secs(2));
+    let max_backoff = restart_policy
+        .as_ref()
+        .map(|r| crate::manifest::parse_duration(&r.max_backoff))
+        .transpose()?
+        .unwrap_or(std::time::Duration::from_secs(30));
+
+    struct SlotInfo {
+        backoff: std::time::Duration,
+        restarts: u32,
+        started: std::time::Instant,
+        sig_idx: usize,
+    }
+    let mut slots: std::collections::BTreeMap<u32, SlotInfo> = Default::default();
+    let mut pending: Vec<(u32, std::time::Instant)> = Vec::new(); // (slot, due)
+
     let mut instances: Vec<Instance> = Vec::new();
     for _ in 0..opts.scale.max(1) {
         let instance = launch_instance(
@@ -157,37 +180,126 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
             &opts.links,
             &store,
             rootless,
+            None,
+            0,
         )?;
-        register_child(instance.child.as_raw());
+        let sig_idx = register_child(instance.child.as_raw());
+        slots.insert(
+            instance.n,
+            SlotInfo {
+                backoff: initial_backoff,
+                restarts: 0,
+                started: std::time::Instant::now(),
+                sig_idx,
+            },
+        );
         instances.push(instance);
     }
 
-    // Reap all children; exit with the first non-zero code.
+    // Reap, respawn per policy, exit when nothing is left to wait for.
     let mut exit_code = 0;
-    let mut remaining = instances.len();
-    while remaining > 0 {
-        match waitpid(Pid::from_raw(-1), None) {
-            Ok(WaitStatus::Exited(pid, code)) => {
-                if instances.iter().any(|i| i.child == pid) {
-                    remaining -= 1;
-                    if exit_code == 0 && code != 0 {
-                        exit_code = code;
-                    }
-                }
+    loop {
+        // Collect every child death that's already happened.
+        let mut deaths: Vec<(Pid, i32, bool)> = Vec::new(); // (pid, code, failed)
+        loop {
+            use nix::sys::wait::WaitPidFlag;
+            match waitpid(Pid::from_raw(-1), Some(WaitPidFlag::WNOHANG)) {
+                Ok(WaitStatus::StillAlive) => break,
+                Ok(WaitStatus::Exited(pid, code)) => deaths.push((pid, code, code != 0)),
+                Ok(WaitStatus::Signaled(pid, sig, _)) => deaths.push((pid, 128 + sig as i32, true)),
+                Ok(_) => continue,
+                Err(nix::errno::Errno::EINTR) => continue,
+                Err(nix::errno::Errno::ECHILD) => break,
+                Err(e) => return Err(Error::Runtime(format!("waitpid: {e}"))),
             }
-            Ok(WaitStatus::Signaled(pid, sig, _)) => {
-                if instances.iter().any(|i| i.child == pid) {
-                    remaining -= 1;
-                    if exit_code == 0 {
-                        exit_code = 128 + sig as i32;
-                    }
-                }
-            }
-            Ok(_) => continue,
-            Err(nix::errno::Errno::EINTR) => continue,
-            Err(nix::errno::Errno::ECHILD) => break,
-            Err(e) => return Err(Error::Runtime(format!("waitpid: {e}"))),
         }
+
+        let shutting_down = SHUTTING_DOWN.load(Ordering::SeqCst);
+
+        for (pid, code, failed) in deaths {
+            let Some(pos) = instances.iter().position(|i| i.child == pid) else {
+                continue;
+            };
+            let slot = instances[pos].n;
+            let info = slots.get_mut(&slot).expect("live instance has a slot");
+            update_child(info.sig_idx, 0);
+            drop(instances.remove(pos)); // unmount, remove state + hosts now
+
+            let respawn = !shutting_down
+                && match restart_policy.as_ref().map(|r| r.policy.as_str()) {
+                    Some("always") => true,
+                    Some("on-failure") => failed,
+                    _ => false,
+                };
+            if respawn {
+                // A healthy stretch resets the backoff ladder.
+                if info.started.elapsed() > std::time::Duration::from_secs(60) {
+                    info.backoff = initial_backoff;
+                }
+                pending.push((slot, std::time::Instant::now() + info.backoff));
+                info.backoff = (info.backoff * 2).min(max_backoff);
+            } else if exit_code == 0 && code != 0 {
+                exit_code = code;
+            }
+        }
+        if shutting_down {
+            pending.clear();
+        }
+
+        // Launch respawns that are due.
+        let now = std::time::Instant::now();
+        let due: Vec<u32> = pending
+            .iter()
+            .filter(|(_, at)| *at <= now)
+            .map(|(n, _)| *n)
+            .collect();
+        pending.retain(|(_, at)| *at > now);
+        for slot in due {
+            let info = slots.get_mut(&slot).expect("pending slot is tracked");
+            info.restarts += 1;
+            eprintln!(
+                "ply: restarting {}.{slot} (restart #{}, policy {})",
+                manifest.package.name,
+                info.restarts,
+                restart_policy
+                    .as_ref()
+                    .map(|r| r.policy.as_str())
+                    .unwrap_or("?"),
+            );
+            match launch_instance(
+                &manifest,
+                &entrypoint,
+                &env,
+                &opts.image,
+                &dep_images,
+                &opts.links,
+                &store,
+                rootless,
+                Some(slot),
+                info.restarts,
+            ) {
+                Ok(instance) => {
+                    update_child(info.sig_idx, instance.child.as_raw());
+                    info.started = std::time::Instant::now();
+                    instances.push(instance);
+                }
+                Err(e) => {
+                    // Relaunch itself failed (fetch/mount error): retry with
+                    // doubled backoff rather than crash-looping the parent.
+                    eprintln!(
+                        "ply: restart of {}.{slot} failed: {e}",
+                        manifest.package.name
+                    );
+                    info.backoff = (info.backoff * 2).min(max_backoff);
+                    pending.push((slot, std::time::Instant::now() + info.backoff));
+                }
+            }
+        }
+
+        if instances.is_empty() && pending.is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
     }
     drop(instances); // unmount, remove state + hosts entries
     Ok(exit_code)
@@ -219,9 +331,11 @@ fn launch_instance(
     links: &[(PathBuf, String)],
     store: &Store,
     rootless: bool,
+    slot: Option<u32>,
+    restarts: u32,
 ) -> Result<Instance> {
     let app = &manifest.package.name;
-    let (instance_dir, n) = allocate_instance(app)?;
+    let (instance_dir, n) = allocate_instance(app, slot)?;
 
     // Named volumes: per-instance by default (scaling can never silently
     // corrupt single-writer state); `scope = "shared"` is the explicit opt-in.
@@ -371,6 +485,7 @@ fn launch_instance(
         ports: manifest.ports.clone(),
         image: app_image.display().to_string(),
         started,
+        restarts,
     };
     state.save()?;
     if !rootless {
@@ -411,16 +526,28 @@ const MAX_CHILDREN: usize = 256;
 static CHILD_PIDS: [AtomicI32; MAX_CHILDREN] = [const { AtomicI32::new(0) }; MAX_CHILDREN];
 static CHILD_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-fn register_child(pid: i32) {
+fn register_child(pid: i32) -> usize {
     let idx = CHILD_COUNT.fetch_add(1, Ordering::SeqCst);
+    if idx < MAX_CHILDREN {
+        CHILD_PIDS[idx].store(pid, Ordering::SeqCst);
+    }
+    idx
+}
+
+/// Respawns reuse their slot's signal-table entry (0 = empty slot); the
+/// table never accumulates stale pids that a later process could inherit.
+fn update_child(idx: usize, pid: i32) {
     if idx < MAX_CHILDREN {
         CHILD_PIDS[idx].store(pid, Ordering::SeqCst);
     }
 }
 
 static SIGNALS_SEEN: AtomicUsize = AtomicUsize::new(0);
+static SHUTTING_DOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 extern "C" fn forward_signal(sig: i32) {
+    // A forwarded stop means intent: no respawns after this point.
+    SHUTTING_DOWN.store(true, Ordering::SeqCst);
     // A container's entrypoint is PID 1 in its pid ns: the kernel drops
     // default-action signals to init. First signal forwards as-is (apps
     // with handlers stop gracefully); repeated signals escalate to SIGKILL,
@@ -437,12 +564,32 @@ extern "C" fn forward_signal(sig: i32) {
 }
 
 /// `/run/ply/instances/<app>.<n>` with rw/, work/, root/, layers/.
-fn allocate_instance(app: &str) -> Result<(PathBuf, u32)> {
+/// `slot` pins the instance number (respawns keep their identity — and
+/// their per-instance volume).
+fn allocate_instance(app: &str, slot: Option<u32>) -> Result<(PathBuf, u32)> {
     let instances = crate::paths::run_dir().join("instances");
     std::fs::create_dir_all(&instances).map_err(|source| Error::Io {
         path: instances.clone(),
         source,
     })?;
+    if let Some(n) = slot {
+        let dir = instances.join(format!("{app}.{n}"));
+        if dir.exists() {
+            // stale leftover from a crashed predecessor — self-heal
+            let _ = crate::paths::force_remove_dir_all(&dir);
+        }
+        std::fs::create_dir(&dir).map_err(|source| Error::Io {
+            path: dir.clone(),
+            source,
+        })?;
+        for sub in ["rw", "work", "root", "layers"] {
+            std::fs::create_dir_all(dir.join(sub)).map_err(|source| Error::Io {
+                path: dir.join(sub),
+                source,
+            })?;
+        }
+        return Ok((dir, n));
+    }
     for n in 1..10_000u32 {
         let dir = instances.join(format!("{app}.{n}"));
         match std::fs::create_dir(&dir) {
@@ -474,7 +621,7 @@ impl Drop for InstanceGuard {
         for target in self.mounted_layers.borrow().iter() {
             mount::unmount_detach(target);
         }
-        let _ = std::fs::remove_dir_all(&self.dir);
+        let _ = crate::paths::force_remove_dir_all(&self.dir);
     }
 }
 

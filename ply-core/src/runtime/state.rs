@@ -19,6 +19,9 @@ pub struct InstanceState {
     pub image: String,
     /// Unix seconds.
     pub started: u64,
+    /// Times the run parent respawned this slot ([restart] policy).
+    #[serde(default)]
+    pub restarts: u32,
 }
 
 fn state_dir() -> PathBuf {
@@ -89,7 +92,7 @@ pub fn reap_stale() -> Result<Vec<InstanceState>> {
                     crate::runtime::mount::unmount_detach(&entry.path());
                 }
             }
-            let _ = std::fs::remove_dir_all(&instance_dir);
+            let _ = crate::paths::force_remove_dir_all(&instance_dir);
         }
         crate::runtime::hosts::remove_entry(&state.app, state.n)?;
         InstanceState::remove(&state.app, state.n);

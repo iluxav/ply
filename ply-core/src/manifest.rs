@@ -34,6 +34,10 @@ pub struct Manifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requires: Option<Requires>,
 
+    /// Instance restart policy, honored by the `ply run` parent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restart: Option<Restart>,
+
     /// Env contributions this package exposes to dependents; embedded into
     /// the built image as `/.layer.toml`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -43,6 +47,48 @@ pub struct Manifest {
     /// explicit source; other keys are aliases usable as `source = "<alias>"`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub sources: BTreeMap<String, String>,
+}
+
+/// `[restart]` — the run parent respawns instances it started. Nothing more:
+/// if the parent itself dies, that's systemd's layer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Restart {
+    /// "never" | "on-failure" (non-zero exit or signal) | "always"
+    pub policy: String,
+    /// Initial backoff, doubled per consecutive crash: "2s", "500ms", "1m"
+    #[serde(default = "default_backoff")]
+    pub backoff: String,
+    /// Backoff ceiling
+    #[serde(default = "default_max_backoff")]
+    pub max_backoff: String,
+}
+
+fn default_backoff() -> String {
+    "2s".into()
+}
+fn default_max_backoff() -> String {
+    "30s".into()
+}
+
+/// "500ms" | "2s" | "1m" → Duration.
+pub fn parse_duration(s: &str) -> Result<std::time::Duration> {
+    let bad = || {
+        Error::Manifest(format!(
+            "invalid duration `{s}` — use e.g. \"500ms\", \"2s\", \"1m\""
+        ))
+    };
+    let (digits, unit): (String, String) = (
+        s.chars().take_while(|c| c.is_ascii_digit()).collect(),
+        s.chars().skip_while(|c| c.is_ascii_digit()).collect(),
+    );
+    let n: u64 = digits.parse().map_err(|_| bad())?;
+    match unit.as_str() {
+        "ms" => Ok(std::time::Duration::from_millis(n)),
+        "s" => Ok(std::time::Duration::from_secs(n)),
+        "m" => Ok(std::time::Duration::from_secs(n * 60)),
+        _ => Err(bad()),
+    }
 }
 
 /// Package env contributions (`/.layer.toml` inside dep images).
@@ -221,6 +267,16 @@ impl Manifest {
         for (alias, dep) in &self.dependencies {
             validate_package_name(alias)?;
             validate_package_name(&dep.spec(alias).package)?;
+        }
+        if let Some(restart) = &self.restart {
+            if !matches!(restart.policy.as_str(), "never" | "on-failure" | "always") {
+                return Err(Error::Manifest(format!(
+                    "restart.policy must be \"never\", \"on-failure\" or \"always\", got `{}`",
+                    restart.policy
+                )));
+            }
+            parse_duration(&restart.backoff)?;
+            parse_duration(&restart.max_backoff)?;
         }
         if self.package.isolation != "ns" && self.package.isolation != "vm" {
             return Err(Error::Manifest(format!(

@@ -78,12 +78,26 @@ pub struct RmReport {
 }
 
 pub fn rm(app: &str, volumes: bool) -> Result<RmReport> {
+    // Stop the `ply run` PARENTS, not the instances: signalling the parent
+    // sets its shutting-down flag (no [restart] respawns) and it forwards to
+    // its children. Killing children directly would race a restart policy.
     let mut stopped = 0;
+    let mut parents: BTreeSet<i32> = BTreeSet::new();
     for instance in state::list()? {
         if instance.app == app && instance.alive() {
-            unsafe { nix::libc::kill(instance.pid, nix::libc::SIGTERM) };
             stopped += 1;
+            match parent_pid(instance.pid) {
+                Some(ppid) if ppid > 1 => {
+                    parents.insert(ppid);
+                }
+                _ => unsafe {
+                    nix::libc::kill(instance.pid, nix::libc::SIGTERM);
+                },
+            }
         }
+    }
+    for ppid in &parents {
+        unsafe { nix::libc::kill(*ppid, nix::libc::SIGTERM) };
     }
     // Give the owning `ply run` processes a moment to tear down cleanly,
     // then escalate: a handler-less entrypoint is PID 1 in its pid ns and
@@ -122,6 +136,17 @@ pub fn rm(app: &str, volumes: bool) -> Result<RmReport> {
         record_removed,
         volumes_removed,
     })
+}
+
+/// Parent pid from /proc/<pid>/stat (field 4, after the comm parens).
+fn parent_pid(pid: i32) -> Option<i32> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    stat.rsplit_once(')')?
+        .1
+        .split_whitespace()
+        .nth(1)?
+        .parse()
+        .ok()
 }
 
 /// `ply systemd <image>` — supervision is systemd's job; emit a unit.

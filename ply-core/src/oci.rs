@@ -281,6 +281,7 @@ pub fn import(spec: &str, output: &Path) -> Result<ImportOutcome> {
         volumes: Default::default(),
         resources: None,
         requires: None,
+        restart: None,
         layer: None,
         sources: Default::default(),
     };

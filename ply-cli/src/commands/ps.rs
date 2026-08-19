@@ -20,8 +20,8 @@ pub fn exec(args: PsArgs) -> Result<()> {
         return Ok(());
     }
     let header = format!(
-        "{:<24} {:>8} {:<14} {:<20} {:>8} STATUS",
-        "NAME", "PID", "IP", "PORTS", "UPTIME"
+        "{:<24} {:>8} {:<14} {:<20} {:>8} {:>8} STATUS",
+        "NAME", "PID", "IP", "PORTS", "UPTIME", "RESTARTS"
     );
     println!("{header}");
     let now = std::time::SystemTime::now()
@@ -32,12 +32,13 @@ pub fn exec(args: PsArgs) -> Result<()> {
         let ports: Vec<String> = s.ports.iter().map(|(k, v)| format!("{k}:{v}")).collect();
         let status = if s.alive() { "up" } else { "dead" };
         println!(
-            "{:<24} {:>8} {:<14} {:<20} {:>8} {}",
+            "{:<24} {:>8} {:<14} {:<20} {:>8} {:>8} {}",
             format!("{}.{}", s.app, s.n),
             s.pid,
             s.ip.to_string(),
             ports.join(","),
             human_duration(now.saturating_sub(s.started)),
+            s.restarts,
             status
         );
     }

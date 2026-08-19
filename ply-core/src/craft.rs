@@ -416,6 +416,7 @@ pub fn commit(name: &str, version: &Version, output: Option<&Path>) -> Result<Co
         volumes: Default::default(),
         resources: None,
         requires: None,
+        restart: None,
         layer: None,
         sources: Default::default(),
     };
@@ -507,6 +508,6 @@ pub fn rm(name: &str) -> Result<bool> {
             mount::unmount_detach(&entry.path());
         }
     }
-    std::fs::remove_dir_all(&dir).map_err(|source| Error::Io { path: dir, source })?;
+    crate::paths::force_remove_dir_all(&dir).map_err(|source| Error::Io { path: dir, source })?;
     Ok(true)
 }
