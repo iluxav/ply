@@ -12,3 +12,9 @@ serde.workspace = true
 toml.workspace = true
 sha2.workspace = true
 hex.workspace = true
+backhand.workspace = true
+semver.workspace = true
+walkdir.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

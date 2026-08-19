@@ -1,13 +1,15 @@
 // One module per command as they are implemented (per TASKS.md phase).
 // Unimplemented commands fall through to `todo`.
 
+mod build;
+
 use anyhow::{bail, Result};
 
 use crate::cli::Command;
 
 pub fn dispatch(command: Command) -> Result<()> {
     match command {
-        Command::Build(_) => todo("build", "Phase 1"),
+        Command::Build(args) => build::run(args),
         Command::Run(_) => todo("run", "Phase 2"),
         Command::Exec(_) => todo("exec", "Phase 6"),
         Command::Ps(_) => todo("ps", "Phase 5"),

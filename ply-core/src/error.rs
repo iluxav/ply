@@ -11,6 +11,15 @@ pub enum Error {
         source: std::io::Error,
     },
 
+    #[error("manifest error: {0}")]
+    Manifest(String),
+
+    #[error("{0}")]
+    ImageName(String),
+
+    #[error("build error: {0}")]
+    Build(String),
+
     #[error("not implemented yet: {0}")]
     Unimplemented(&'static str),
 }

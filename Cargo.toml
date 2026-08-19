@@ -17,6 +17,10 @@ toml = "0.8"
 sha2 = "0.10"
 hex = "0.4"
 clap = { version = "4", features = ["derive", "wrap_help"] }
+backhand = { version = "0.25", default-features = false, features = ["zstd"] }
+semver = { version = "1", features = ["serde"] }
+walkdir = "2"
+tempfile = "3"
 
 [profile.release]
 strip = true
