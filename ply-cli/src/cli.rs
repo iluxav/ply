@@ -32,6 +32,11 @@ pub enum Command {
     /// List running instances
     Ps(PsArgs),
 
+    /// Live per-instance usage: CPU, memory, pids, network, throttling
+    ///
+    /// Reads the kernel's cgroup v2 files and veth counters — no agent.
+    Stats(StatsArgs),
+
     /// Validate an image, optionally against a host runtime policy
     Check(CheckArgs),
 
@@ -144,6 +149,21 @@ pub struct PsArgs {
     /// Machine-readable output
     #[arg(long)]
     pub json: bool,
+}
+
+#[derive(Args)]
+pub struct StatsArgs {
+    /// Limit to one app (`myapp`) or instance (`myapp.2`)
+    #[arg(value_name = "APP")]
+    pub app: Option<String>,
+
+    /// Machine-readable output
+    #[arg(long)]
+    pub json: bool,
+
+    /// CPU sampling window in milliseconds
+    #[arg(long, default_value_t = 500)]
+    pub sample_ms: u64,
 }
 
 #[derive(Args)]

@@ -281,6 +281,24 @@ impl<'a> Resolver<'a> {
                 }
             }
         }
+
+        // The base defines the platform ABI (musl vs glibc family). Any
+        // package declaring a different ABI would fail at exec time with a
+        // missing dynamic linker — refuse loudly at resolve time instead.
+        if let Some(base) = packages.iter().find(|p| p.manifest.package.base) {
+            if let Some(base_abi) = &base.manifest.package.provides_abi {
+                for pkg in packages.iter().filter(|p| !p.manifest.package.base) {
+                    if let Some(pkg_abi) = &pkg.manifest.package.provides_abi {
+                        if pkg_abi != base_abi {
+                            return Err(Error::Resolve(format!(
+                                "ABI mismatch: base {} provides `{base_abi}` but {}-{} is built for `{pkg_abi}` — these binaries cannot run on this base",
+                                base.name, pkg.name, pkg.version
+                            )));
+                        }
+                    }
+                }
+            }
+        }
         Ok(())
     }
 }

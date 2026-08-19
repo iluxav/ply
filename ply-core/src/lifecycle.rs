@@ -85,7 +85,9 @@ pub fn rm(app: &str, volumes: bool) -> Result<RmReport> {
             stopped += 1;
         }
     }
-    // Give the owning `ply run` processes a moment to tear down cleanly.
+    // Give the owning `ply run` processes a moment to tear down cleanly,
+    // then escalate: a handler-less entrypoint is PID 1 in its pid ns and
+    // silently drops SIGTERM — only SIGKILL gets through.
     if stopped > 0 {
         for _ in 0..50 {
             std::thread::sleep(std::time::Duration::from_millis(100));
@@ -93,6 +95,16 @@ pub fn rm(app: &str, volumes: bool) -> Result<RmReport> {
                 break;
             }
         }
+        for instance in state::list()? {
+            if instance.app == app && instance.alive() {
+                eprintln!(
+                    "ply: {}.{} ignored SIGTERM (no handler as pid 1) — killing",
+                    instance.app, instance.n
+                );
+                unsafe { nix::libc::kill(instance.pid, nix::libc::SIGKILL) };
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
     }
     let _ = state::reap_stale();
 

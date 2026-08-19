@@ -172,14 +172,37 @@ fn main() -> Result<()> {
             paths.push(format!("{prefix}/{rel}"));
         }
     }
+    // Every dir containing a shared object goes on ld_library_path: distro
+    // packages keep private libs in subdirs (usr/lib/pulseaudio/…) normally
+    // found via absolute RPATHs that keg relocation breaks.
+    let mut so_dirs: BTreeSet<PathBuf> = BTreeSet::new();
+    for entry in walkdir(&staging) {
+        let name = entry
+            .file_name()
+            .map(|n| n.to_string_lossy())
+            .unwrap_or_default();
+        if name.contains(".so") {
+            if let Some(parent) = entry.parent() {
+                if let Ok(rel) = parent.strip_prefix(&staging) {
+                    so_dirs.insert(rel.to_path_buf());
+                }
+            }
+        }
+    }
+    // usr/lib and lib first (the common case), then the private subdirs
     for rel in ["usr/lib", "lib"] {
-        if staging.join(rel).is_dir() {
+        if so_dirs.remove(Path::new(rel)) {
             lib_paths.push(format!("{prefix}/{rel}"));
         }
     }
+    for rel in so_dirs {
+        lib_paths.push(format!("{prefix}/{}", rel.display()));
+    }
 
-    let mut manifest =
-        format!("[package]\nname = \"{ply_name}\"\nversion = \"{ply_version}\"\n\n[layer]\n");
+    let mut manifest = format!(
+        "[package]\nname = \"{ply_name}\"\nversion = \"{ply_version}\"\nprovides_abi = \"linux-{}-musl\"\n\n[layer]\n",
+        host_arch()
+    );
     manifest.push_str(&format!("path = {}\n", toml_array(&paths)));
     if !lib_paths.is_empty() {
         manifest.push_str(&format!("ld_library_path = {}\n", toml_array(&lib_paths)));
@@ -312,6 +335,26 @@ fn host_arch() -> &'static str {
         "aarch64" => "arm64",
         _ => "x64",
     }
+}
+
+/// All file paths under `root`, recursively (tiny local walker — the ply
+/// workspace's walkdir crate isn't a dependency of this bin's hot path).
+fn walkdir(root: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries.filter_map(|e| e.ok()) {
+                let path = entry.path();
+                if path.is_dir() && !path.is_symlink() {
+                    stack.push(path);
+                } else {
+                    out.push(path);
+                }
+            }
+        }
+    }
+    out
 }
 
 fn tempfile_dir() -> Result<PathBuf> {

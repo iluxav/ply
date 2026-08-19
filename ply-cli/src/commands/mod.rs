@@ -9,6 +9,7 @@ mod lifecycle;
 mod ps;
 mod run;
 mod setup;
+mod stats;
 
 use anyhow::Result;
 
@@ -20,6 +21,7 @@ pub fn dispatch(command: Command) -> Result<()> {
         Command::Run(args) => run::exec(args),
         Command::Exec(args) => exec::exec(args),
         Command::Ps(args) => ps::exec(args),
+        Command::Stats(args) => stats::exec(args),
         Command::Check(args) => lifecycle::check(args),
         Command::Import(args) => images::import(args),
         Command::Bundle(args) => images::bundle(args),

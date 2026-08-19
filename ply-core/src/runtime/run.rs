@@ -328,7 +328,15 @@ fn launch_instance(
     .map_err(|e| Error::Runtime(format!("clone: {e}")))?;
 
     // cgroup + veth (root) / uid maps (rootless) while the child is parked
-    // on the pipe.
+    // on the pipe. The network lock serializes IP pick + veth setup across
+    // concurrent `ply run`s (two parents reading state simultaneously would
+    // pick the same IP and collide on the derived veth name) and is held
+    // until this instance's state file makes the IP visible to others.
+    let _net_lock = if rootless {
+        None
+    } else {
+        Some(network::lock()?)
+    };
     let prepared = (|| -> Result<(Option<Cgroup>, Ipv4Addr)> {
         if rootless {
             write_id_maps(child.as_raw())?;
@@ -410,7 +418,15 @@ fn register_child(pid: i32) {
     }
 }
 
+static SIGNALS_SEEN: AtomicUsize = AtomicUsize::new(0);
+
 extern "C" fn forward_signal(sig: i32) {
+    // A container's entrypoint is PID 1 in its pid ns: the kernel drops
+    // default-action signals to init. First signal forwards as-is (apps
+    // with handlers stop gracefully); repeated signals escalate to SIGKILL,
+    // which init cannot ignore.
+    let escalate = SIGNALS_SEEN.fetch_add(1, Ordering::SeqCst) >= 1;
+    let sig = if escalate { nix::libc::SIGKILL } else { sig };
     let count = CHILD_COUNT.load(Ordering::SeqCst).min(MAX_CHILDREN);
     for slot in CHILD_PIDS.iter().take(count) {
         let pid = slot.load(Ordering::SeqCst);

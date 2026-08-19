@@ -27,6 +27,24 @@ fn sh(program: &str, args: &[&str]) -> Result<()> {
     Ok(())
 }
 
+/// Cross-process lock serializing IP allocation + veth setup. Held by the
+/// returned file; drops (and unlocks) when it goes out of scope.
+pub fn lock() -> Result<std::fs::File> {
+    let dir = crate::paths::run_dir();
+    std::fs::create_dir_all(&dir).map_err(|source| Error::Io {
+        path: dir.clone(),
+        source,
+    })?;
+    let path = dir.join("network.lock");
+    let file = std::fs::File::create(&path).map_err(|source| Error::Io { path, source })?;
+    let rc =
+        unsafe { nix::libc::flock(std::os::fd::AsRawFd::as_raw_fd(&file), nix::libc::LOCK_EX) };
+    if rc != 0 {
+        return Err(Error::Runtime("network lock: flock failed".into()));
+    }
+    Ok(file)
+}
+
 /// Create ply0 bridge with the gateway address. Idempotent.
 pub fn ensure_bridge() -> Result<()> {
     if !std::path::Path::new("/sys/class/net").join(BRIDGE).exists() {
@@ -64,6 +82,15 @@ pub fn setup_instance(pid: i32, ip: Ipv4Addr) -> Result<()> {
     let cont_if = format!("{host_if}c");
     let pid_s = pid.to_string();
 
+    // A crashed run can orphan a host-side veth (its peer never reached a
+    // netns that died). The IP was allocated fresh under the lock, so any
+    // interface with our derived name is stale by definition — remove it.
+    if std::path::Path::new("/sys/class/net")
+        .join(&host_if)
+        .exists()
+    {
+        let _ = Command::new("ip").args(["link", "del", &host_if]).output();
+    }
     sh(
         "ip",
         &[

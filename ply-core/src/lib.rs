@@ -20,6 +20,7 @@ pub mod rebase;
 pub mod resolve;
 pub mod runtime;
 pub mod source;
+pub mod stats;
 pub mod store;
 
 pub use error::{Error, Result};

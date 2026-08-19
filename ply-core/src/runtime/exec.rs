@@ -60,6 +60,14 @@ pub fn exec(target: &str, cmd: &[String]) -> Result<i32> {
         None
     };
 
+    // Skip namespaces the target shares with us (rootless instances use the
+    // host netns; setns onto a namespace you're already in is EPERM unless
+    // you own it).
+    let same_ns = |name: &str| -> bool {
+        let ours = std::fs::read_link(format!("/proc/self/ns/{name}")).ok();
+        let theirs = std::fs::read_link(format!("/proc/{pid}/ns/{name}")).ok();
+        ours.is_some() && ours == theirs
+    };
     let join = |file: &std::fs::File, flag: CloneFlags, what: &str| -> Result<()> {
         nix::sched::setns(file.as_fd(), flag)
             .map_err(|e| Error::Runtime(format!("setns {what}: {e}")))
@@ -67,10 +75,18 @@ pub fn exec(target: &str, cmd: &[String]) -> Result<i32> {
     if let Some(userns) = &userns {
         join(userns, CloneFlags::CLONE_NEWUSER, "user")?;
     }
-    join(&ipc, CloneFlags::CLONE_NEWIPC, "ipc")?;
-    join(&uts, CloneFlags::CLONE_NEWUTS, "uts")?;
-    join(&net, CloneFlags::CLONE_NEWNET, "net")?;
-    join(&pidns, CloneFlags::CLONE_NEWPID, "pid")?; // children enter the pidns
+    if !same_ns("ipc") {
+        join(&ipc, CloneFlags::CLONE_NEWIPC, "ipc")?;
+    }
+    if !same_ns("uts") {
+        join(&uts, CloneFlags::CLONE_NEWUTS, "uts")?;
+    }
+    if !same_ns("net") {
+        join(&net, CloneFlags::CLONE_NEWNET, "net")?;
+    }
+    if !same_ns("pid") {
+        join(&pidns, CloneFlags::CLONE_NEWPID, "pid")?; // children enter the pidns
+    }
     join(&mnt, CloneFlags::CLONE_NEWNS, "mnt")?;
 
     // Fork so the child is actually inside the pid namespace.

@@ -31,6 +31,7 @@ cat > "$WORK/alpine/ply.toml" <<EOF
 name = "alpine"
 version = "$ALPINE_VERSION"
 base = true
+provides_abi = "linux-x64-musl"
 EOF
 "$PLY" build "$WORK/alpine" -o "$REGISTRY/alpine-$ALPINE_VERSION-linux-x64.img"
 
@@ -93,6 +94,28 @@ path = ["/opt/caddy-$CADDY_VERSION/bin"]
 alpine = "3.20"
 EOF
 "$PLY" build "$WORK/caddy" -o "$REGISTRY/caddy-$CADDY_VERSION-linux-x64.img"
+
+# ---- debian-py (a SECOND base family: glibc, python baked in) ----
+# Proves multi-base: same registry, different platform ABI. Built from the
+# official python:slim OCI image via ply's own import bridge.
+DEBIAN_PY_VERSION=3.12.0
+if [ ! -f "$REGISTRY/debian-py-$DEBIAN_PY_VERSION-linux-x64.img" ]; then
+    "$PLY" import docker://python:3.12-slim -o "$WORK/pyslim-fat.img"
+    rm -rf "$WORK/debian-py"; mkdir -p "$WORK/debian-py"
+    unsquashfs -q -no-progress -d "$WORK/debian-py/.stage" "$WORK/pyslim-fat.img" >/dev/null
+    rm -f "$WORK/debian-py/.stage/.manifest.toml"
+    # base packs at /, so stage the tree as the package dir itself
+    find "$WORK/debian-py/.stage" -mindepth 1 -maxdepth 1 -exec mv {} "$WORK/debian-py/" \;
+    rmdir "$WORK/debian-py/.stage"
+    cat > "$WORK/debian-py/ply.toml" <<EOF
+[package]
+name = "debian-py"
+version = "$DEBIAN_PY_VERSION"
+base = true
+provides_abi = "linux-x64-gnu"
+EOF
+    "$PLY" build "$WORK/debian-py" -o "$REGISTRY/debian-py-$DEBIAN_PY_VERSION-linux-x64.img"
+fi
 
 # ---- index.json (version listing for dumb http hosts) ----
 (cd "$REGISTRY" && ls *.img | python3 -c 'import json,sys; print(json.dumps([l.strip() for l in sys.stdin]))') > "$REGISTRY/index.json"
