@@ -8,11 +8,13 @@ cd "$(dirname "$0")"
 
 ./build.sh
 node render-registry.mjs
+node render-docs.mjs
 
 rm -rf .preview
 mkdir -p .preview/landing .preview/registry
 
 cp landing/index.html dist/styles.css logo.svg ../install.sh .preview/landing/
+cp -r dist/docs .preview/landing/docs
 cp dist/registry-index.html .preview/registry/index.html
 cp dist/styles.css logo.svg .preview/registry/
 curl -fsS https://registry.plybox.sh/state.json -o .preview/registry/state.json \

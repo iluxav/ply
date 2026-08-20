@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dependencies &amp; lockfiles — ply docs</title>
+<meta name="description" content="How ply resolves version ranges with Minimal Version Selection and pins them in ply.lock.">
+<link rel="icon" type="image/svg+xml" href="/logo.svg">
+<link rel="canonical" href="https://plybox.sh/docs/dependencies/">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body class="bg-ground text-ink font-mono antialiased">
+
+<header class="sticky top-0 z-20 bg-ground/95 backdrop-blur border-b border-edge">
+  <div class="mx-auto max-w-7xl px-5 flex items-center justify-between h-14">
+    <div class="flex items-center gap-3">
+      <button id="menu" class="lg:hidden text-fade border border-edge px-2 py-1 text-sm" aria-label="menu">≡</button>
+      <a href="/" class="logo">ply</a>
+      <a href="/docs/" class="text-sm text-fade hover:text-accent">docs</a>
+    </div>
+    <div class="flex items-center gap-5">
+      <input id="search" type="search" placeholder="/ search docs…" autocomplete="off"
+             class="hidden sm:block w-56 border border-edge bg-card px-3 py-1.5 text-sm placeholder:text-fade focus:border-accent focus:outline-none">
+      <nav class="flex gap-5 text-sm text-fade">
+        <a href="https://registry.plybox.sh" class="hover:text-accent">registry</a>
+        <a href="https://github.com/iluxav/ply" class="hover:text-accent">github</a>
+      </nav>
+    </div>
+  </div>
+  <div id="results" class="hidden absolute left-0 right-0 top-14 border-b border-edge bg-card">
+    <div class="mx-auto max-w-7xl px-5 py-3" id="results-list"></div>
+  </div>
+</header>
+
+<div class="mx-auto max-w-7xl px-5 flex">
+  <aside id="sidebar" class="hidden lg:block w-60 shrink-0 border-r border-edge py-8 pr-2
+                             fixed lg:sticky top-14 bottom-0 lg:h-[calc(100vh-3.5rem)] overflow-y-auto bg-ground z-10">
+<div class="mb-6"><div class="px-3 mb-2 text-xs uppercase tracking-wider text-fade">Start</div><a href="/docs/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">What is ply</a>
+<a href="/docs/quickstart/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Quickstart</a></div>
+<div class="mb-6"><div class="px-3 mb-2 text-xs uppercase tracking-wider text-fade">Guides</div><a href="/docs/dependencies/" class="block px-3 py-1.5 text-sm text-accent border-l-2 border-accent bg-card">Dependencies &amp; lockfiles</a>
+<a href="/docs/registries/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Registries &amp; publishing</a>
+<a href="/docs/running/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Running &amp; scaling</a>
+<a href="/docs/volumes/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Volumes &amp; data</a>
+<a href="/docs/deploy/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Deploys, health &amp; restarts</a>
+<a href="/docs/security/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Security &amp; rootless</a>
+<a href="/docs/packages/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Making packages</a>
+<a href="/docs/docker/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Importing from Docker</a></div>
+<div class="mb-6"><div class="px-3 mb-2 text-xs uppercase tracking-wider text-fade">Reference</div><a href="/docs/manifest/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">ply.toml reference</a>
+<a href="/docs/cli/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">CLI reference</a>
+<a href="/docs/image-format/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Image format &amp; store</a></div>
+<div class="mb-6"><div class="px-3 mb-2 text-xs uppercase tracking-wider text-fade">Concepts</div><a href="/docs/architecture/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Architecture</a>
+<a href="/docs/ply-vs-docker/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">ply vs Docker</a></div>
+  </aside>
+  <main class="prose min-w-0 flex-1 py-10 lg:pl-10 max-w-3xl">
+<h1>Dependencies &amp; lockfiles</h1>
+<h2 id="declaring-dependencies"><a class="anchor" href="#declaring-dependencies" aria-label="link to section">#</a>Declaring dependencies</h2>
+<div class="codeblock"><button class="copy" aria-label="copy">copy</button><pre><code class="hljs"><span class="hljs-section">[dependencies]</span>
+<span class="hljs-attr">base</span>   = <span class="hljs-string">&quot;alpine@3.20&quot;</span>       <span class="hljs-comment"># exactly one base per app (owns /, libc, /bin/sh)</span>
+<span class="hljs-attr">node</span>   = <span class="hljs-string">&quot;22&quot;</span>                <span class="hljs-comment"># any 22.x — range, not a pin</span>
+<span class="hljs-attr">ffmpeg</span> = { source = <span class="hljs-string">&quot;github:someorg/ffmpeg-pkg&quot;</span>, version = <span class="hljs-string">&quot;6.1&quot;</span> }</code></pre></div>
+<p>Ranges are semver prefixes: <code>&quot;22&quot;</code> means ≥22.0.0 &lt;23, <code>&quot;6.1&quot;</code> means
+≥6.1.0 &lt;6.2. The <code>name@version</code> form (used for <code>base</code>) is the same thing
+with the package name attached.</p>
+<p>Every dependency occupies its own prefix in the final filesystem —
+<code>/opt/node-22.6.0/</code>, <code>/opt/ffmpeg-6.1.1/</code> — so two packages can never
+conflict over a file. Their <code>PATH</code> and <code>LD_LIBRARY_PATH</code> contributions are
+composed automatically in dependency order.</p>
+<h2 id="resolution-minimal-version-selection"><a class="anchor" href="#resolution-minimal-version-selection" aria-label="link to section">#</a>Resolution: Minimal Version Selection</h2>
+<p><code>ply build</code> resolves ranges the way Go modules do: pick the <strong>lowest</strong>
+version that satisfies every constraint. No SAT solver, no &quot;latest wins&quot;,
+no surprise upgrades:</p>
+<ul>
+<li>The same manifest resolves to the same versions, forever.</li>
+<li>Resolution output changes <strong>only when you edit the manifest</strong> — an upgrade
+is a deliberate act, never a side effect of rebuilding.</li>
+<li>One version per package name per graph, enforced by the resolver
+(an overlay can&#39;t mount two ffmpegs at the same prefix — so the model
+doesn&#39;t pretend it can).</li>
+</ul>
+<h2 id="the-lockfile"><a class="anchor" href="#the-lockfile" aria-label="link to section">#</a>The lockfile</h2>
+<p><code>ply build</code> writes <code>ply.lock</code> next to your manifest:</p>
+<ul>
+<li>exact resolved version of every package</li>
+<li>the sha256 of every package file</li>
+</ul>
+<p>The manifest is <em>human intent</em>; the lockfile is <em>machine truth</em>. Deploys use
+the lockfile only — a production host never resolves anything, it fetches
+exact hashes. Commit <code>ply.lock</code> to your repo like you would <code>package-lock.json</code>.</p>
+<p>The hash is the trust boundary: sources are untrusted by design. A
+compromised mirror can serve whatever it wants — wrong bytes fail the hash
+check and the fetch is rejected.</p>
+<h2 id="upgrading"><a class="anchor" href="#upgrading" aria-label="link to section">#</a>Upgrading</h2>
+<div class="codeblock"><button class="copy" aria-label="copy">copy</button><pre><code class="hljs">ply outdated        <span class="hljs-comment"># list dependencies with newer versions available</span></code></pre></div>
+<p>To upgrade, widen or bump the range in <code>ply.toml</code> and rebuild. To patch a
+runtime under an already-built app <strong>without rebuilding it</strong>:</p>
+<div class="codeblock"><button class="copy" aria-label="copy">copy</button><pre><code class="hljs">ply rebase app.img --runtime node@22.6.1</code></pre></div>
+<p>Only the embedded lockfile changes — fleet-wide security patching becomes a
+metadata operation plus one new store file.</p>
+<h2 id="vendoring-vs-declaring"><a class="anchor" href="#vendoring-vs-declaring" aria-label="link to section">#</a>Vendoring vs declaring</h2>
+<p>For system-level needs there&#39;s a ladder — use the lowest rung that works:</p>
+<ol>
+<li><strong>Vendor a static binary</strong> in your app directory (what npm&#39;s
+<code>ffmpeg-static</code> already does — needs zero ply support)</li>
+<li><strong>Declare a package</strong> (shared in the store, cached, content-addressed)</li>
+<li><strong>Fat mode</strong> (<code>ply bundle</code>) — flatten everything for airgapped hosts</li>
+</ol>
+
+    <div class="mt-16 pt-6 border-t border-edge flex justify-between text-sm">
+      <a class="text-fade hover:text-accent" href="/docs/quickstart/">← Quickstart</a>
+      <a class="text-fade hover:text-accent" href="/docs/registries/">Registries &amp; publishing →</a>
+    </div>
+  </main>
+</div>
+
+<footer class="border-t border-edge mt-4">
+  <div class="mx-auto max-w-7xl px-5 py-8 text-xs text-fade flex flex-wrap gap-x-6 gap-y-2">
+    <span>ply — daemonless containers</span>
+    <a href="https://plybox.sh" class="hover:text-accent">plybox.sh</a>
+    <a href="https://registry.plybox.sh" class="hover:text-accent">registry</a>
+  </div>
+</footer>
+
+<script src="/docs/docs.js" defer></script>
+</body>
+</html>

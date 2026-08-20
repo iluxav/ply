@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Architecture — ply docs</title>
+<meta name="description" content="The four borrowed mechanisms, the ten-step run path, and the discipline of what ply refuses to build.">
+<link rel="icon" type="image/svg+xml" href="/logo.svg">
+<link rel="canonical" href="https://plybox.sh/docs/architecture/">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body class="bg-ground text-ink font-mono antialiased">
+
+<header class="sticky top-0 z-20 bg-ground/95 backdrop-blur border-b border-edge">
+  <div class="mx-auto max-w-7xl px-5 flex items-center justify-between h-14">
+    <div class="flex items-center gap-3">
+      <button id="menu" class="lg:hidden text-fade border border-edge px-2 py-1 text-sm" aria-label="menu">≡</button>
+      <a href="/" class="logo">ply</a>
+      <a href="/docs/" class="text-sm text-fade hover:text-accent">docs</a>
+    </div>
+    <div class="flex items-center gap-5">
+      <input id="search" type="search" placeholder="/ search docs…" autocomplete="off"
+             class="hidden sm:block w-56 border border-edge bg-card px-3 py-1.5 text-sm placeholder:text-fade focus:border-accent focus:outline-none">
+      <nav class="flex gap-5 text-sm text-fade">
+        <a href="https://registry.plybox.sh" class="hover:text-accent">registry</a>
+        <a href="https://github.com/iluxav/ply" class="hover:text-accent">github</a>
+      </nav>
+    </div>
+  </div>
+  <div id="results" class="hidden absolute left-0 right-0 top-14 border-b border-edge bg-card">
+    <div class="mx-auto max-w-7xl px-5 py-3" id="results-list"></div>
+  </div>
+</header>
+
+<div class="mx-auto max-w-7xl px-5 flex">
+  <aside id="sidebar" class="hidden lg:block w-60 shrink-0 border-r border-edge py-8 pr-2
+                             fixed lg:sticky top-14 bottom-0 lg:h-[calc(100vh-3.5rem)] overflow-y-auto bg-ground z-10">
+<div class="mb-6"><div class="px-3 mb-2 text-xs uppercase tracking-wider text-fade">Start</div><a href="/docs/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">What is ply</a>
+<a href="/docs/quickstart/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Quickstart</a></div>
+<div class="mb-6"><div class="px-3 mb-2 text-xs uppercase tracking-wider text-fade">Guides</div><a href="/docs/dependencies/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Dependencies &amp; lockfiles</a>
+<a href="/docs/registries/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Registries &amp; publishing</a>
+<a href="/docs/running/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Running &amp; scaling</a>
+<a href="/docs/volumes/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Volumes &amp; data</a>
+<a href="/docs/deploy/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Deploys, health &amp; restarts</a>
+<a href="/docs/security/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Security &amp; rootless</a>
+<a href="/docs/packages/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Making packages</a>
+<a href="/docs/docker/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Importing from Docker</a></div>
+<div class="mb-6"><div class="px-3 mb-2 text-xs uppercase tracking-wider text-fade">Reference</div><a href="/docs/manifest/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">ply.toml reference</a>
+<a href="/docs/cli/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">CLI reference</a>
+<a href="/docs/image-format/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Image format &amp; store</a></div>
+<div class="mb-6"><div class="px-3 mb-2 text-xs uppercase tracking-wider text-fade">Concepts</div><a href="/docs/architecture/" class="block px-3 py-1.5 text-sm text-accent border-l-2 border-accent bg-card">Architecture</a>
+<a href="/docs/ply-vs-docker/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">ply vs Docker</a></div>
+  </aside>
+  <main class="prose min-w-0 flex-1 py-10 lg:pl-10 max-w-3xl">
+<h1>Architecture</h1>
+<blockquote>
+<p><strong>Cargo writes it down · Go picks the versions · Nix stores and verifies
+the bytes</strong> — then squashfs + overlay + namespaces runs the result.</p>
+</blockquote>
+<p>ply is deliberately unoriginal. Each mechanism is stolen from a tool that
+proved it for a decade; the novelty is only the composition.</p>
+<h2 id="the-four-mechanisms"><a class="anchor" href="#the-four-mechanisms" aria-label="link to section">#</a>The four mechanisms</h2>
+<p><strong>From Cargo: the manifest/lockfile split.</strong> <code>ply.toml</code> is what a human
+wants; <code>ply.lock</code> is what a machine verified. No install scripts —
+packages are inert files, activation is mount + env composition.</p>
+<p><strong>From Go: Minimal Version Selection.</strong> The lowest version satisfying all
+constraints wins. Deterministic without a solver; resolution changes only
+when a manifest changes. Upgrades are deliberate acts.</p>
+<p><strong>From Nix: content addressing.</strong> A package <em>is</em> its hash. The store
+directory name is the sha256; the filesystem is the database. Trust lives
+in the hash, so transport (any file host) is untrusted by design. NOT
+taken: the Nix language, source builds, recipe hashing.</p>
+<p><strong>From Homebrew: prefix ownership.</strong> Every package owns
+<code>/opt/&lt;name&gt;-&lt;version&gt;/</code>. Two packages cannot conflict over a path, which
+is what makes layers order-independent and substitutable.</p>
+<h2 id="the-run-path-the-whole-runtime"><a class="anchor" href="#the-run-path-the-whole-runtime" aria-label="link to section">#</a>The run path — the whole runtime</h2>
+<div class="codeblock"><button class="copy" aria-label="copy">copy</button><pre><code class="hljs">1.  read manifest + lockfile from the image
+2.  ensure the store has every digest (fetch by hash if missing)
+3.  loop-mount the squashfs files, read-only
+4.  private mount namespace
+5.  overlay: lowerdirs in topological order (deps below dependents), tmpfs upper
+6.  PID / UTS / IPC / net / user namespaces
+7.  pivot_root; mount /proc, minimal /dev, tmpfs /tmp; bind volumes
+8.  cgroup v2 limits
+9.  compose env (packages → manifest → CLI; last wins)
+10. drop capabilities, no_new_privs, seccomp; execve entrypoint</code></pre></div>
+<p>That&#39;s it. The &quot;daemon&quot; is the kernel. A tiny init holds PID 1 inside the
+container so your app keeps normal signal semantics; state is JSON files
+under <code>/run/ply/</code>; supervision, TLS, and load balancing are emitted config
+for systemd and Caddy — tools that already spent decades getting it right.</p>
+<h2 id="composition-vs-stacking"><a class="anchor" href="#composition-vs-stacking" aria-label="link to section">#</a>Composition vs stacking</h2>
+<p>Users declare a <em>set</em> of dependencies; overlay needs an <em>ordered stack</em> of
+directories. The resolver flattens the graph deterministically (ties broken
+by digest) so the same lockfile always produces the same stack. This is the
+inverse of Docker: there, the stack is authored at build time and baked;
+here, it&#39;s derived at run from a parts list — which is why swapping a part
+(<code>ply rebase</code>) is a metadata edit, not a rebuild cascade.</p>
+<h2 id="what-ply-refuses-to-build"><a class="anchor" href="#what-ply-refuses-to-build" aria-label="link to section">#</a>What ply refuses to build</h2>
+<p>No daemon. No registry server. No Dockerfiles. No build-cache DAG. No
+install hooks. No volume drivers. No overlay networks or multi-host
+anything. No orchestrator. No process supervisor. No proxy. No snapshots.</p>
+<p>Every &quot;no&quot; is a subsystem that cannot break at 3am, and the discipline is
+the product: ply competes with &quot;untar and run,&quot; not with Kubernetes. Think
+<em>the SQLite of containers</em> — one static binary, a file format, and the
+promise that boring things stay boring.</p>
+<h2 id="implementation-notes"><a class="anchor" href="#implementation-notes" aria-label="link to section">#</a>Implementation notes</h2>
+<p>Rust workspace (<code>ply-core</code> library + <code>ply-cli</code>), true static musl binaries
+for x64/arm64, no async runtime — a CLI that mounts filesystems needs zero
+tokio. Blocking I/O, direct syscalls, and a SQLite-grade obsession with
+determinism: deterministic squashfs, deterministic resolution, deterministic
+layer order. The integration-test registry is <code>python3 -m http.server</code> in a
+tempdir; the full resolve→fetch→verify path tests offline in milliseconds.</p>
+
+    <div class="mt-16 pt-6 border-t border-edge flex justify-between text-sm">
+      <a class="text-fade hover:text-accent" href="/docs/image-format/">← Image format &amp; store</a>
+      <a class="text-fade hover:text-accent" href="/docs/ply-vs-docker/">ply vs Docker →</a>
+    </div>
+  </main>
+</div>
+
+<footer class="border-t border-edge mt-4">
+  <div class="mx-auto max-w-7xl px-5 py-8 text-xs text-fade flex flex-wrap gap-x-6 gap-y-2">
+    <span>ply — daemonless containers</span>
+    <a href="https://plybox.sh" class="hover:text-accent">plybox.sh</a>
+    <a href="https://registry.plybox.sh" class="hover:text-accent">registry</a>
+  </div>
+</footer>
+
+<script src="/docs/docs.js" defer></script>
+</body>
+</html>

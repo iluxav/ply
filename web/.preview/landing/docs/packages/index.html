@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Making packages — ply docs</title>
+<meta name="description" content="Three ways to author ply packages — apk2pkg conversion, ply craft sessions, and plain directories.">
+<link rel="icon" type="image/svg+xml" href="/logo.svg">
+<link rel="canonical" href="https://plybox.sh/docs/packages/">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body class="bg-ground text-ink font-mono antialiased">
+
+<header class="sticky top-0 z-20 bg-ground/95 backdrop-blur border-b border-edge">
+  <div class="mx-auto max-w-7xl px-5 flex items-center justify-between h-14">
+    <div class="flex items-center gap-3">
+      <button id="menu" class="lg:hidden text-fade border border-edge px-2 py-1 text-sm" aria-label="menu">≡</button>
+      <a href="/" class="logo">ply</a>
+      <a href="/docs/" class="text-sm text-fade hover:text-accent">docs</a>
+    </div>
+    <div class="flex items-center gap-5">
+      <input id="search" type="search" placeholder="/ search docs…" autocomplete="off"
+             class="hidden sm:block w-56 border border-edge bg-card px-3 py-1.5 text-sm placeholder:text-fade focus:border-accent focus:outline-none">
+      <nav class="flex gap-5 text-sm text-fade">
+        <a href="https://registry.plybox.sh" class="hover:text-accent">registry</a>
+        <a href="https://github.com/iluxav/ply" class="hover:text-accent">github</a>
+      </nav>
+    </div>
+  </div>
+  <div id="results" class="hidden absolute left-0 right-0 top-14 border-b border-edge bg-card">
+    <div class="mx-auto max-w-7xl px-5 py-3" id="results-list"></div>
+  </div>
+</header>
+
+<div class="mx-auto max-w-7xl px-5 flex">
+  <aside id="sidebar" class="hidden lg:block w-60 shrink-0 border-r border-edge py-8 pr-2
+                             fixed lg:sticky top-14 bottom-0 lg:h-[calc(100vh-3.5rem)] overflow-y-auto bg-ground z-10">
+<div class="mb-6"><div class="px-3 mb-2 text-xs uppercase tracking-wider text-fade">Start</div><a href="/docs/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">What is ply</a>
+<a href="/docs/quickstart/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Quickstart</a></div>
+<div class="mb-6"><div class="px-3 mb-2 text-xs uppercase tracking-wider text-fade">Guides</div><a href="/docs/dependencies/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Dependencies &amp; lockfiles</a>
+<a href="/docs/registries/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Registries &amp; publishing</a>
+<a href="/docs/running/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Running &amp; scaling</a>
+<a href="/docs/volumes/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Volumes &amp; data</a>
+<a href="/docs/deploy/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Deploys, health &amp; restarts</a>
+<a href="/docs/security/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Security &amp; rootless</a>
+<a href="/docs/packages/" class="block px-3 py-1.5 text-sm text-accent border-l-2 border-accent bg-card">Making packages</a>
+<a href="/docs/docker/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Importing from Docker</a></div>
+<div class="mb-6"><div class="px-3 mb-2 text-xs uppercase tracking-wider text-fade">Reference</div><a href="/docs/manifest/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">ply.toml reference</a>
+<a href="/docs/cli/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">CLI reference</a>
+<a href="/docs/image-format/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Image format &amp; store</a></div>
+<div class="mb-6"><div class="px-3 mb-2 text-xs uppercase tracking-wider text-fade">Concepts</div><a href="/docs/architecture/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Architecture</a>
+<a href="/docs/ply-vs-docker/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">ply vs Docker</a></div>
+  </aside>
+  <main class="prose min-w-0 flex-1 py-10 lg:pl-10 max-w-3xl">
+<h1>Making packages</h1>
+<p>A ply package is an inert image: files under its own prefix plus a tiny
+manifest describing its <code>PATH</code>/<code>LD_LIBRARY_PATH</code> contributions. No install
+scripts — ever. That makes packages easy to mint.</p>
+<h2 id="apk2pkg-convert-alpine-packages"><a class="anchor" href="#apk2pkg-convert-alpine-packages" aria-label="link to section">#</a>apk2pkg — convert Alpine packages</h2>
+<p>The <code>apk2pkg</code> tool converts any Alpine package (plus its dependency
+closure) into a single self-contained ply package:</p>
+<div class="codeblock"><button class="copy" aria-label="copy">copy</button><pre><code class="hljs">apk2pkg ffmpeg --alpine 3.20 -o ./out
+<span class="hljs-comment"># → out/ffmpeg-6.1.1-linux-x64.img</span></code></pre></div>
+<p>It downloads the apk and everything it needs, vendors the closure into one
+keg (<code>/opt/ffmpeg-6.1.1/</code>), resolves Alpine&#39;s virtual <code>provides</code>
+(so things like ICU data land where binaries expect them), and emits a
+canonical, content-addressed image.</p>
+<p>Names and versions are normalized to ply&#39;s grammar: <code>g++</code> → <code>gpp</code>,
+<code>_</code> → <code>-</code>, versions padded to <code>x.y.z</code>.</p>
+<p>This is the machinery behind the <a href="https://registry.plybox.sh">official registry</a>
+— mainstream Alpine packages, pre-converted and served from a CDN, so most
+of the time you don&#39;t run apk2pkg at all.</p>
+<h2 id="ply-craft-author-interactively"><a class="anchor" href="#ply-craft-author-interactively" aria-label="link to section">#</a>ply craft — author interactively</h2>
+<p>For anything that isn&#39;t an Alpine package, <code>craft</code> turns a shell session
+into a package. The overlay upper layer <em>is</em> the layer:</p>
+<div class="codeblock"><button class="copy" aria-label="copy">copy</button><pre><code class="hljs">ply craft new --base alpine@3.20 mytools    <span class="hljs-comment"># opens a shell on the base</span>
+<span class="hljs-comment"># …inside: install things, copy files, configure…</span>
+ply craft changes mytools                   <span class="hljs-comment"># what did the session add?</span>
+ply craft commit mytools --version 0.1.0    <span class="hljs-comment"># → mytools-0.1.0-linux-x64.img</span></code></pre></div>
+<p>Sessions persist between shells (<code>ply craft shell</code>), can be listed
+(<code>ply craft ls</code>), discarded (<code>ply craft rm</code>), and — because a committed
+package is just an image — resumed anywhere from the artifact itself
+(<code>ply craft edit</code>). The result is a normal, inert, content-addressed
+package.</p>
+<h2 id="plain-directories"><a class="anchor" href="#plain-directories" aria-label="link to section">#</a>Plain directories</h2>
+<p>The lowest-tech path: an app-layer dependency can be a static binary you
+vendor straight into your app directory before <code>ply build</code>. What npm&#39;s
+<code>ffmpeg-static</code> does today needs zero ply support.</p>
+<h2 id="publishing"><a class="anchor" href="#publishing" aria-label="link to section">#</a>Publishing</h2>
+<p>However a package is made, publishing is copying a file — see
+<a href="/docs/registries/">Registries &amp; publishing</a>. Upload to GitHub Releases,
+any bucket, or a directory, add an <code>index.json</code> if you want range
+resolution, done.</p>
+
+    <div class="mt-16 pt-6 border-t border-edge flex justify-between text-sm">
+      <a class="text-fade hover:text-accent" href="/docs/security/">← Security &amp; rootless</a>
+      <a class="text-fade hover:text-accent" href="/docs/docker/">Importing from Docker →</a>
+    </div>
+  </main>
+</div>
+
+<footer class="border-t border-edge mt-4">
+  <div class="mx-auto max-w-7xl px-5 py-8 text-xs text-fade flex flex-wrap gap-x-6 gap-y-2">
+    <span>ply — daemonless containers</span>
+    <a href="https://plybox.sh" class="hover:text-accent">plybox.sh</a>
+    <a href="https://registry.plybox.sh" class="hover:text-accent">registry</a>
+  </div>
+</footer>
+
+<script src="/docs/docs.js" defer></script>
+</body>
+</html>

@@ -1,3 +1,10 @@
+---
+title: ply vs Docker
+description: An honest comparison — different mental models, where each wins, and when to use which.
+section: Concepts
+order: 31
+---
+
 # ply vs Docker
 
 An honest comparison. Short version: **Docker is a universal container platform; ply is a deliberately smaller tool for a specific shape of deployment** — one team, a handful of Linux hosts, apps that are "a runtime + some files + a port." Docker's breadth is real, and so is the cost of carrying it when you don't need it.
