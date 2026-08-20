@@ -14,20 +14,41 @@ inputs:
   upload:
     description: Upload the image to the triggering release (needs GH_TOKEN)
     default: "true"
+outputs:
+  image:
+    description: Path of the built image
+    value: ${{ steps.build.outputs.image }}
 runs:
   using: composite
   steps:
     - name: install ply
       shell: bash
-      run: curl -fsSL https://raw.githubusercontent.com/iluxav/ply/main/install.sh | sh
+      run: curl -fsSL https://plybox.sh/install.sh | sh
     - name: build image
+      id: build
       shell: bash
       run: |
         ply build "${{ inputs.dir }}"
-        ls "${{ inputs.dir }}"/*.img
+        img=$(ls -t "${{ inputs.dir }}"/*.img | head -1)
+        base=$(basename "$img")
+        # verify the canonical grammar: <name>-<semver>-<os>-<arch>.img
+        # (filename = identity claim; sources construct URLs from it)
+        if ! [[ "$base" =~ ^.+-[0-9]+\.[0-9]+\.[0-9]+-linux-(x64|arm64)\.img$ ]]; then
+          echo "::error::$base does not match <name>-<semver>-<os>-<arch>.img"
+          exit 1
+        fi
+        echo "image=$img" >> "$GITHUB_OUTPUT"
+        echo "version=$(echo "$base" | sed -E 's/^.+-([0-9]+\.[0-9]+\.[0-9]+)-linux-(x64|arm64)\.img$/\1/')" >> "$GITHUB_OUTPUT"
     - name: upload to release
       if: inputs.upload == 'true' && startsWith(github.ref, 'refs/tags/')
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
-      run: gh release upload "${GITHUB_REF_NAME}" "${{ inputs.dir }}"/*.img --clobber
+      run: |
+        # ply's github: source fetches releases/download/v{version}/{filename} —
+        # a tag that disagrees with the manifest version publishes a dead URL.
+        if [ "v${{ steps.build.outputs.version }}" != "$GITHUB_REF_NAME" ]; then
+          echo "::error::release tag $GITHUB_REF_NAME != image version v${{ steps.build.outputs.version }} — consumers fetch from releases/download/$GITHUB_REF_NAME/ and would 404"
+          exit 1
+        fi
+        gh release upload "$GITHUB_REF_NAME" "${{ steps.build.outputs.image }}" --clobber
