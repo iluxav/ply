@@ -75,7 +75,10 @@ impl Source {
     }
 
     /// Download URL for one artifact (not meaningful for Dir sources).
-    fn url_for(&self, filename: &str, version: &Version) -> String {
+    /// Http bases may contain `{package}` — the registry-per-repo layout
+    /// (`https://host/user/{package}/<file>`), the local preview of
+    /// GitHub-style user/repo coordinates.
+    fn url_for(&self, package: &str, filename: &str, version: &Version) -> String {
         match self {
             Source::Github { org, repo } => {
                 format!("https://github.com/{org}/{repo}/releases/download/v{version}/{filename}")
@@ -83,7 +86,9 @@ impl Source {
             Source::Gitlab { group, project } => format!(
                 "https://gitlab.com/{group}/{project}/-/releases/v{version}/downloads/{filename}"
             ),
-            Source::Http { base } => format!("{base}/{filename}"),
+            Source::Http { base } => {
+                format!("{}/{filename}", base.replace("{package}", package))
+            }
             Source::Dir { .. } => unreachable!("Dir sources are read directly"),
         }
     }
@@ -94,8 +99,9 @@ impl Source {
     pub fn list_versions(&self, name: &str, os: Os, arch: Arch) -> Result<Vec<Version>> {
         let filenames: Vec<String> = match self {
             Source::Dir { path } => {
-                let entries = std::fs::read_dir(path).map_err(|source| Error::Io {
-                    path: path.clone(),
+                let dir = PathBuf::from(path.to_string_lossy().replace("{package}", name));
+                let entries = std::fs::read_dir(&dir).map_err(|source| Error::Io {
+                    path: dir.clone(),
                     source,
                 })?;
                 entries
@@ -104,7 +110,7 @@ impl Source {
                     .collect()
             }
             Source::Http { base } => {
-                let url = format!("{base}/index.json");
+                let url = format!("{}/index.json", base.replace("{package}", name));
                 let body = http_get_string(&url).map_err(|e| {
                     Error::Source(format!(
                         "cannot list versions of `{name}`: fetching {url} failed ({e}) — publish an index.json (array of image filenames) or pin an exact version"
@@ -149,11 +155,12 @@ impl Source {
 
         match self {
             Source::Dir { path } => {
-                let src = path.join(&filename);
+                let src = PathBuf::from(path.to_string_lossy().replace("{package}", &image.name))
+                    .join(&filename);
                 std::fs::copy(&src, &tmp).map_err(|source| Error::Io { path: src, source })?;
             }
             _ => {
-                let url = self.url_for(&filename, &image.version);
+                let url = self.url_for(&image.name, &filename, &image.version);
                 if let Err(e) = http_get_file(&url, &tmp) {
                     let _ = std::fs::remove_file(&tmp); // no partial downloads left behind
                     return Err(Error::Source(format!("download {url} failed: {e}")));
@@ -247,7 +254,7 @@ mod tests {
         let source = Source::parse("github:org/repo", false).unwrap();
         let image = ImageName::parse("ffmpeg-6.1.0-linux-x64.img").unwrap();
         assert_eq!(
-            source.url_for(&image.to_string(), &image.version),
+            source.url_for("ffmpeg", &image.to_string(), &image.version),
             "https://github.com/org/repo/releases/download/v6.1.0/ffmpeg-6.1.0-linux-x64.img"
         );
     }

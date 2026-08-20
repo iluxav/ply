@@ -3,7 +3,7 @@
 TARGET := x86_64-unknown-linux-musl
 BIN    := target/$(TARGET)/release/ply
 
-.PHONY: check fmt build test release install uninstall
+.PHONY: check fmt build test release install uninstall web web-serve registry-catalog registry-push registry-state registry
 
 # fast feedback: fmt + clippy + tests
 check:
@@ -40,3 +40,32 @@ install-apparmor:
 uninstall:
 	sudo rm -f /usr/local/bin/ply /etc/apparmor.d/ply
 	@echo "removed /usr/local/bin/ply"
+
+# --- websites + official registry (R2 via wrangler) --------------------------
+
+# build tailwind + render registry page + push both sites
+# (plybox.sh ← web/landing, registry.plybox.sh ← web/registry)
+web:
+	./web/push.sh
+
+# preview both sites locally (landing :8180, registry :8181)
+web-serve:
+	./web/serve.sh
+
+# refresh the conversion catalog from the latest Alpine APKINDEX
+registry-catalog:
+	./scripts/apk-catalog.mjs --tier main-core -o scripts/apk2pkg.json
+
+# convert + upload the next batch of packages
+# (override: make registry-push LIMIT=500 JOBS=8)
+LIMIT ?= 100
+JOBS  ?= 7
+registry-push:
+	./scripts/registry-push.mjs --limit $(LIMIT) --jobs $(JOBS)
+
+# republish state.json + re-render the registry page, no conversions
+registry-state:
+	./scripts/registry-push.mjs --state-only
+
+# the daily job: catalog refresh + delta push
+registry: registry-catalog registry-push

@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>ply — containers, shipped like packages</title>
+    <meta name="description"
+        content="ply is a daemonless container runtime and package manager. One static binary, content-addressed images, any file host is a registry.">
+    <link rel="icon" type="image/svg+xml" href="/logo.svg">
+    <link rel="stylesheet" href="/styles.css">
+</head>
+
+<body class="bg-ground text-ink font-mono antialiased">
+
+    <div class="mx-auto max-w-5xl px-5">
+
+        <!-- nav -->
+        <header class="flex items-baseline justify-between py-4 border-b border-edge/50">
+            <div class="flex items-baseline gap-1  justify-center  items-center">
+                <a href="https://plybox.sh" class="text-lg tracking-tight logo">ply</a>
+                <span class="text-sm tracking-tight opacity-[0.7]">box</span>
+            </div>
+            <nav class="flex gap-6 text-sm text-fade">
+                <a href="https://plybox.sh" class="hover:text-accent">home</a>
+                <a href="https://github.com/iluxav/ply" class="hover:text-accent">github</a>
+            </nav>
+        </header>
+
+        <!-- hero -->
+        <section class="pt-14 pb-14">
+            <p class="text-accent text-sm mb-4">$ whatis ply</p>
+            <h1 class="text-4xl sm:text-5xl leading-tight tracking-tight text-balance">
+                Containers, shipped<br>like <span class="text-accent">packages</span>.
+            </h1>
+            <p class="mt-6 max-w-2xl text-fade leading-relaxed">
+                ply is a daemonless container runtime and package manager.
+                One static binary. Images named by what they are, pinned by sha256.
+                Dependencies declared like npm, resolved like Go, run like processes.
+            </p>
+
+            <div class="mt-10 flex flex-wrap items-center gap-4">
+                <div class="flex items-center gap-3 border border-edge bg-card px-4 py-3 text-sm">
+                    <span class="text-fade select-none">$</span>
+                    <code id="install-cmd">curl -fsSL https://plybox.sh/install.sh | sh</code>
+                    <button id="copy-btn" onclick="copyInstall()" aria-label="Copy install command"
+                        class="ml-2 text-fade hover:text-accent text-xs border border-edge px-2 py-1">copy</button>
+                </div>
+                <a href="https://github.com/iluxav/ply" class="text-sm text-accent hover:underline">source →</a>
+            </div>
+        </section>
+
+        <!-- terminal demo -->
+        <section class="pb-20">
+            <div class="border border-edge bg-card">
+                <div class="flex items-center gap-2 border-b border-edge px-4 py-2 text-xs text-fade">
+                    <span class="size-2 rounded-full bg-edge"></span>
+                    <span class="size-2 rounded-full bg-edge"></span>
+                    <span class="size-2 rounded-full bg-deep"></span>
+                    <span class="ml-2">~/api</span>
+                </div>
+                <pre class="overflow-x-auto p-5 text-sm leading-7"><code><span class="text-fade">$</span> ply build .
+<span class="text-fade">locked</span> alpine 3.20.7, python3 3.12.13, jq 1.7.1
+<span class="text-fade">built</span>  api-0.1.0-linux-x64.img <span class="text-fade">(18.2 MiB)</span>
+<span class="text-fade">$</span> ply run api --scale 3
+<span class="text-accent">✓</span> api ×3 · healthy · 10.77.0.2-4
+<span class="text-fade">$</span> ply deploy api
+<span class="text-accent">✓</span> rolled 3/3, health-gated, zero downtime</code></pre>
+            </div>
+        </section>
+
+        <!-- features -->
+        <section class="pb-20">
+            <p class="text-accent text-sm mb-6">$ ply --features</p>
+            <div class="grid gap-px bg-edge border border-edge sm:grid-cols-2 lg:grid-cols-3">
+                <div class="bg-ground p-6">
+                    <h3 class="text-sm mb-2">no daemon</h3>
+                    <p class="text-sm text-fade leading-relaxed">Containers are plain child processes. Nothing resident,
+                        nothing to babysit, no socket owning your machine.</p>
+                </div>
+                <div class="bg-ground p-6">
+                    <h3 class="text-sm mb-2">content-addressed</h3>
+                    <p class="text-sm text-fade leading-relaxed">Filenames claim identity, hashes prove it. <code
+                            class="text-ink">ply.lock</code> pins every dependency to a sha256 — same lock, same bytes.
+                    </p>
+                </div>
+                <div class="bg-ground p-6">
+                    <h3 class="text-sm mb-2">any host is a registry</h3>
+                    <p class="text-sm text-fade leading-relaxed">GitHub Releases, an R2 bucket, a plain directory. Fetch
+                        is construct URL → GET → verify hash. Zero API.</p>
+                </div>
+                <div class="bg-ground p-6">
+                    <h3 class="text-sm mb-2">deterministic deps</h3>
+                    <p class="text-sm text-fade leading-relaxed">Semver ranges resolved by minimal version selection. No
+                        dependency hell, no surprise upgrades.</p>
+                </div>
+                <div class="bg-ground p-6">
+                    <h3 class="text-sm mb-2">rootless &amp; hardened</h3>
+                    <p class="text-sm text-fade leading-relaxed">Security tiers, seccomp, cgroups, per-app network
+                        namespaces. Runs rootful or rootless.</p>
+                </div>
+                <div class="bg-ground p-6">
+                    <h3 class="text-sm mb-2">built for prod</h3>
+                    <p class="text-sm text-fade leading-relaxed">Health gates, restart policies, <code
+                            class="text-ink">ply deploy</code> rolls, systemd &amp; load-balancer emitters.</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- manifest example -->
+        <section class="pb-20 grid gap-8 lg:grid-cols-2 lg:items-start">
+            <div>
+                <p class="text-accent text-sm mb-6">$ cat ply.toml</p>
+                <div class="border border-edge bg-card">
+                    <pre class="overflow-x-auto p-5 text-sm leading-7"><code><span class="text-fade">[package]</span>
+name = <span class="text-accent">"api"</span>
+version = <span class="text-accent">"0.1.0"</span>
+entrypoint = [<span class="text-accent">"python3"</span>, <span class="text-accent">"server.py"</span>]
+
+<span class="text-fade">[dependencies]</span>
+base = <span class="text-accent">"alpine@3.20"</span>
+python3 = <span class="text-accent">"3.12"</span>
+jq = <span class="text-accent">"1.7"</span>
+
+<span class="text-fade">[sources]</span>
+default = <span class="text-accent">"https://registry.plybox.sh/ply/{package}"</span></code></pre>
+                </div>
+            </div>
+            <div class="lg:pt-12">
+                <p class="text-sm text-fade leading-relaxed">
+                    The manifest is human intent; the lockfile is machine truth.
+                    <code class="text-ink">ply build</code> resolves ranges to exact versions,
+                    pins hashes, and produces a single <code class="text-ink">.img</code> you can
+                    run anywhere — or publish by copying the file to any host you control.
+                </p>
+                <p class="mt-6 text-sm text-fade leading-relaxed">
+                    The official registry mirrors mainstream Alpine packages as ready-to-use
+                    images, served from a global CDN. Append-only: a version, once published,
+                    never changes.
+                </p>
+                <p class="mt-8 text-sm">
+                    <a href="https://registry.plybox.sh" class="text-accent hover:underline">
+                        browse <span id="pkg-count"></span>packages on the registry →
+                    </a>
+                </p>
+            </div>
+        </section>
+
+        <footer class="border-t border-edge py-8 text-xs text-fade flex flex-wrap gap-x-6 gap-y-2">
+            <span>ply — daemonless containers</span>
+            <a href="https://registry.plybox.sh" class="hover:text-accent">registry.plybox.sh</a>
+            <a href="https://github.com/iluxav/ply" class="hover:text-accent">github.com/iluxav/ply</a>
+        </footer>
+
+    </div>
+
+    <script>
+        function copyInstall() {
+            navigator.clipboard.writeText(document.getElementById("install-cmd").textContent).then(() => {
+                const b = document.getElementById("copy-btn");
+                b.textContent = "copied";
+                setTimeout(() => { b.textContent = "copy"; }, 1500);
+            });
+        }
+        // Live package count — needs a CORS rule on the registry bucket; silently
+        // degrades to plain "packages" text if blocked.
+        fetch("https://registry.plybox.sh/state.json")
+            .then((r) => r.ok ? r.json() : null)
+            .then((s) => { if (s) document.getElementById("pkg-count").textContent = s.package_count + " "; })
+            .catch(() => { });
+    </script>
+</body>
+
+</html>

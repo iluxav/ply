@@ -312,6 +312,26 @@ fn unpack_apk(reader: impl Read, dest: &Path) -> Result<()> {
         entry
             .unpack_in(dest)
             .with_context(|| format!("unpack {}", path.display()))?;
+        // Some packages ship entries their own unpacker can't work with as
+        // non-root: read-only dirs (bluez: /etc/bluetooth is 0555) break
+        // unpacking the files inside, and unreadable files (haserl-lua5.4 is
+        // ---s--x--x) break the keg build that must read them. Keep owner
+        // rwx on dirs and owner read on files — root in the container
+        // bypasses modes anyway.
+        let widen = match entry.header().entry_type() {
+            tar::EntryType::Directory => 0o700,
+            tar::EntryType::Regular => 0o400,
+            _ => 0,
+        };
+        if widen != 0 {
+            if let Ok(mode) = entry.header().mode() {
+                if mode & widen != widen {
+                    use std::os::unix::fs::PermissionsExt;
+                    let widened = std::fs::Permissions::from_mode(mode | widen);
+                    let _ = std::fs::set_permissions(dest.join(&path), widened);
+                }
+            }
+        }
     }
     Ok(())
 }

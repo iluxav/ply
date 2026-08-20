@@ -131,9 +131,11 @@ Pre-1.0: format and CLI may still change. See `TASKS.md` for the roadmap.
 ```sh
 make check      # fmt + clippy -D warnings + tests
 make install    # build static musl binary → /usr/local/bin/ply
-./dummy_registry/build.sh   # build alpine/node/caddy packages into a local registry
-./dummy_registry/serve.sh   # serve it at http://127.0.0.1:8321
 ```
+
+Demos resolve from the official registry at
+`https://registry.plybox.sh` (see `scripts/apk-catalog.mjs` and
+`scripts/registry-push.mjs` for the publish pipeline).
 
 The integration tests spin a fake registry with `python3 -m http.server` and
 run the full resolve→fetch→verify path offline in milliseconds.
