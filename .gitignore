@@ -6,5 +6,7 @@ AGENTS.md
 /demo-web-app
 /demos
 .wrangler
-/docs
 /web/node_modules
+/scripts/.push-work
+/scripts/.tmp-report
+/scripts/apk2pkg.json
