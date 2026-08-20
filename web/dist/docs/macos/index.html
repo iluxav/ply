@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Making packages — ply docs</title>
-<meta name="description" content="Three ways to author ply packages — apk2pkg conversion, ply craft sessions, and plain directories.">
+<title>ply on macOS — ply docs</title>
+<meta name="description" content="Run ply on a Mac today with Lima — a lightweight Linux VM with automatic file sharing and port forwarding.">
 <link rel="icon" type="image/svg+xml" href="/logo.svg">
-<link rel="canonical" href="https://plybox.sh/docs/packages/">
+<link rel="canonical" href="https://plybox.sh/docs/macos/">
 <link rel="stylesheet" href="/styles.css">
 </head>
 <body class="bg-ground text-ink font-mono antialiased">
@@ -43,9 +43,9 @@
 <a href="/docs/volumes/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Volumes &amp; data</a>
 <a href="/docs/deploy/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Deploys, health &amp; restarts</a>
 <a href="/docs/security/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Security &amp; rootless</a>
-<a href="/docs/packages/" class="block px-3 py-1.5 text-sm text-accent border-l-2 border-accent bg-card">Making packages</a>
+<a href="/docs/packages/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Making packages</a>
 <a href="/docs/docker/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Importing from Docker</a>
-<a href="/docs/macos/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">ply on macOS</a></div>
+<a href="/docs/macos/" class="block px-3 py-1.5 text-sm text-accent border-l-2 border-accent bg-card">ply on macOS</a></div>
 <div class="mb-6"><div class="px-3 mb-2 text-xs uppercase tracking-wider text-fade">Reference</div><a href="/docs/manifest/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">ply.toml reference</a>
 <a href="/docs/cli/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">CLI reference</a>
 <a href="/docs/image-format/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Image format &amp; store</a></div>
@@ -53,49 +53,47 @@
 <a href="/docs/ply-vs-docker/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">ply vs Docker</a></div>
   </aside>
   <main class="prose min-w-0 flex-1 py-10 lg:pl-10 max-w-3xl">
-<h1>Making packages</h1>
-<p>A ply package is an inert image: files under its own prefix plus a tiny
-manifest describing its <code>PATH</code>/<code>LD_LIBRARY_PATH</code> contributions. No install
-scripts — ever. That makes packages easy to mint.</p>
-<h2 id="apk2pkg-convert-alpine-packages"><a class="anchor" href="#apk2pkg-convert-alpine-packages" aria-label="link to section">#</a>apk2pkg — convert Alpine packages</h2>
-<p>The <code>apk2pkg</code> tool converts any Alpine package (plus its dependency
-closure) into a single self-contained ply package:</p>
-<div class="codeblock"><button class="copy" aria-label="copy">copy</button><pre><code class="hljs">apk2pkg ffmpeg --alpine 3.20 -o ./out
-<span class="hljs-comment"># → out/ffmpeg-6.1.1-linux-x64.img</span></code></pre></div>
-<p>It downloads the apk and everything it needs, vendors the closure into one
-keg (<code>/opt/ffmpeg-6.1.1/</code>), resolves Alpine&#39;s virtual <code>provides</code>
-(so things like ICU data land where binaries expect them), and emits a
-canonical, content-addressed image.</p>
-<p>Names and versions are normalized to ply&#39;s grammar: <code>g++</code> → <code>gpp</code>,
-<code>_</code> → <code>-</code>, versions padded to <code>x.y.z</code>.</p>
-<p>This is the machinery behind the <a href="https://registry.plybox.sh">official registry</a>
-— mainstream Alpine packages, pre-converted and served from a CDN, so most
-of the time you don&#39;t run apk2pkg at all.</p>
-<h2 id="ply-craft-author-interactively"><a class="anchor" href="#ply-craft-author-interactively" aria-label="link to section">#</a>ply craft — author interactively</h2>
-<p>For anything that isn&#39;t an Alpine package, <code>craft</code> turns a shell session
-into a package. The overlay upper layer <em>is</em> the layer:</p>
-<div class="codeblock"><button class="copy" aria-label="copy">copy</button><pre><code class="hljs">ply craft new --base alpine@3.20 mytools    <span class="hljs-comment"># opens a shell on the base</span>
-<span class="hljs-comment"># …inside: install things, copy files, configure…</span>
-ply craft changes mytools                   <span class="hljs-comment"># what did the session add?</span>
-ply craft commit mytools --version 0.1.0    <span class="hljs-comment"># → mytools-0.1.0-linux-x64.img</span></code></pre></div>
-<p>Sessions persist between shells (<code>ply craft shell</code>), can be listed
-(<code>ply craft ls</code>), discarded (<code>ply craft rm</code>), and — because a committed
-package is just an image — resumed anywhere from the artifact itself
-(<code>ply craft edit</code>). The result is a normal, inert, content-addressed
-package.</p>
-<h2 id="plain-directories"><a class="anchor" href="#plain-directories" aria-label="link to section">#</a>Plain directories</h2>
-<p>The lowest-tech path: an app-layer dependency can be a static binary you
-vendor straight into your app directory before <code>ply build</code>. What npm&#39;s
-<code>ffmpeg-static</code> does today needs zero ply support.</p>
-<h2 id="publishing"><a class="anchor" href="#publishing" aria-label="link to section">#</a>Publishing</h2>
-<p>However a package is made, publishing is copying a file — see
-<a href="/docs/registries/">Registries &amp; publishing</a>. Upload to GitHub Releases,
-any bucket, or a directory, add an <code>index.json</code> if you want range
-resolution, done.</p>
+<h1>ply on macOS</h1>
+<p>ply&#39;s runtime is built on Linux kernel primitives (namespaces, overlayfs,
+cgroups), so it doesn&#39;t run natively on macOS. The practical path today is
+<a href="https://lima-vm.io">Lima</a> — a lightweight Linux VM manager built on
+Apple&#39;s Virtualization framework, with two touches that make it feel
+native: your home directory is shared into the VM automatically, and ports
+the guest binds are forwarded to the Mac.</p>
+<h2 id="setup-once"><a class="anchor" href="#setup-once" aria-label="link to section">#</a>Setup (once)</h2>
+<div class="codeblock"><button class="copy" aria-label="copy">copy</button><pre><code class="hljs">brew install lima
+limactl start          <span class="hljs-comment"># boots a default Ubuntu VM</span>
+lima <span class="hljs-built_in">sudo</span> ply setup    <span class="hljs-comment"># after installing ply inside — see below</span></code></pre></div>
+<p>Install ply inside the VM:</p>
+<div class="codeblock"><button class="copy" aria-label="copy">copy</button><pre><code class="hljs">lima bash -c <span class="hljs-string">&#x27;curl -fsSL https://plybox.sh/install.sh | sh&#x27;</span></code></pre></div>
+<h2 id="daily-use"><a class="anchor" href="#daily-use" aria-label="link to section">#</a>Daily use</h2>
+<p>Prefix any ply command with <code>lima</code> — it runs inside the VM, in your
+current directory (shared automatically):</p>
+<div class="codeblock"><button class="copy" aria-label="copy">copy</button><pre><code class="hljs"><span class="hljs-built_in">cd</span> ~/code/myapp
+lima ply build .
+lima ply run myapp-0.1.0-linux-x64.img</code></pre></div>
+<p>The app&#39;s port is forwarded, so <code>curl localhost:3000</code> works from the Mac.
+Or open a shell and forget the Mac side exists:</p>
+<div class="codeblock"><button class="copy" aria-label="copy">copy</button><pre><code class="hljs">lima          <span class="hljs-comment"># → a Linux shell, ply installed, your files present</span></code></pre></div>
+<h2 id="notes"><a class="anchor" href="#notes" aria-label="link to section">#</a>Notes</h2>
+<ul>
+<li>The VM is x86_64 or arm64 to match your Mac — on Apple Silicon you&#39;ll
+run <code>linux-arm64</code> images. Build for your servers&#39; architecture in CI
+(the <a href="/docs/registries/">GitHub Action</a> does this for free on x64
+runners).</li>
+<li><code>limactl stop default</code> frees the VM&#39;s memory when you&#39;re done;
+<code>limactl start</code> brings it back.</li>
+<li>Windows: use WSL2 — it&#39;s a real Linux kernel, and ply runs in it
+directly with no extra tooling.</li>
+</ul>
+<h2 id="the-future"><a class="anchor" href="#the-future" aria-label="link to section">#</a>The future</h2>
+<p>A native <code>ply run</code> on macOS — no resident VM, a disposable microVM per
+instance — is designed (see <code>docs/ply-vm.md</code> in the repo) but not
+scheduled. Lima is the recommended path until then.</p>
 
     <div class="mt-16 pt-6 border-t border-edge flex justify-between text-sm">
-      <a class="text-fade hover:text-accent" href="/docs/security/">← Security &amp; rootless</a>
-      <a class="text-fade hover:text-accent" href="/docs/docker/">Importing from Docker →</a>
+      <a class="text-fade hover:text-accent" href="/docs/docker/">← Importing from Docker</a>
+      <a class="text-fade hover:text-accent" href="/docs/manifest/">ply.toml reference →</a>
     </div>
   </main>
 </div>
