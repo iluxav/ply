@@ -49,7 +49,7 @@ An honest comparison. Short version: **Docker is a universal container platform;
 
 **Platform reach.** Docker Desktop covers macOS and Windows; ply is Linux-only by scope (macOS dev means a VM or remote host).
 
-**Compose and orchestration on-ramps.** `docker compose up` for multi-service dev environments is genuinely excellent, and the same images carry to Kubernetes when you outgrow a host. ply deliberately stops at one host — if you need overlay networks, service discovery across machines, or an orchestrator, ply's answer is "that's not this tool."
+**Compose and orchestration on-ramps.** `docker compose up` for multi-service dev environments is genuinely excellent, and the same images carry to Kubernetes when you outgrow a host. ply deliberately stops at one host — if you need overlay networks, service discovery across hosts, or an orchestrator, ply's answer is "that's not this tool."
 
 **Build caching for slow builds.** Docker's layer cache (and BuildKit's graph) shines when builds are expensive — big compiles, multi-stage toolchains. ply has no build cache by design; it assumes your own toolchain (`npm run build`, `cargo build`) produced the files and packaging them is cheap. True for most server apps, not for all.
 

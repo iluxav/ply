@@ -30,7 +30,7 @@ ssh server ply run myapp-0.1.0-linux-x64.img
 ```
 
 No Dockerfile, no daemon, no `docker push`. Dependencies are fetched by
-content hash on first run and shared across every app on the machine.
+content hash on first run and shared across every app on the host.
 
 ## Install
 
@@ -89,7 +89,7 @@ default = "https://artifacts.example.com/ply"     # or github:org/repo, file:///
   self-sufficient ply image — the one-way ecosystem bridge.
 - **`ply craft`** authors packages interactively: shell into a base,
   `apk add` what you need, `ply craft commit` packs the diff as a package.
-  `ply craft edit pkg.img` resumes the session on any machine — the image
+  `ply craft edit pkg.img` resumes the session on any host — the image
   *is* the state.
 - **`ply bundle`** flattens an app + closure into one fat image for
   airgapped deploys (zero fetches at run).
@@ -107,7 +107,7 @@ ply gc                        # store prune: reachability = lockfiles
 ply check app.img --against policy.toml   # fleet runtime policy, pure function, CI-able
 ```
 
-`rm -rf /var/lib/ply` is a factory reset. Nothing else on the machine is
+`rm -rf /var/lib/ply` is a factory reset. Nothing else on the host is
 ever touched.
 
 ## What ply deliberately does NOT build

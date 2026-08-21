@@ -83,7 +83,7 @@ systemctl enable --now myapp
 ## CI-driven deployment
 
 Because a deploy is `scp` + one command over SSH, GitHub Actions can drive
-the whole thing — build on release, push the image to your server, roll
+the whole thing — build on release, push the image to your host, roll
 with health gates, verify with `ply ps --json`. Dedicated `ply push` /
 `ply status` / `ply rollback` verbs for exactly this workflow are on the
 roadmap.

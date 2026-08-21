@@ -49,7 +49,7 @@ lima          # → a Linux shell, ply installed, your files present
 ## Notes
 
 - The VM is x86_64 or arm64 to match your Mac — on Apple Silicon you'll
-  run `linux-arm64` images. Build for your servers' architecture in CI
+  run `linux-arm64` images. Build for your hosts' architecture in CI
   (the [GitHub Action](/docs/registries/) does this for free on x64
   runners).
 - `limactl stop default` frees the VM's memory when you're done;

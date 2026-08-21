@@ -84,7 +84,7 @@ ply stats         # live CPU / memory / net per instance, no agent
 ply exec hello sh # shell into a running instance
 ```
 
-## Deploy to a server
+## Deploy to a host
 
 An image is a file. That's the whole story:
 

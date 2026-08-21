@@ -50,3 +50,4 @@ process, and your app runs as an ordinary child process. `Ctrl-C` stops it.
 - [Dependencies & lockfiles](/docs/dependencies/) — how resolution works
 - [Registries & publishing](/docs/registries/) — shipping images anywhere
 - [ply vs Docker](/docs/ply-vs-docker/) — an honest comparison
+- [Glossary](/docs/glossary/) — the words ply uses, and the ones it bans
