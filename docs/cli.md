@@ -27,6 +27,7 @@ Pure function — wire it into CI.
 
 ```sh
 ply run IMAGE [--scale N] [-e K=V]… [--env-file F] [--link HOST:CONTAINER]
+             [--publish PORT[:INSTANCE_PORT]]   # parent binds the host port, L4-balances the pool
 ```
 Foreground, signals work, exit code propagates.
 

@@ -49,6 +49,26 @@ ply lb myapp --format nginx      # one app's backend pool
 
 Instances of the same app round-robin automatically in the emitted config.
 
+## Publishing a pool
+
+```sh
+ply run --publish 3100 --scale 4 myapp.img     # host:3100 → the pool
+ply run --publish 80:3100 --scale 4 myapp.img  # host:80 → instances' :3100
+```
+
+`--publish` is the explicit exception to "ports are labels": the run parent
+binds the host port and L4-balances TCP connections across its instances.
+It needs no discovery and no reloads — the parent forked the instances, so
+the backend set follows launches, crashes, and rolling deploys by
+construction; an unreachable backend is skipped per connection.
+
+Rootless bonus: `--publish` makes `--scale` work without root. Instances
+share the host network, so each one receives its own loopback `PORT`
+(injected env) and the parent balances the published port across them.
+
+The line it never crosses: TCP only. Hostnames, TLS, HTTP — that's the
+edge's job (`ply proxy`); publishing is port exposure, not a proxy.
+
 ## Environment
 
 Composition order (last wins): package contributions → manifest `[env]` →

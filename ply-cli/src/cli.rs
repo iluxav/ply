@@ -139,6 +139,12 @@ pub struct RunArgs {
     /// Bind-mount a host path into the instance (dev mode), HOST:CONTAINER
     #[arg(long, value_name = "HOST:CONTAINER")]
     pub link: Vec<String>,
+
+    /// Expose the pool on a real host port: the run parent binds it and
+    /// L4-balances connections across instances (TCP only — hostnames and
+    /// TLS are the edge's job). PORT, or HOST_PORT:INSTANCE_PORT.
+    #[arg(long, value_name = "PORT[:INSTANCE_PORT]")]
+    pub publish: Option<String>,
 }
 
 #[derive(Args)]

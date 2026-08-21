@@ -5,6 +5,7 @@ pub mod hosts;
 pub mod loopdev;
 pub mod mount;
 pub mod network;
+pub mod publish;
 pub mod run;
 pub mod security;
 pub mod state;

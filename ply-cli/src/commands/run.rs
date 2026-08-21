@@ -26,12 +26,19 @@ pub fn exec(args: RunArgs) -> Result<()> {
         cli_env.push((k.to_string(), v.to_string()));
     }
 
+    let publish = args
+        .publish
+        .as_deref()
+        .map(ply_core::runtime::publish::parse_publish)
+        .transpose()?;
+
     let code = run(&RunOptions {
         image: args.image,
         cli_env,
         allow_insecure: true, // lockfile digests pin content; run never resolves
         scale: args.scale,
         links,
+        publish,
     })?;
     std::process::exit(code);
 }

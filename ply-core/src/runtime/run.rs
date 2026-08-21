@@ -31,6 +31,16 @@ pub struct RunOptions {
     /// Dev-mode bind mounts: (host path, container path). Same mechanism
     /// as volumes.
     pub links: Vec<(PathBuf, String)>,
+    /// `--publish`: the parent binds this host port and L4-balances the pool.
+    pub publish: Option<crate::runtime::publish::Publish>,
+}
+
+/// Live wiring for a published pool, threaded through instance launches.
+struct PublishWiring {
+    pool: crate::runtime::publish::Pool,
+    /// Rootful backend port (instances serve it on their bridge IPs).
+    /// Rootless instances get an allocated loopback port instead.
+    instance_port: u16,
 }
 
 pub fn run(opts: &RunOptions) -> Result<i32> {
@@ -57,6 +67,44 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
 
     let store = Store::open_default()?;
     let mut ctx = prepare_app(&opts.image, &opts.cli_env, opts.allow_insecure, &store)?;
+
+    match rootless_scale_guard(
+        rootless,
+        opts.scale,
+        !ctx.manifest.ports.is_empty(),
+        opts.publish.is_some(),
+    ) {
+        ScaleGuard::Refuse(msg) => return Err(Error::Runtime(msg.into())),
+        ScaleGuard::Warn(msg) => eprintln!("ply: warning: {msg}"),
+        ScaleGuard::Ok => {}
+    }
+
+    // --publish: claim the host port BEFORE anything starts (fail fast on a
+    // taken port), then serve the pool from a dedicated accept thread. The
+    // pool map follows the instance lifecycle via launch/Drop.
+    let publishing = match opts.publish {
+        Some(spec) => {
+            let listener = crate::runtime::publish::bind(spec.host_port)?;
+            let pool = crate::runtime::publish::Pool::new();
+            let serve_pool = pool.clone();
+            std::thread::spawn(move || crate::runtime::publish::serve(listener, serve_pool));
+            eprintln!(
+                "ply: publishing 0.0.0.0:{} → {} pool{}",
+                spec.host_port,
+                ctx.manifest.package.name,
+                if rootless {
+                    " (rootless: each instance gets its own injected PORT)"
+                } else {
+                    ""
+                }
+            );
+            Some(PublishWiring {
+                pool,
+                instance_port: spec.instance_port,
+            })
+        }
+        None => None,
+    };
 
     if !rootless {
         network::ensure_bridge()?;
@@ -117,7 +165,15 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
 
     let mut instances: Vec<Instance> = Vec::new();
     for _ in 0..opts.scale.max(1) {
-        let instance = launch_instance(&ctx, &opts.links, &store, rootless, None, 0)?;
+        let instance = launch_instance(
+            &ctx,
+            &opts.links,
+            &store,
+            rootless,
+            None,
+            0,
+            publishing.as_ref(),
+        )?;
         let sig_idx = register_child(instance.child.as_raw());
         slots.insert(
             instance.n,
@@ -213,6 +269,7 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                 rootless,
                 Some(slot),
                 info.restarts,
+                publishing.as_ref(),
             ) {
                 Ok(instance) => {
                     update_child(info.sig_idx, instance.child.as_raw());
@@ -273,19 +330,26 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                 stop_instance(old_instance);
 
                 let restarts = slots.get(&slot).map(|s| s.restarts).unwrap_or(0);
-                let outcome =
-                    launch_instance(&ctx, &opts.links, &store, rootless, Some(slot), restarts)
-                        .and_then(|instance| {
-                            if wait_healthy(&ctx, &instance) {
-                                Ok(instance)
-                            } else {
-                                let app = instance.app.clone();
-                                stop_instance(instance);
-                                Err(Error::Runtime(format!(
-                                    "{app}.{slot} failed its health gate"
-                                )))
-                            }
-                        });
+                let outcome = launch_instance(
+                    &ctx,
+                    &opts.links,
+                    &store,
+                    rootless,
+                    Some(slot),
+                    restarts,
+                    publishing.as_ref(),
+                )
+                .and_then(|instance| {
+                    if wait_healthy(&ctx, &instance) {
+                        Ok(instance)
+                    } else {
+                        let app = instance.app.clone();
+                        stop_instance(instance);
+                        Err(Error::Runtime(format!(
+                            "{app}.{slot} failed its health gate"
+                        )))
+                    }
+                });
                 match outcome {
                     Ok(instance) => {
                         if let Some(info) = slots.get_mut(&slot) {
@@ -324,6 +388,7 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                             rootless,
                             Some(slot),
                             restarts,
+                            publishing.as_ref(),
                         ) {
                             Ok(instance) => {
                                 if let Some(info) = slots.get_mut(&slot) {
@@ -554,10 +619,16 @@ struct Instance {
     child: Pid,
     _cgroup: Option<Cgroup>,
     guard: InstanceGuard,
+    /// Published pool this instance is registered in (removed on Drop, so
+    /// every stop path — death, roll, shutdown — also stops traffic).
+    pool: Option<crate::runtime::publish::Pool>,
 }
 
 impl Drop for Instance {
     fn drop(&mut self) {
+        if let Some(pool) = &self.pool {
+            pool.remove(self.n);
+        }
         let _ = hosts::remove_entry(&self.app, self.n);
         InstanceState::remove(&self.app, self.n);
         let _ = &self.guard; // unmounts layers, removes instance dir
@@ -571,6 +642,7 @@ fn launch_instance(
     rootless: bool,
     slot: Option<u32>,
     restarts: u32,
+    publish: Option<&PublishWiring>,
 ) -> Result<Instance> {
     let manifest = &ctx.manifest;
     let entrypoint = &ctx.entrypoint;
@@ -667,6 +739,21 @@ fn launch_instance(
             }
         }
     }
+    // Published rootless pool: instances share the host netns, so each one
+    // gets its own loopback port, injected as PORT (the parent LBs across
+    // them). Overrides any manifest/CLI PORT — with --publish the parent
+    // owns the externally visible port.
+    let injected_port = match (publish, rootless) {
+        (Some(_), true) => {
+            let port = crate::runtime::publish::allocate_loopback_port()?;
+            match spec_env.iter_mut().find(|(k, _)| k == "PORT") {
+                Some(pair) => pair.1 = port.to_string(),
+                None => spec_env.push(("PORT".into(), port.to_string())),
+            }
+            Some(port)
+        }
+        _ => None,
+    };
     let spec = ContainerSpec {
         layers,
         instance_dir: instance_dir.clone(),
@@ -758,12 +845,24 @@ fn launch_instance(
     let _ = nix::unistd::write(&sync_tx, &[1u8]);
     drop(sync_tx);
 
+    // Join the published pool: rootful backends live on the bridge at the
+    // shared instance port; rootless ones on their injected loopback port.
+    let pool = publish.map(|wiring| {
+        let backend = match injected_port {
+            Some(port) => std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+            None => std::net::SocketAddr::from((ip, wiring.instance_port)),
+        };
+        wiring.pool.insert(n, backend);
+        wiring.pool.clone()
+    });
+
     Ok(Instance {
         app: app.clone(),
         n,
         child,
         _cgroup: cgroup,
         guard,
+        pool,
     })
 }
 
@@ -915,4 +1014,79 @@ pub fn parse_env_file(path: &Path) -> Result<Vec<(String, String)>> {
         pairs.push((k.trim().to_string(), v.to_string()));
     }
     Ok(pairs)
+}
+
+/// Can `--scale N` work in this mode? Rootless instances share the host
+/// network namespace (no per-instance IPs without root), so N > 1 instances
+/// of a port-binding app all race for the same port and N-1 crash with
+/// EADDRINUSE. Refuse up front when the manifest declares ports; warn when
+/// it doesn't (the app may still bind something undeclared).
+enum ScaleGuard {
+    Ok,
+    Warn(&'static str),
+    Refuse(&'static str),
+}
+
+fn rootless_scale_guard(rootless: bool, scale: u32, has_ports: bool, publish: bool) -> ScaleGuard {
+    match (rootless, scale, has_ports, publish) {
+        // --publish makes the parent the listener and gives every rootless
+        // instance its own injected loopback PORT — no collision left.
+        (_, _, _, true) | (false, _, _, _) | (true, 0 | 1, _, _) => ScaleGuard::Ok,
+        (true, _, true, false) => ScaleGuard::Refuse(
+            "rootless instances share the host network, so every instance would bind the same declared port (EADDRINUSE for all but the first).\n\
+             publish the pool through the parent:  ply run --publish <port> --scale N …\n\
+             or run it rootful for per-instance IPs:  sudo ply run --scale N …\n\
+             or stay rootless with --scale 1",
+        ),
+        (true, _, false, false) => ScaleGuard::Warn(
+            "rootless instances share the host network — if these instances bind the same port they will collide (per-instance IPs need root, or use --publish)",
+        ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rootful_and_single_instance_pass() {
+        assert!(matches!(
+            rootless_scale_guard(false, 8, true, false),
+            ScaleGuard::Ok
+        ));
+        assert!(matches!(
+            rootless_scale_guard(true, 1, true, false),
+            ScaleGuard::Ok
+        ));
+    }
+
+    #[test]
+    fn publish_lifts_the_rootless_scale_refusal() {
+        assert!(matches!(
+            rootless_scale_guard(true, 4, true, true),
+            ScaleGuard::Ok
+        ));
+        assert!(matches!(
+            rootless_scale_guard(true, 4, false, true),
+            ScaleGuard::Ok
+        ));
+    }
+
+    #[test]
+    fn rootless_scale_with_declared_ports_refuses() {
+        let ScaleGuard::Refuse(msg) = rootless_scale_guard(true, 4, true, false) else {
+            panic!("expected refusal");
+        };
+        assert!(msg.contains("EADDRINUSE"));
+        assert!(msg.contains("sudo ply run"));
+        assert!(msg.contains("--publish"));
+    }
+
+    #[test]
+    fn rootless_scale_without_ports_warns() {
+        assert!(matches!(
+            rootless_scale_guard(true, 4, false, false),
+            ScaleGuard::Warn(_)
+        ));
+    }
 }

@@ -46,6 +46,7 @@ exit codes, and restarts.
 | Term | Meaning |
 |---|---|
 | **pool** | an app's running instances as a traffic target — what `ply lb` emits backends for |
+| **publish** | expose a pool on a real host port: `ply run --publish` makes the run parent bind it and L4-balance the pool (the explicit exception to "ports are labels") |
 | **edge** | the proxy app (e.g. Caddy) fronting pools; ply emits its config and never proxies itself |
 | **host** | one machine running ply |
 | **fleet** | the declared list of hosts — an inventory file, not a membership protocol |
