@@ -15,7 +15,7 @@ use crate::image::name::{Arch, ImageName, Os};
 use crate::image::read::MANIFEST_PATH;
 use crate::image::squashfs::{write_image, ExtraFile, TreeSource};
 use crate::lockfile::{LockedPackage, Lockfile};
-use crate::manifest::{Dependency, Manifest, Package};
+use crate::manifest::{Base, Manifest, Package};
 use crate::resolve::Resolver;
 use crate::runtime::container::{child_main, ContainerSpec};
 use crate::runtime::{loopdev, mount};
@@ -140,15 +140,12 @@ pub fn edit(image: &Path, source_override: Option<&str>, allow_insecure: bool) -
             "craft session `{name}` already exists locally — `ply craft rm {name}` first (or continue it with `ply craft shell {name}`)"
         )));
     }
-    let mut deps = manifest.dependencies.iter();
-    let (Some((alias, dep)), None) = (deps.next(), deps.next()) else {
+    let Some(spec) = manifest.base_dep() else {
         return Err(Error::Runtime(format!(
-            "{}: craft edit needs a package with exactly one dependency (its base) — this one has {}",
-            image.display(),
-            manifest.dependencies.len()
+            "{}: craft edit needs a package that records its base (`[package] base = …`) — this one doesn't (rebuild or re-commit it with a current ply)",
+            image.display()
         )));
     };
-    let spec = dep.spec(alias);
     let source_spec = source_override
         .map(str::to_string)
         .or(spec.source.clone())
@@ -387,32 +384,24 @@ pub fn commit(name: &str, version: &Version, output: Option<&Path>) -> Result<Co
     let session = CraftSession::load(name)?;
     let rw = session_dir(name).join("rw");
 
-    // Package manifest: the session's --from becomes [dependencies].
-    let dep_value = if session.from_package == session.from_constraint {
-        session.from_constraint.clone()
-    } else {
-        format!("{}@{}", session.from_package, session.from_constraint)
-    };
-    let mut dependencies = std::collections::BTreeMap::new();
-    dependencies.insert(
-        session.from_package.clone(),
-        Dependency::Detailed {
-            source: Some(session.from_source.clone()),
-            version: dep_value,
-        },
-    );
+    // Package manifest: the session's --from becomes `[package] base`, so
+    // `craft edit` can resume from the artifact alone.
     let manifest = Manifest {
         package: Package {
             name: name.to_string(),
             version: version.clone(),
             entrypoint: None,
-            base: false,
+            base: Base::Detailed {
+                name: session.from_package.clone(),
+                version: session.from_constraint.clone(),
+                source: Some(session.from_source.clone()),
+            },
             provides_abi: None,
             user: None,
             include: vec![],
             isolation: "ns".into(),
         },
-        dependencies,
+        dependencies: Default::default(),
         env: Default::default(),
         ports: Default::default(),
         volumes: Default::default(),

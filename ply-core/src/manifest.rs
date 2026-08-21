@@ -130,10 +130,6 @@ pub struct Package {
     /// Absent = this is a library/runtime package, not an app.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entrypoint: Option<Vec<String>>,
-    /// True for the one package per graph that owns `/` (FHS, /bin/sh, libc).
-    /// Its files pack at the image root instead of an /opt prefix.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub base: bool,
     /// ABI a runtime package provides, e.g. "linux-x64-musl" (matched
     /// against app [requires] abi).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -151,6 +147,51 @@ pub struct Package {
     /// app's volumes, and switches uid/gid before rights-stripping.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user: Option<String>,
+    /// The package's base story (last field: the table form must serialize
+    /// after scalar values). `true` marks the one package per graph that owns
+    /// `/` (its files pack at the image root instead of an /opt prefix);
+    /// `"alpine@3.20"` / `{ name, version, source }` declares which base
+    /// this package runs on.
+    #[serde(default, skip_serializing_if = "Base::is_absent")]
+    pub base: Base,
+}
+
+/// `package.base` — either the base *marker* (`base = true`, in a base
+/// package's own manifest) or the base *dependency* (`base = "alpine@3.20"`
+/// or `base = { name = "alpine", version = "3.20", source = "corp" }`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum Base {
+    /// `base = true` — this package owns `/`.
+    Marker(bool),
+    /// `base = "alpine@3.20"` — name@range in one string.
+    Spec(String),
+    /// `base = { name = "alpine", version = "3.20", source = "corp" }`
+    Detailed {
+        name: String,
+        version: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source: Option<String>,
+    },
+}
+
+impl Default for Base {
+    fn default() -> Self {
+        Base::Marker(false)
+    }
+}
+
+impl Base {
+    fn is_absent(&self) -> bool {
+        matches!(self, Base::Marker(false))
+    }
+}
+
+impl Package {
+    /// True for the one package per graph that owns `/` (FHS, /bin/sh, libc).
+    pub fn is_base(&self) -> bool {
+        matches!(self.base, Base::Marker(true))
+    }
 }
 
 /// Parsed `package.user`.
@@ -189,7 +230,7 @@ fn is_ns(s: &String) -> bool {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged, deny_unknown_fields)]
 pub enum Dependency {
-    /// `node = "22"` or `base = "alpine@3.20"`
+    /// `node = "22"`
     Constraint(String),
     /// `ffmpeg = { source = "github:org/repo", version = "6.1" }`
     Detailed {
@@ -199,8 +240,8 @@ pub enum Dependency {
     },
 }
 
-/// A dependency, normalized: the manifest key is an alias; the value may name
-/// a different package (`base = "alpine@3.20"` → package `alpine`).
+/// A dependency, normalized. The `[dependencies]` key IS the package name;
+/// the base dependency comes from `[package] base`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DepSpec {
     pub package: String,
@@ -209,18 +250,14 @@ pub struct DepSpec {
 }
 
 impl Dependency {
-    pub fn spec(&self, alias: &str) -> DepSpec {
+    pub fn spec(&self, name: &str) -> DepSpec {
         let (version, source) = match self {
             Dependency::Constraint(v) => (v.as_str(), None),
             Dependency::Detailed { source, version } => (version.as_str(), source.clone()),
         };
-        let (package, constraint) = match version.split_once('@') {
-            Some((name, constraint)) => (name.to_string(), constraint.to_string()),
-            None => (alias.to_string(), version.to_string()),
-        };
         DepSpec {
-            package,
-            constraint,
+            package: name.to_string(),
+            constraint: version.to_string(),
             source,
         }
     }
@@ -290,6 +327,38 @@ impl Manifest {
         self.package.entrypoint.is_some()
     }
 
+    /// The base declared in `[package] base`, as a normal dependency spec.
+    /// None for base packages themselves (`base = true`) and for manifests
+    /// with no base.
+    pub fn base_dep(&self) -> Option<DepSpec> {
+        match &self.package.base {
+            Base::Marker(_) => None,
+            // validate() guarantees the `name@range` shape.
+            Base::Spec(s) => s.split_once('@').map(|(name, constraint)| DepSpec {
+                package: name.to_string(),
+                constraint: constraint.to_string(),
+                source: None,
+            }),
+            Base::Detailed {
+                name,
+                version,
+                source,
+            } => Some(DepSpec {
+                package: name.clone(),
+                constraint: version.clone(),
+                source: source.clone(),
+            }),
+        }
+    }
+
+    /// Every dependency spec: the base (if declared) plus `[dependencies]`.
+    pub fn dep_specs(&self) -> Vec<DepSpec> {
+        self.base_dep()
+            .into_iter()
+            .chain(self.dependencies.iter().map(|(name, dep)| dep.spec(name)))
+            .collect()
+    }
+
     fn validate(&self) -> Result<()> {
         validate_package_name(&self.package.name)?;
         if let Some(entrypoint) = &self.package.entrypoint {
@@ -314,9 +383,39 @@ impl Manifest {
                 )));
             }
         }
-        for (alias, dep) in &self.dependencies {
-            validate_package_name(alias)?;
-            validate_package_name(&dep.spec(alias).package)?;
+        match &self.package.base {
+            Base::Marker(_) => {}
+            Base::Spec(s) => match s.split_once('@') {
+                Some((name, constraint)) if !name.is_empty() && !constraint.is_empty() => {
+                    validate_package_name(name)?;
+                }
+                _ => {
+                    return Err(Error::Manifest(format!(
+                        "package.base `{s}`: expected \"name@version\" (e.g. \"alpine@3.20\") or {{ name = \"alpine\", version = \"3.20\", source = \"…\" }}"
+                    )));
+                }
+            },
+            Base::Detailed { name, version, .. } => {
+                validate_package_name(name)?;
+                if version.is_empty() {
+                    return Err(Error::Manifest("package.base: version must not be empty".into()));
+                }
+            }
+        }
+        for (name, dep) in &self.dependencies {
+            if name == "base" {
+                return Err(Error::Manifest(
+                    "the base is declared under [package] now — move it there: `base = \"alpine@3.20\"` (or { name, version, source })"
+                        .into(),
+                ));
+            }
+            validate_package_name(name)?;
+            let spec = dep.spec(name);
+            if spec.constraint.contains('@') {
+                return Err(Error::Manifest(format!(
+                    "dependency `{name}`: the key is the package name — write the version alone (`{name} = \"6.1\"`); `name@version` is only valid for `[package] base`"
+                )));
+            }
         }
         if let Some(restart) = &self.restart {
             if !matches!(restart.policy.as_str(), "never" | "on-failure" | "always") {
@@ -391,9 +490,9 @@ mod tests {
         name = "myapp"
         version = "1.2.3"
         entrypoint = ["node", "server.js"]
+        base = "alpine@3.20"
 
         [dependencies]
-        base = "alpine@3.20"
         node = "22"
         ffmpeg = { source = "github:someorg/ffmpeg-pkg", version = "6.1" }
 
@@ -422,13 +521,131 @@ mod tests {
         let m = Manifest::parse(FULL).unwrap();
         assert_eq!(m.package.name, "myapp");
         assert_eq!(m.package.version, Version::new(1, 2, 3));
-        assert_eq!(m.dependencies.len(), 3);
+        assert_eq!(m.dependencies.len(), 2);
+        assert_eq!(
+            m.base_dep(),
+            Some(DepSpec {
+                package: "alpine".into(),
+                constraint: "3.20".into(),
+                source: None,
+            })
+        );
         assert_eq!(m.volumes["data"].scope, "instance");
         assert_eq!(m.volumes["shared"].scope, "shared");
         assert!(m.volumes["cache"].ephemeral);
         // canonical roundtrip
         let round = Manifest::parse(&m.to_toml().unwrap()).unwrap();
         assert_eq!(round.to_toml().unwrap(), m.to_toml().unwrap());
+    }
+
+    #[test]
+    fn parses_base_table_with_source() {
+        let m = Manifest::parse(
+            r#"
+            [package]
+            name = "a"
+            version = "1.0.0"
+            entrypoint = ["a"]
+            base = { name = "alpine", version = "3.20", source = "corp" }
+
+            [sources]
+            corp = "https://artifacts.corp.net/ply"
+        "#,
+        )
+        .unwrap();
+        assert_eq!(
+            m.base_dep(),
+            Some(DepSpec {
+                package: "alpine".into(),
+                constraint: "3.20".into(),
+                source: Some("corp".into()),
+            })
+        );
+        assert!(!m.package.is_base());
+        // canonical roundtrip
+        let round = Manifest::parse(&m.to_toml().unwrap()).unwrap();
+        assert_eq!(round.to_toml().unwrap(), m.to_toml().unwrap());
+    }
+
+    #[test]
+    fn base_marker_bool_still_parses() {
+        let m = Manifest::parse(
+            r#"
+            [package]
+            name = "alpine"
+            version = "3.20.0"
+            base = true
+        "#,
+        )
+        .unwrap();
+        assert!(m.package.is_base());
+        assert_eq!(m.base_dep(), None);
+        // canonical roundtrip keeps the marker
+        let round = Manifest::parse(&m.to_toml().unwrap()).unwrap();
+        assert!(round.package.is_base());
+    }
+
+    #[test]
+    fn no_base_at_all() {
+        let m = Manifest::parse(
+            r#"
+            [package]
+            name = "mylib"
+            version = "1.0.0"
+        "#,
+        )
+        .unwrap();
+        assert!(!m.package.is_base());
+        assert_eq!(m.base_dep(), None);
+    }
+
+    #[test]
+    fn rejects_base_in_dependencies() {
+        let err = Manifest::parse(
+            r#"
+            [package]
+            name = "a"
+            version = "1.0.0"
+            entrypoint = ["a"]
+
+            [dependencies]
+            base = "alpine@3.20"
+        "#,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("[package]"), "got: {err}");
+    }
+
+    #[test]
+    fn rejects_base_string_without_name() {
+        let err = Manifest::parse(
+            r#"
+            [package]
+            name = "a"
+            version = "1.0.0"
+            entrypoint = ["a"]
+            base = "3.20"
+        "#,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("alpine@3.20"), "got: {err}");
+    }
+
+    #[test]
+    fn rejects_at_in_dependency_version() {
+        let err = Manifest::parse(
+            r#"
+            [package]
+            name = "a"
+            version = "1.0.0"
+            entrypoint = ["a"]
+
+            [dependencies]
+            tools = "ffmpeg@6.1"
+        "#,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("package name"), "got: {err}");
     }
 
     #[test]

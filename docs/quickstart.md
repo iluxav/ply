@@ -26,9 +26,9 @@ A ply app is a directory with a `ply.toml`:
 name = "hello"
 version = "0.1.0"
 entrypoint = ["python3", "-c", "print('hello from ply')"]
+base = "alpine@3.20"
 
 [dependencies]
-base = "alpine@3.20"
 python3 = "3.12"
 
 [sources]

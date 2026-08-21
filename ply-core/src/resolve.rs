@@ -71,8 +71,7 @@ impl<'a> Resolver<'a> {
                             constraints: &mut BTreeMap<String, Vec<(VersionReq, String)>>,
                             sources: &mut BTreeMap<String, String>|
              -> Result<()> {
-                for (alias, dep) in &manifest.dependencies {
-                    let spec = dep.spec(alias);
+                for spec in manifest.dep_specs() {
                     let req = VersionReq::parse(&spec.constraint).map_err(|e| {
                         Error::Resolve(format!(
                             "{owner}: invalid version constraint `{}` for `{}`: {e}",
@@ -84,7 +83,7 @@ impl<'a> Resolver<'a> {
                         .or_default()
                         .push((req, owner.to_string()));
                     if let Some(spec_source) = self.source_spec_for(manifest, &spec) {
-                        sources.entry(spec.package.clone()).or_insert(spec_source);
+                        sources.entry(spec.package).or_insert(spec_source);
                     }
                 }
                 Ok(())
@@ -254,12 +253,12 @@ impl<'a> Resolver<'a> {
     fn check_graph(&self, packages: &[ResolvedPackage]) -> Result<()> {
         let bases: Vec<&str> = packages
             .iter()
-            .filter(|p| p.manifest.package.base)
+            .filter(|p| p.manifest.package.is_base())
             .map(|p| p.name.as_str())
             .collect();
         if !packages.is_empty() && bases.is_empty() {
             return Err(Error::Resolve(
-                "no base package in the graph — exactly one dependency must own `/` (e.g. `base = \"alpine@3.20\"`)"
+                "no base package in the graph — exactly one package must own `/` (declare it under [package]: `base = \"alpine@3.20\"`)"
                     .into(),
             ));
         }
@@ -285,9 +284,9 @@ impl<'a> Resolver<'a> {
         // The base defines the platform ABI (musl vs glibc family). Any
         // package declaring a different ABI would fail at exec time with a
         // missing dynamic linker — refuse loudly at resolve time instead.
-        if let Some(base) = packages.iter().find(|p| p.manifest.package.base) {
+        if let Some(base) = packages.iter().find(|p| p.manifest.package.is_base()) {
             if let Some(base_abi) = &base.manifest.package.provides_abi {
-                for pkg in packages.iter().filter(|p| !p.manifest.package.base) {
+                for pkg in packages.iter().filter(|p| !p.manifest.package.is_base()) {
                     if let Some(pkg_abi) = &pkg.manifest.package.provides_abi {
                         if pkg_abi != base_abi {
                             return Err(Error::Resolve(format!(
@@ -310,9 +309,9 @@ fn order_for_overlay(packages: &mut Vec<ResolvedPackage>, root: &Manifest) -> Re
     let names: BTreeSet<String> = packages.iter().map(|p| p.name.clone()).collect();
     let dep_names = |manifest: &Manifest| -> BTreeSet<String> {
         manifest
-            .dependencies
-            .iter()
-            .map(|(alias, dep)| dep.spec(alias).package)
+            .dep_specs()
+            .into_iter()
+            .map(|spec| spec.package)
             .filter(|n| names.contains(n))
             .collect()
     };

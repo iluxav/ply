@@ -270,7 +270,7 @@ pub fn import(spec: &str, output: &Path) -> Result<ImportOutcome> {
             name: name.clone(),
             version: version.clone(),
             entrypoint: Some(entrypoint),
-            base: false,
+            base: Default::default(),
             provides_abi: None,
             user: None,
             include: vec![],

@@ -49,7 +49,7 @@ pub fn build(opts: &BuildOptions) -> Result<BuildOutcome> {
 
     // Only apps resolve at build time. A dep package's [dependencies] are
     // metadata consumed when an app's graph is resolved.
-    let lockfile = if !manifest.is_app() || manifest.dependencies.is_empty() {
+    let lockfile = if !manifest.is_app() || manifest.dep_specs().is_empty() {
         None
     } else {
         let store = Store::open_default()?;
@@ -130,7 +130,7 @@ pub fn build(opts: &BuildOptions) -> Result<BuildOutcome> {
             .any(|entry| rel.starts_with(entry) || entry.starts_with(rel))
     };
 
-    let prefix = if manifest.package.base {
+    let prefix = if manifest.package.is_base() {
         String::new() // base owns the image root
     } else if manifest.is_app() {
         format!("/opt/{}", manifest.package.name)

@@ -141,7 +141,7 @@ pub fn check(args: CheckArgs) -> Result<()> {
     match &lockfile {
         Some(lock) => println!("ok: lockfile — {} locked package(s)", lock.packages.len()),
         None => {
-            if !manifest.dependencies.is_empty() {
+            if !manifest.dep_specs().is_empty() {
                 bail!("image declares dependencies but embeds no lockfile — rebuild it");
             }
             println!("ok: no dependencies (thin image)");

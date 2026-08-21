@@ -73,6 +73,7 @@ pub fn bundle(image: &Path, output: &Path, allow_insecure: bool) -> Result<Bundl
     let composed = crate::env::compose_env(&layer_refs, &manifest.env, &[]);
     manifest.env = composed;
     manifest.dependencies.clear();
+    manifest.package.base = Default::default();
     manifest.sources.clear();
 
     let trees = [TreeSource {

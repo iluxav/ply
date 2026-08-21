@@ -15,9 +15,10 @@ name = "myapp"                    # required; may not contain "-<digit>"
 version = "1.2.0"                 # semver; part of the image filename
 entrypoint = ["node", "server.js"]
 user = "appuser:1000:1000"        # optional: run as name:uid:gid
+base = "alpine@3.20"              # exactly one base per app; or
+                                  # { name = "alpine", version = "3.20", source = "alias" }
 
 [dependencies]
-base   = "alpine@3.20"            # exactly one base per app
 node   = "22"                     # range: lowest satisfying version wins (MVS)
 ffmpeg = { source = "alias", version = "6.1" }
 
@@ -60,12 +61,16 @@ alias   = "github:org/repo"
 `<name>-<version>-<os>-<arch>.img`. Names may not contain `-` followed by a
 digit (filename-parsing ambiguity). `entrypoint` is exec-style (no shell
 unless you ask for one). `user` makes ply create the passwd/group entry,
-chown volumes, and drop privileges in the correct order.
+chown volumes, and drop privileges in the correct order. `base` names the
+package that owns `/` (FHS, libc, `/bin/sh`) — `"name@range"`, or
+`{ name, version, source }` to pin a source alias; it resolves, locks, and
+fetches exactly like a dependency. In a base package's own manifest,
+`base = true` marks it as one instead.
 
-**`[dependencies]`** — string values are version ranges against the
-`default` source; table values pick a source alias. Version syntax:
-`"22"` = any 22.x.y, `"6.1"` = any 6.1.x, `"1.2.3"` = exactly 1.2.3,
-`"alpine@3.20"` = package name + range in one string. Resolution is
+**`[dependencies]`** — the key IS the package name. String values are
+version ranges against the `default` source; table values pick a source
+alias. Version syntax: `"22"` = any 22.x.y, `"6.1"` = any 6.1.x,
+`"1.2.3"` = exactly 1.2.3. Resolution is
 [Minimal Version Selection](/docs/dependencies/).
 
 **`[env]`** — composed after package contributions, before CLI overrides

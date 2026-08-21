@@ -53,8 +53,7 @@ pub fn rebase(
     let old_version = entry.version.clone();
 
     // The manifest's constraint still applies — rebase is not a bypass.
-    for (alias, dep) in &manifest.dependencies {
-        let spec = dep.spec(alias);
+    for spec in manifest.dep_specs() {
         if spec.package == name {
             if let Ok(req) = semver::VersionReq::parse(&spec.constraint) {
                 if !req.matches(&version) {

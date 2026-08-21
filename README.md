@@ -14,9 +14,9 @@ server, zero config — and an image is a single file you can `scp` around.
 name = "myapp"
 entrypoint = ["node", ".next/standalone/server.js"]
 include = [".next/standalone/"]
+base = "alpine@3.20"
 
 [dependencies]
-base = "alpine@3.20"
 node = "24"
 
 [ports]

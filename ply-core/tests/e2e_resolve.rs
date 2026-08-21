@@ -72,9 +72,9 @@ fn app_toml(source: &str) -> String {
         name = "myapp"
         version = "0.1.0"
         entrypoint = ["./run.sh"]
+        base = "alpine@3.20"
 
         [dependencies]
-        base = "alpine@3.20"
         mylib = "1"
 
         [sources]
@@ -194,6 +194,56 @@ fn resolves_via_http_source() {
     server.wait().ok();
     let outcome = outcome.unwrap();
     assert_resolution(&app_dir, &outcome.image_path, &store);
+    std::env::remove_var("PLY_STORE");
+}
+
+/// The base from `[package]` must reach resolution on its own — this app has
+/// no [dependencies] at all, so only base injection can pull alpine in.
+#[test]
+fn resolves_base_only_app() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let registry = tmp.path().join("registry");
+    populate_registry(&tmp.path().join("work"), &registry);
+
+    let store = tmp.path().join("store");
+    std::env::set_var("PLY_STORE", &store);
+
+    let app_dir = tmp.path().join("app");
+    std::fs::create_dir_all(&app_dir).unwrap();
+    std::fs::write(app_dir.join("run.sh"), "#!/bin/sh\n").unwrap();
+    std::fs::write(
+        app_dir.join("ply.toml"),
+        format!(
+            r#"
+            [package]
+            name = "baseonly"
+            version = "0.1.0"
+            entrypoint = ["./run.sh"]
+            base = "alpine@3.20"
+
+            [sources]
+            default = "file://{}"
+            "#,
+            registry.display()
+        ),
+    )
+    .unwrap();
+
+    build(&BuildOptions {
+        dir: app_dir.clone(),
+        output: None,
+        allow_insecure: false,
+    })
+    .unwrap();
+
+    let lock = ply_core::lockfile::Lockfile::load(&app_dir.join("ply.lock")).unwrap();
+    let summary: Vec<(String, String)> = lock
+        .packages
+        .iter()
+        .map(|p| (p.name.clone(), p.version.to_string()))
+        .collect();
+    assert_eq!(summary, vec![("alpine".to_string(), "3.20.0".to_string())]);
     std::env::remove_var("PLY_STORE");
 }
 

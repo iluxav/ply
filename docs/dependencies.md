@@ -10,15 +10,21 @@ order: 10
 ## Declaring dependencies
 
 ```toml
-[dependencies]
+[package]
+# …
 base   = "alpine@3.20"       # exactly one base per app (owns /, libc, /bin/sh)
+
+[dependencies]
 node   = "22"                # any 22.x — range, not a pin
 ffmpeg = { source = "github:someorg/ffmpeg-pkg", version = "6.1" }
 ```
 
-Ranges are semver prefixes: `"22"` means ≥22.0.0 <23, `"6.1"` means
-≥6.1.0 <6.2. The `name@version` form (used for `base`) is the same thing
-with the package name attached.
+The key is the package name; ranges are semver prefixes: `"22"` means
+≥22.0.0 <23, `"6.1"` means ≥6.1.0 <6.2. The base lives under `[package]`
+because it is a singular role, not a list entry — but it resolves, locks,
+and fetches exactly like every other dependency. Its `name@range` string
+form has a table twin for custom sources:
+`base = { name = "alpine", version = "3.20", source = "corp" }`.
 
 Every dependency occupies its own prefix in the final filesystem —
 `/opt/node-22.6.0/`, `/opt/ffmpeg-6.1.1/` — so two packages can never
