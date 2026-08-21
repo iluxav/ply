@@ -48,7 +48,8 @@
 <a href="/docs/macos/" class="block px-3 py-1.5 text-sm text-accent border-l-2 border-accent bg-card">ply on macOS</a></div>
 <div class="mb-6"><div class="px-3 mb-2 text-xs uppercase tracking-wider text-fade">Reference</div><a href="/docs/manifest/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">ply.toml reference</a>
 <a href="/docs/cli/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">CLI reference</a>
-<a href="/docs/image-format/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Image format &amp; store</a></div>
+<a href="/docs/image-format/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Image format &amp; store</a>
+<a href="/docs/glossary/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Glossary</a></div>
 <div class="mb-6"><div class="px-3 mb-2 text-xs uppercase tracking-wider text-fade">Concepts</div><a href="/docs/architecture/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Architecture</a>
 <a href="/docs/ply-vs-docker/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">ply vs Docker</a></div>
   </aside>
@@ -78,7 +79,7 @@ Or open a shell and forget the Mac side exists:</p>
 <h2 id="notes"><a class="anchor" href="#notes" aria-label="link to section">#</a>Notes</h2>
 <ul>
 <li>The VM is x86_64 or arm64 to match your Mac — on Apple Silicon you&#39;ll
-run <code>linux-arm64</code> images. Build for your servers&#39; architecture in CI
+run <code>linux-arm64</code> images. Build for your hosts&#39; architecture in CI
 (the <a href="/docs/registries/">GitHub Action</a> does this for free on x64
 runners).</li>
 <li><code>limactl stop default</code> frees the VM&#39;s memory when you&#39;re done;

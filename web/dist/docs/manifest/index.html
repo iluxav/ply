@@ -48,7 +48,8 @@
 <a href="/docs/macos/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">ply on macOS</a></div>
 <div class="mb-6"><div class="px-3 mb-2 text-xs uppercase tracking-wider text-fade">Reference</div><a href="/docs/manifest/" class="block px-3 py-1.5 text-sm text-accent border-l-2 border-accent bg-card">ply.toml reference</a>
 <a href="/docs/cli/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">CLI reference</a>
-<a href="/docs/image-format/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Image format &amp; store</a></div>
+<a href="/docs/image-format/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Image format &amp; store</a>
+<a href="/docs/glossary/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Glossary</a></div>
 <div class="mb-6"><div class="px-3 mb-2 text-xs uppercase tracking-wider text-fade">Concepts</div><a href="/docs/architecture/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Architecture</a>
 <a href="/docs/ply-vs-docker/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">ply vs Docker</a></div>
   </aside>
@@ -60,9 +61,10 @@
 <span class="hljs-attr">version</span> = <span class="hljs-string">&quot;1.2.0&quot;</span>                 <span class="hljs-comment"># semver; part of the image filename</span>
 <span class="hljs-attr">entrypoint</span> = [<span class="hljs-string">&quot;node&quot;</span>, <span class="hljs-string">&quot;server.js&quot;</span>]
 <span class="hljs-attr">user</span> = <span class="hljs-string">&quot;appuser:1000:1000&quot;</span>        <span class="hljs-comment"># optional: run as name:uid:gid</span>
+<span class="hljs-attr">base</span> = <span class="hljs-string">&quot;alpine@3.20&quot;</span>              <span class="hljs-comment"># exactly one base per app; or</span>
+                                  <span class="hljs-comment"># { name = &quot;alpine&quot;, version = &quot;3.20&quot;, source = &quot;alias&quot; }</span>
 
 <span class="hljs-section">[dependencies]</span>
-<span class="hljs-attr">base</span>   = <span class="hljs-string">&quot;alpine@3.20&quot;</span>            <span class="hljs-comment"># exactly one base per app</span>
 <span class="hljs-attr">node</span>   = <span class="hljs-string">&quot;22&quot;</span>                     <span class="hljs-comment"># range: lowest satisfying version wins (MVS)</span>
 <span class="hljs-attr">ffmpeg</span> = { source = <span class="hljs-string">&quot;alias&quot;</span>, version = <span class="hljs-string">&quot;6.1&quot;</span> }
 
@@ -102,11 +104,15 @@
 <code>&lt;name&gt;-&lt;version&gt;-&lt;os&gt;-&lt;arch&gt;.img</code>. Names may not contain <code>-</code> followed by a
 digit (filename-parsing ambiguity). <code>entrypoint</code> is exec-style (no shell
 unless you ask for one). <code>user</code> makes ply create the passwd/group entry,
-chown volumes, and drop privileges in the correct order.</p>
-<p><strong><code>[dependencies]</code></strong> — string values are version ranges against the
-<code>default</code> source; table values pick a source alias. Version syntax:
-<code>&quot;22&quot;</code> = any 22.x.y, <code>&quot;6.1&quot;</code> = any 6.1.x, <code>&quot;1.2.3&quot;</code> = exactly 1.2.3,
-<code>&quot;alpine@3.20&quot;</code> = package name + range in one string. Resolution is
+chown volumes, and drop privileges in the correct order. <code>base</code> names the
+package that owns <code>/</code> (FHS, libc, <code>/bin/sh</code>) — <code>&quot;name@range&quot;</code>, or
+<code>{ name, version, source }</code> to pin a source alias; it resolves, locks, and
+fetches exactly like a dependency. In a base package&#39;s own manifest,
+<code>base = true</code> marks it as one instead.</p>
+<p><strong><code>[dependencies]</code></strong> — the key IS the package name. String values are
+version ranges against the <code>default</code> source; table values pick a source
+alias. Version syntax: <code>&quot;22&quot;</code> = any 22.x.y, <code>&quot;6.1&quot;</code> = any 6.1.x,
+<code>&quot;1.2.3&quot;</code> = exactly 1.2.3. Resolution is
 <a href="/docs/dependencies/">Minimal Version Selection</a>.</p>
 <p><strong><code>[env]</code></strong> — composed after package contributions, before CLI overrides
 (<code>-e</code>, <code>--env-file</code>); last wins.</p>

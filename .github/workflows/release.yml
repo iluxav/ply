@@ -18,6 +18,11 @@ jobs:
             artifact: ply-linux-arm64
     steps:
       - uses: actions/checkout@v4
+      - name: tag matches crate version
+        run: |
+          crate="v$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "ply-cli") | .version')"
+          test "$crate" = "${GITHUB_REF_NAME}" \
+            || { echo "::error::tag ${GITHUB_REF_NAME} != Cargo.toml version ${crate} — bump [workspace.package] version before tagging"; exit 1; }
       - run: rustup target add ${{ matrix.target }}
       - name: install cross toolchain
         run: |

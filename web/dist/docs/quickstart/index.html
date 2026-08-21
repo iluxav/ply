@@ -48,7 +48,8 @@
 <a href="/docs/macos/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">ply on macOS</a></div>
 <div class="mb-6"><div class="px-3 mb-2 text-xs uppercase tracking-wider text-fade">Reference</div><a href="/docs/manifest/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">ply.toml reference</a>
 <a href="/docs/cli/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">CLI reference</a>
-<a href="/docs/image-format/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Image format &amp; store</a></div>
+<a href="/docs/image-format/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Image format &amp; store</a>
+<a href="/docs/glossary/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Glossary</a></div>
 <div class="mb-6"><div class="px-3 mb-2 text-xs uppercase tracking-wider text-fade">Concepts</div><a href="/docs/architecture/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">Architecture</a>
 <a href="/docs/ply-vs-docker/" class="block px-3 py-1.5 text-sm text-fade hover:text-ink border-l-2 border-transparent">ply vs Docker</a></div>
   </aside>
@@ -65,9 +66,9 @@ user it installs to <code>~/.local/bin/ply</code> and tells you if a one-time
 <span class="hljs-attr">name</span> = <span class="hljs-string">&quot;hello&quot;</span>
 <span class="hljs-attr">version</span> = <span class="hljs-string">&quot;0.1.0&quot;</span>
 <span class="hljs-attr">entrypoint</span> = [<span class="hljs-string">&quot;python3&quot;</span>, <span class="hljs-string">&quot;-c&quot;</span>, <span class="hljs-string">&quot;print(&#x27;hello from ply&#x27;)&quot;</span>]
+<span class="hljs-attr">base</span> = <span class="hljs-string">&quot;alpine@3.20&quot;</span>
 
 <span class="hljs-section">[dependencies]</span>
-<span class="hljs-attr">base</span> = <span class="hljs-string">&quot;alpine@3.20&quot;</span>
 <span class="hljs-attr">python3</span> = <span class="hljs-string">&quot;3.12&quot;</span>
 
 <span class="hljs-section">[sources]</span>
@@ -98,7 +99,7 @@ ply run --<span class="hljs-built_in">link</span> ./src:/opt/app app.img   <span
 <div class="codeblock"><button class="copy" aria-label="copy">copy</button><pre><code class="hljs">ply ps            <span class="hljs-comment"># instances, IPs, health, restarts</span>
 ply stats         <span class="hljs-comment"># live CPU / memory / net per instance, no agent</span>
 ply <span class="hljs-built_in">exec</span> hello sh <span class="hljs-comment"># shell into a running instance</span></code></pre></div>
-<h2 id="deploy-to-a-server"><a class="anchor" href="#deploy-to-a-server" aria-label="link to section">#</a>Deploy to a server</h2>
+<h2 id="deploy-to-a-host"><a class="anchor" href="#deploy-to-a-host" aria-label="link to section">#</a>Deploy to a host</h2>
 <p>An image is a file. That&#39;s the whole story:</p>
 <div class="codeblock"><button class="copy" aria-label="copy">copy</button><pre><code class="hljs">scp hello-0.1.0-linux-x64.img server:
 ssh server ply run hello-0.1.0-linux-x64.img</code></pre></div>
