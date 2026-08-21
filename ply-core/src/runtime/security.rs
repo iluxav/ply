@@ -97,6 +97,11 @@ pub fn no_new_privs() -> Result<()> {
 /// Docker allowlist is a planned tightening.
 pub fn apply_seccomp() -> Result<()> {
     use nix::libc;
+    // libc's aarch64-musl bindings lack SYS_kexec_file_load (arm64 syscall 294)
+    #[cfg(target_arch = "x86_64")]
+    const SYS_KEXEC_FILE_LOAD: i64 = libc::SYS_kexec_file_load;
+    #[cfg(target_arch = "aarch64")]
+    const SYS_KEXEC_FILE_LOAD: i64 = 294;
     let blocked: Vec<i64> = vec![
         libc::SYS_acct,
         libc::SYS_add_key,
@@ -112,7 +117,7 @@ pub fn apply_seccomp() -> Result<()> {
         libc::SYS_get_mempolicy,
         libc::SYS_init_module,
         libc::SYS_kcmp,
-        libc::SYS_kexec_file_load,
+        SYS_KEXEC_FILE_LOAD,
         libc::SYS_kexec_load,
         libc::SYS_keyctl,
         libc::SYS_mbind,
