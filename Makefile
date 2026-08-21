@@ -59,7 +59,7 @@ registry-catalog:
 # convert + upload the next batch of packages
 # (override: make registry-push LIMIT=500 JOBS=8)
 LIMIT ?= 200
-JOBS  ?= 10
+JOBS  ?= 6
 registry-push:
 	./scripts/registry-push.mjs --limit $(LIMIT) --jobs $(JOBS)
 
