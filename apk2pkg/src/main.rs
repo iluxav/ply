@@ -468,7 +468,10 @@ mod tests {
 
     #[test]
     fn mirror_url_edge_has_no_v_prefix() {
-        assert_eq!(branch_url("edge"), "https://dl-cdn.alpinelinux.org/alpine/edge");
+        assert_eq!(
+            branch_url("edge"),
+            "https://dl-cdn.alpinelinux.org/alpine/edge"
+        );
     }
 
     #[test]

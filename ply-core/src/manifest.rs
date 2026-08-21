@@ -398,7 +398,9 @@ impl Manifest {
             Base::Detailed { name, version, .. } => {
                 validate_package_name(name)?;
                 if version.is_empty() {
-                    return Err(Error::Manifest("package.base: version must not be empty".into()));
+                    return Err(Error::Manifest(
+                        "package.base: version must not be empty".into(),
+                    ));
                 }
             }
         }

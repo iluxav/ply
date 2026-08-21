@@ -40,9 +40,9 @@ release:
 	[ -n "$$V" ] || V=$$(echo "$$CUR" | awk -F. '{print $$1"."$$2"."$$3+1}'); \
 	echo "$$V" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$$' || { echo "release: bad version \`$$V\`"; exit 1; }; \
 	echo "release: $$CUR -> $$V"; \
+	$(MAKE) check; \
 	sed -i "s/^version = \".*\"/version = \"$$V\"/" Cargo.toml; \
 	cargo update --workspace >/dev/null 2>&1; \
-	$(MAKE) check; \
 	git add Cargo.toml Cargo.lock; \
 	git commit -m "v$$V"; \
 	git push; \

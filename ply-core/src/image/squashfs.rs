@@ -295,12 +295,18 @@ mod tests {
         use std::sync::Arc;
 
         fn count_fds() -> usize {
-            std::fs::read_dir("/proc/self/fd").map(|d| d.count()).unwrap_or(0)
+            std::fs::read_dir("/proc/self/fd")
+                .map(|d| d.count())
+                .unwrap_or(0)
         }
 
         let src = tempfile::tempdir().unwrap();
         for i in 0..512 {
-            std::fs::write(src.path().join(format!("f{i:04}")), format!("data {i:04}\n").repeat(64)).unwrap();
+            std::fs::write(
+                src.path().join(format!("f{i:04}")),
+                format!("data {i:04}\n").repeat(64),
+            )
+            .unwrap();
         }
         let out = tempfile::tempdir().unwrap();
         let img = out.path().join("t.img");
