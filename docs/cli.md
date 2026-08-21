@@ -64,7 +64,8 @@ inert package. See [Making packages](/docs/packages/).
 ## Host integration
 
 ```sh
-ply systemd IMAGE                 # emit a unit file (supervision = systemd)
+ply systemd IMAGE [--scale N] [--publish P[:IP]] [-e K=V] [--env-file F]
+                                  # emit a unit file (supervision = systemd)
 ply proxy [--backend caddy]       # emit reverse-proxy config for all apps
 ply lb APP [--format nginx]       # emit one app's LB backend pool
 ply setup                         # one-time host prep (idempotent, sudo)

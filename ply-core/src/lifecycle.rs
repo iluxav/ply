@@ -263,8 +263,29 @@ fn parent_pid(pid: i32) -> Option<i32> {
         .ok()
 }
 
-/// `ply systemd <image>` — supervision is systemd's job; emit a unit.
-pub fn systemd_unit(image: &Path) -> Result<String> {
+/// systemd's ExecStart splits on whitespace: values with spaces or quotes
+/// need double-quoting (systemd's own quoting rules, backslash-escaped).
+fn quote_unit_arg(arg: &str) -> String {
+    if !arg.is_empty()
+        && !arg
+            .chars()
+            .any(|c| c.is_whitespace() || c == '"' || c == '\\')
+    {
+        return arg.to_string();
+    }
+    let escaped: String = arg
+        .chars()
+        .flat_map(|c| match c {
+            '"' | '\\' => vec!['\\', c],
+            c => vec![c],
+        })
+        .collect();
+    format!("\"{escaped}\"")
+}
+
+/// `ply systemd <image> [run flags]` — supervision is systemd's job; emit a
+/// unit whose ExecStart carries the run flags (scale, publish, env).
+pub fn systemd_unit(image: &Path, run_flags: &[String]) -> Result<String> {
     let manifest = read_manifest(image)?;
     let app = &manifest.package.name;
     let image_abs = std::path::absolute(image).map_err(|source| Error::Io {
@@ -285,7 +306,7 @@ pub fn systemd_unit(image: &Path) -> Result<String> {
          \n\
          [Service]\n\
          Type=exec\n\
-         ExecStart={ply} run {image_path}\n\
+         ExecStart={ply} run{flags} {image_path}\n\
          Restart=on-failure\n\
          RestartSec=2\n\
          KillMode=mixed\n\
@@ -295,6 +316,10 @@ pub fn systemd_unit(image: &Path) -> Result<String> {
          WantedBy=multi-user.target\n",
         image = image.display(),
         image_path = image_abs.display(),
+        flags = run_flags
+            .iter()
+            .map(|f| format!(" {}", quote_unit_arg(f)))
+            .collect::<String>(),
     ))
 }
 
@@ -417,4 +442,22 @@ pub fn outdated(allow_insecure: bool) -> Result<Vec<String>> {
         }
     }
     Ok(lines)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unit_args_quote_only_when_needed() {
+        assert_eq!(quote_unit_arg("--scale"), "--scale");
+        assert_eq!(quote_unit_arg("80:3000"), "80:3000");
+        assert_eq!(quote_unit_arg("NODE_ENV=production"), "NODE_ENV=production");
+        assert_eq!(
+            quote_unit_arg("GREETING=hello world"),
+            "\"GREETING=hello world\""
+        );
+        assert_eq!(quote_unit_arg("A=say \"hi\""), "\"A=say \\\"hi\\\"\"");
+        assert_eq!(quote_unit_arg(""), "\"\"");
+    }
 }

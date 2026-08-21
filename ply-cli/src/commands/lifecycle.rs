@@ -69,7 +69,23 @@ pub fn deploy(args: crate::cli::DeployArgs) -> Result<()> {
 }
 
 pub fn systemd(args: SystemdArgs) -> Result<()> {
-    print!("{}", lifecycle::systemd_unit(&args.image)?);
+    let mut flags: Vec<String> = Vec::new();
+    if let Some(scale) = args.scale {
+        flags.extend(["--scale".into(), scale.to_string()]);
+    }
+    if let Some(publish) = &args.publish {
+        // Validate now — a typo should fail here, not at boot via systemd.
+        ply_core::runtime::publish::parse_publish(publish)?;
+        flags.extend(["--publish".into(), publish.clone()]);
+    }
+    for pair in &args.env {
+        flags.extend(["-e".into(), pair.clone()]);
+    }
+    if let Some(file) = &args.env_file {
+        let file = std::path::absolute(file)?;
+        flags.extend(["--env-file".into(), file.display().to_string()]);
+    }
+    print!("{}", lifecycle::systemd_unit(&args.image, &flags)?);
     Ok(())
 }
 

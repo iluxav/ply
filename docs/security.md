@@ -47,17 +47,17 @@ setuid → no_new_privs → seccomp).
 
 ## Rootless mode
 
-ply runs fully unprivileged: build, fetch, run, scale, exec — no root, no
-setuid helpers. The store lives in your home directory; squashfs images
-extract to plain directories when loop-mounting isn't available (same hash
-identity either way).
+ply runs fully unprivileged: build, fetch, run, exec — no root, no setuid
+helpers. The store lives in your home directory; squashfs images extract to
+plain directories when loop-mounting isn't available (same hash identity
+either way). Rootless instances share the host network (no per-instance
+IPs), so `--scale` needs [`--publish`](/docs/running/) — the run parent
+gives each instance its own loopback port and balances the published one.
 
 On Ubuntu 24.04+ the kernel restricts unprivileged user namespaces; ply
-needs an AppArmor profile (the same requirement Docker and Chrome have):
-
-```sh
-make install-apparmor       # or see `ply setup`
-```
+needs an AppArmor profile (the same requirement Docker and Chrome have).
+`sudo ply setup` installs it — the installer runs setup automatically
+whenever it can escalate.
 
 ## Host preparation
 

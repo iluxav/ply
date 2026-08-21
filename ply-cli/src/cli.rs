@@ -337,6 +337,22 @@ pub struct SystemdArgs {
     /// Image to generate a unit file for
     #[arg(value_name = "IMAGE")]
     pub image: PathBuf,
+
+    /// Number of identical instances (baked into ExecStart)
+    #[arg(long, value_name = "N")]
+    pub scale: Option<u32>,
+
+    /// Publish the pool on a host port (baked into ExecStart)
+    #[arg(long, value_name = "PORT[:INSTANCE_PORT]")]
+    pub publish: Option<String>,
+
+    /// Environment variables for the app (repeatable, KEY=VALUE)
+    #[arg(short = 'e', long = "env", value_name = "KEY=VALUE")]
+    pub env: Vec<String>,
+
+    /// Environment file read at start (secrets stay out of the unit)
+    #[arg(long, value_name = "FILE")]
+    pub env_file: Option<PathBuf>,
 }
 
 #[derive(Args)]

@@ -52,8 +52,8 @@ Instances of the same app round-robin automatically in the emitted config.
 ## Publishing a pool
 
 ```sh
-ply run --publish 3100 --scale 4 myapp.img     # host:3100 → the pool
-ply run --publish 80:3100 --scale 4 myapp.img  # host:80 → instances' :3100
+ply run --publish 3100 --scale 4 myapp.img          # rootless: just works
+sudo ply run --publish 80:3000 --scale 4 myapp.img  # rootful: host:80 → instances' :3000
 ```
 
 `--publish` is the explicit exception to "ports are labels": the run parent
@@ -62,9 +62,16 @@ It needs no discovery and no reloads — the parent forked the instances, so
 the backend set follows launches, crashes, and rolling deploys by
 construction; an unreachable backend is skipped per connection.
 
-Rootless bonus: `--publish` makes `--scale` work without root. Instances
-share the host network, so each one receives its own loopback `PORT`
-(injected env) and the parent balances the published port across them.
+The two modes differ in who picks the instance-side port:
+
+- **Rootless** — `--publish` makes `--scale` work without root. Instances
+  share the host network, so ply gives each one its own loopback port,
+  injected as `PORT` (overriding manifest/CLI values) — a bare
+  `--publish 3100` always lines up, provided the app honors `PORT`.
+- **Rootful** — instances bind whatever the app decides on their bridge
+  IPs; tell the parent where the backends are with `HOST:INSTANCE`
+  (`--publish 80:3000` for an app serving :3000), or align the app with
+  `-e PORT=` to match a bare `--publish`.
 
 The line it never crosses: TCP only. Hostnames, TLS, HTTP — that's the
 edge's job (`ply proxy`); publishing is port exposure, not a proxy.
@@ -106,11 +113,12 @@ kernel — there is no metrics agent.
 
 ## Supervision
 
-Supervision is systemd's job:
+Supervision is systemd's job. The unit's ExecStart carries your run flags:
 
 ```sh
-ply systemd myapp.img > /etc/systemd/system/myapp.service
-systemctl enable --now myapp
+ply systemd myapp.img --scale 4 --publish 80:3000 --env-file /etc/myapp/secrets.env \
+  | sudo tee /etc/systemd/system/ply-myapp.service
+sudo systemctl enable --now ply-myapp
 ```
 
 For in-process restarts (crash loops with backoff) see

@@ -76,8 +76,9 @@ what it forked.
 The restart policy covers crashes; host reboots are systemd's job:
 
 ```sh
-ply systemd myapp.img > /etc/systemd/system/myapp.service
-systemctl enable --now myapp
+ply systemd myapp.img --scale 4 --publish 80:3000 \
+  | sudo tee /etc/systemd/system/ply-myapp.service
+sudo systemctl enable --now ply-myapp
 ```
 
 ## CI-driven deployment
