@@ -96,9 +96,48 @@ pub fn make_all_private() -> Result<()> {
         MsFlags::MS_REC | MsFlags::MS_PRIVATE,
         None::<&str>,
     )
-    .map_err(|e| merr("rprivate", Path::new("/"), e))
+    .map_err(|e| match userns_hint(e, kernel_restricts_userns()) {
+        Some(hint) => Error::Runtime(format!("mount rprivate at /: {e}\nhint: {hint}")),
+        None => merr("rprivate", Path::new("/"), e),
+    })
 }
 
 pub fn unmount_detach(target: &Path) {
     let _ = nix::mount::umount2(target, nix::mount::MntFlags::MNT_DETACH);
+}
+
+/// The actionable hint for the first mount failing with EACCES in a fresh
+/// user namespace: on kernels restricting unprivileged userns (Ubuntu
+/// 24.04+ AppArmor policy), the fix is `sudo ply setup` — and running the
+/// exact binary the installed profile names.
+fn userns_hint(e: nix::errno::Errno, restricted: bool) -> Option<&'static str> {
+    (e == nix::errno::Errno::EACCES && restricted).then_some(
+        "this kernel restricts unprivileged user namespaces (Ubuntu 24.04+) — run `sudo ply setup` once; \
+         if you already did, the AppArmor profile names a specific binary path: `which ply` must match the path in /etc/apparmor.d/ply",
+    )
+}
+
+fn kernel_restricts_userns() -> bool {
+    std::fs::read_to_string("/proc/sys/kernel/apparmor_restrict_unprivileged_userns")
+        .map(|v| v.trim() == "1")
+        .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nix::errno::Errno;
+
+    #[test]
+    fn eacces_on_restricted_kernel_gets_setup_hint() {
+        let hint = userns_hint(Errno::EACCES, true).expect("hint expected");
+        assert!(hint.contains("sudo ply setup"));
+        assert!(hint.contains("which ply"));
+    }
+
+    #[test]
+    fn no_hint_when_unrestricted_or_other_errno() {
+        assert!(userns_hint(Errno::EACCES, false).is_none());
+        assert!(userns_hint(Errno::EPERM, true).is_none());
+    }
 }

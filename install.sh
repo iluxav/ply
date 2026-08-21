@@ -1,9 +1,11 @@
 #!/bin/sh
 # ply installer:  curl -fsSL https://plybox.sh/install.sh | sh
 #
-# As root  → /usr/local/bin/ply + automatic host setup.
-# As user  → ~/.local/bin/ply, prints the one-time `sudo ply setup` hint
-#            only if this host actually needs it.
+# As root            → /usr/local/bin/ply + automatic host setup.
+# As user with sudo  → same, via sudo (one system-wide copy; a stale
+#                      ~/.local/bin/ply shadow copy is removed).
+# As user, no sudo   → ~/.local/bin/ply, prints the one-time
+#                      `sudo ply setup` hint only if this host needs it.
 #
 # Overrides: PLY_VERSION (default: latest), PLY_REPO, PLY_BINARY (install a
 # local file instead of downloading — used by CI and development).
@@ -38,10 +40,22 @@ fi
 chmod 755 "$tmp/ply"
 
 # --- install ----------------------------------------------------------------
+# One copy, system-wide, whenever possible: two ply binaries on one host is
+# how an AppArmor profile ends up naming one while PATH runs the other.
+# ~/.local/bin is the no-privileges fallback only.
 if [ "$(id -u)" = "0" ]; then
     install -m 755 "$tmp/ply" /usr/local/bin/ply
     echo "installed /usr/local/bin/ply ($(/usr/local/bin/ply --version))"
     /usr/local/bin/ply setup
+elif command -v sudo >/dev/null 2>&1 && { sudo -n true 2>/dev/null || [ -e /dev/tty ]; }; then
+    echo "installing to /usr/local/bin (sudo may prompt for your password)"
+    sudo install -m 755 "$tmp/ply" /usr/local/bin/ply
+    if [ -f "$HOME/.local/bin/ply" ]; then
+        rm -f "$HOME/.local/bin/ply"
+        echo "removed $HOME/.local/bin/ply (a shadow copy from an earlier user-mode install)"
+    fi
+    echo "installed /usr/local/bin/ply ($(/usr/local/bin/ply --version))"
+    sudo /usr/local/bin/ply setup
 else
     mkdir -p "$HOME/.local/bin"
     install -m 755 "$tmp/ply" "$HOME/.local/bin/ply"
