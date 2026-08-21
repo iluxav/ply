@@ -7,6 +7,9 @@
 //   ./scripts/registry-push.mjs --jobs 8                  # parallel workers (default 4)
 //   ./scripts/registry-push.mjs --reindex                 # regen ALL index.json from ledger
 //   ./scripts/registry-push.mjs --state-only              # republish state.json + page only
+//   ./scripts/registry-push.mjs --file out/foo-1.2.3-linux-arm64.img [--file …]
+//                                                         # push prebuilt image(s) as-is
+//                                                         # (--namespace ply is the default)
 //
 // One batch at a time: two concurrent runs would race on the ledger file
 // and lose entries.
@@ -39,6 +42,8 @@ const args = {
   only: null,
   dryRun: false,
   apk2pkg: join(ROOT, "target/release/apk2pkg"),
+  files: [],
+  namespace: "ply",
 };
 const argv = process.argv.slice(2);
 for (let i = 0; i < argv.length; i++) {
@@ -53,8 +58,23 @@ for (let i = 0; i < argv.length; i++) {
   else if (argv[i] === "--state-only") args.stateOnly = true;
   else if (argv[i] === "--reindex") args.reindex = true;
   else if (argv[i] === "--apk2pkg") args.apk2pkg = next();
+  else if (argv[i] === "--file") args.files.push(next());
+  else if (argv[i] === "--namespace") args.namespace = next();
   else { console.error(`unknown argument: ${argv[i]}`); process.exit(2); }
 }
+
+// --file mode: parse canonical filenames up front so a typo dies before any upload
+const manualPushes = args.files.map((file) => {
+  const base = file.split("/").at(-1);
+  const m = base.match(/^(.+?)-(\d+\.\d+\.\d+)-(linux)-(x64|arm64)\.img$/);
+  if (!m) {
+    console.error(`--file ${file}: name must be <name>-<x.y.z>-linux-<x64|arm64>.img`);
+    process.exit(2);
+  }
+  if (!existsSync(file)) { console.error(`--file ${file}: no such file`); process.exit(2); }
+  return { file, img: base, name: m[1], version: m[2],
+           upload_path: `${args.namespace}/${m[1]}/${base}` };
+});
 
 // --- load catalog + ledger ----------------------------------------------------
 const catalog = JSON.parse(readFileSync(args.catalog, "utf8"));
@@ -66,6 +86,7 @@ const ledgerKey = (p) => `${p.apk}@${p.apk_version}`;
 let todo = catalog.packages.filter((p) => !state[ledgerKey(p)]);
 if (args.only) todo = todo.filter((p) => args.only.includes(p.apk) || args.only.includes(p.name));
 todo = todo.slice(0, args.limit);
+if (manualPushes.length > 0) todo = []; // --file mode replaces the catalog batch
 
 console.log(`catalog: ${catalog.package_count} (tier ${catalog.tier ?? "all"}, ${catalog.branch}/${catalog.arch})`);
 console.log(`ledger:  ${Object.keys(state).length} already processed`);
@@ -77,9 +98,10 @@ if (args.stateOnly) {
 }
 if (args.dryRun) {
   for (const p of todo) console.log(`  would process ${p.apk}@${p.apk_version} -> ${p.upload_path}`);
+  for (const p of manualPushes) console.log(`  would push ${p.file} -> ${p.upload_path}`);
   process.exit(0);
 }
-if (todo.length === 0 && !args.reindex) {
+if (todo.length === 0 && manualPushes.length === 0 && !args.reindex) {
   console.log("nothing to do — registry is up to date with the catalog");
   process.exit(0);
 }
@@ -146,6 +168,40 @@ async function worker() {
   while (cursor < todo.length) await processOne(todo[cursor++]);
 }
 await Promise.all(Array.from({ length: Math.min(args.jobs, todo.length) }, worker));
+
+// --- push prebuilt images (--file mode) ----------------------------------------
+// Append-only: refuse to replace a published image — a version's bytes never
+// change; new bytes mean a new version (or a new arch, which is a new file).
+for (const p of manualPushes) {
+  const key = `manual:${p.img}`;
+  if (Object.values(state).some((e) => e.upload_path === p.upload_path)) {
+    failed++;
+    console.log(`${p.img} FAILED: already published (append-only) — bump the version instead`);
+    continue;
+  }
+  try {
+    await execFileAsync("npx", ["wrangler", "r2", "object", "put",
+      `${args.bucket}/${p.upload_path}`, "--file", p.file, "--remote",
+      "--cache-control", "public, max-age=31536000, immutable",
+      "--content-type", "application/octet-stream"],
+      { maxBuffer: 16 * 1024 * 1024 });
+    state[key] = {
+      name: p.name,
+      version: p.version,
+      img: p.img,
+      upload_path: p.upload_path,
+      bytes: statSync(p.file).size,
+      pushed_at: new Date().toISOString(),
+    };
+    saveState();
+    touchedRepos.add(dirname(p.upload_path));
+    ok++;
+    console.log(`pushed ${p.img} -> ${p.upload_path}`);
+  } catch (e) {
+    failed++;
+    console.log(`${p.img} FAILED: ${errLine(e)}`);
+  }
+}
 
 // --- regenerate index.json for every repo we touched ---------------------------
 // (--reindex: every repo in the ledger — the recovery path after a crash here).

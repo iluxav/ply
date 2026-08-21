@@ -31,6 +31,18 @@ struct Args {
     /// Override the ply package name (default: sanitized apk name)
     #[arg(long)]
     name: Option<String>,
+
+    /// Target architecture: x64 or arm64 (default: the host's).
+    /// Conversion is arch-independent — it only unpacks files — so any
+    /// host can convert for any arch.
+    #[arg(long)]
+    arch: Option<String>,
+
+    /// Alpine base version constraint the package declares (default: the
+    /// --alpine branch). Required with `--alpine edge`, which is rolling
+    /// and has no version to declare.
+    #[arg(long)]
+    base: Option<String>,
 }
 
 /// Provided by the alpine base package — never vendored into kegs.
@@ -59,17 +71,14 @@ fn main() -> Result<()> {
     ply_core::restore_default_sigpipe();
     let args = Args::parse();
 
-    let mirror = format!("https://dl-cdn.alpinelinux.org/alpine/v{}", args.alpine);
-    let arch = match std::env::consts::ARCH {
-        "x86_64" => "x86_64",
-        "aarch64" => "aarch64",
-        other => bail!("unsupported arch {other}"),
-    };
+    let mirror = branch_url(&args.alpine);
+    let (ply_arch, alpine_arch) = resolve_arch(args.arch.as_deref())?;
+    let base = base_constraint(&args.alpine, args.base.as_deref())?;
 
     // Load both standard repos' indexes.
     let mut index: BTreeMap<String, ApkEntry> = BTreeMap::new();
     for repo in ["main", "community"] {
-        let url = format!("{mirror}/{repo}/{arch}");
+        let url = format!("{mirror}/{repo}/{alpine_arch}");
         eprintln!("apk2pkg: reading {url}/APKINDEX.tar.gz");
         match load_index(&url) {
             Ok(entries) => {
@@ -214,22 +223,23 @@ fn main() -> Result<()> {
     }
 
     let mut manifest = format!(
-        "[package]\nname = \"{ply_name}\"\nversion = \"{ply_version}\"\nprovides_abi = \"linux-{}-musl\"\n\n[layer]\n",
-        host_arch()
+        "[package]\nname = \"{ply_name}\"\nversion = \"{ply_version}\"\nprovides_abi = \"linux-{ply_arch}-musl\"\n\n[layer]\n"
     );
     manifest.push_str(&format!("path = {}\n", toml_array(&paths)));
     if !lib_paths.is_empty() {
         manifest.push_str(&format!("ld_library_path = {}\n", toml_array(&lib_paths)));
     }
-    manifest.push_str(&format!("\n[dependencies]\nalpine = \"{}\"\n", args.alpine));
+    manifest.push_str(&format!("\n[dependencies]\nalpine = \"{base}\"\n"));
     std::fs::write(staging.join("ply.toml"), &manifest)?;
 
+    std::fs::create_dir_all(&args.outdir)
+        .with_context(|| format!("create outdir {}", args.outdir.display()))?;
     let outcome = ply_core::build::build(&ply_core::build::BuildOptions {
         dir: staging.clone(),
-        output: Some(args.outdir.join(format!(
-            "{ply_name}-{ply_version}-linux-{}.img",
-            host_arch()
-        ))),
+        output: Some(
+            args.outdir
+                .join(format!("{ply_name}-{ply_version}-linux-{ply_arch}.img")),
+        ),
         allow_insecure: false,
     })?;
     println!(
@@ -371,6 +381,35 @@ fn host_arch() -> &'static str {
     }
 }
 
+/// `--arch` flag → (ply arch, alpine arch). None = the host's.
+fn resolve_arch(flag: Option<&str>) -> Result<(&'static str, &'static str)> {
+    match flag.unwrap_or(host_arch()) {
+        "x64" => Ok(("x64", "x86_64")),
+        "arm64" => Ok(("arm64", "aarch64")),
+        other => bail!("--arch `{other}`: supported values are x64, arm64"),
+    }
+}
+
+/// Mirror URL for a branch: releases get a `v` prefix, edge doesn't.
+fn branch_url(branch: &str) -> String {
+    if branch == "edge" {
+        "https://dl-cdn.alpinelinux.org/alpine/edge".to_string()
+    } else {
+        format!("https://dl-cdn.alpinelinux.org/alpine/v{branch}")
+    }
+}
+
+/// The `alpine = "…"` constraint the converted package declares.
+fn base_constraint(branch: &str, flag: Option<&str>) -> Result<String> {
+    match (branch, flag) {
+        (_, Some(base)) => Ok(base.to_string()),
+        ("edge", None) => bail!(
+            "--alpine edge is rolling and has no version to declare as the base constraint — pass --base <version>, e.g. --base 3.20"
+        ),
+        (branch, None) => Ok(branch.to_string()),
+    }
+}
+
 /// All file paths under `root`, recursively (tiny local walker — the ply
 /// workspace's walkdir crate isn't a dependency of this bin's hot path).
 fn walkdir(root: &Path) -> Vec<PathBuf> {
@@ -395,4 +434,56 @@ fn tempfile_dir() -> Result<PathBuf> {
     let dir = std::env::temp_dir().join(format!("apk2pkg-{}", std::process::id()));
     std::fs::create_dir_all(&dir)?;
     Ok(dir)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn arch_flag_selects_target() {
+        assert_eq!(resolve_arch(Some("arm64")).unwrap(), ("arm64", "aarch64"));
+        assert_eq!(resolve_arch(Some("x64")).unwrap(), ("x64", "x86_64"));
+    }
+
+    #[test]
+    fn arch_defaults_to_host() {
+        let (ply, alpine) = resolve_arch(None).unwrap();
+        assert_eq!(ply, host_arch());
+        assert_eq!(alpine, if ply == "arm64" { "aarch64" } else { "x86_64" });
+    }
+
+    #[test]
+    fn arch_rejects_unknown() {
+        assert!(resolve_arch(Some("riscv64")).is_err());
+    }
+
+    #[test]
+    fn mirror_url_versioned_branch_gets_v_prefix() {
+        assert_eq!(
+            branch_url("3.20"),
+            "https://dl-cdn.alpinelinux.org/alpine/v3.20"
+        );
+    }
+
+    #[test]
+    fn mirror_url_edge_has_no_v_prefix() {
+        assert_eq!(branch_url("edge"), "https://dl-cdn.alpinelinux.org/alpine/edge");
+    }
+
+    #[test]
+    fn base_constraint_defaults_to_branch() {
+        assert_eq!(base_constraint("3.20", None).unwrap(), "3.20");
+    }
+
+    #[test]
+    fn base_constraint_flag_overrides() {
+        assert_eq!(base_constraint("3.20", Some("3.21")).unwrap(), "3.21");
+    }
+
+    #[test]
+    fn base_constraint_required_for_edge() {
+        assert!(base_constraint("edge", None).is_err());
+        assert_eq!(base_constraint("edge", Some("3.20")).unwrap(), "3.20");
+    }
 }

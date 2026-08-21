@@ -13694,5 +13694,29 @@
   "upload_path": "ply/mesa-rusticl/mesa-rusticl-24.0.9-linux-x64.img",
   "bytes": 131219456,
   "pushed_at": "2026-08-20T20:47:40.463Z"
+ },
+ "manual:alpine-3.20.7-linux-arm64.img": {
+  "name": "alpine",
+  "version": "3.20.7",
+  "img": "alpine-3.20.7-linux-arm64.img",
+  "upload_path": "ply/alpine/alpine-3.20.7-linux-arm64.img",
+  "bytes": 4218880,
+  "pushed_at": "2026-08-21T19:56:50.186Z"
+ },
+ "manual:node-24.18.1-linux-arm64.img": {
+  "name": "node",
+  "version": "24.18.1",
+  "img": "node-24.18.1-linux-arm64.img",
+  "upload_path": "ply/node/node-24.18.1-linux-arm64.img",
+  "bytes": 29904896,
+  "pushed_at": "2026-08-21T19:57:02.315Z"
+ },
+ "manual:node-24.18.1-linux-x64.img": {
+  "name": "node",
+  "version": "24.18.1",
+  "img": "node-24.18.1-linux-x64.img",
+  "upload_path": "ply/node/node-24.18.1-linux-x64.img",
+  "bytes": 30306304,
+  "pushed_at": "2026-08-21T19:57:30.825Z"
  }
 }

@@ -42,6 +42,69 @@ fn header(mode: u16) -> NodeHeader {
     }
 }
 
+/// A file reader that opens on first use and releases its fd at EOF.
+/// FilesystemWriter holds every pushed reader until `write()` finishes, so
+/// eager `File::open` needs one fd per packed file — more than `ulimit -n`
+/// allows for big trees (a Next.js standalone tree easily beats 1024).
+struct LazyFile {
+    path: PathBuf,
+    file: Option<File>,
+    pos: u64,
+}
+
+impl LazyFile {
+    fn new(path: PathBuf) -> Self {
+        LazyFile {
+            path,
+            file: None,
+            pos: 0,
+        }
+    }
+
+    fn open(&mut self) -> std::io::Result<&mut File> {
+        use std::io::Seek;
+        if self.file.is_none() {
+            let mut file = File::open(&self.path).map_err(|e| {
+                std::io::Error::new(e.kind(), format!("{}: {e}", self.path.display()))
+            })?;
+            if self.pos != 0 {
+                file.seek(std::io::SeekFrom::Start(self.pos))?;
+            }
+            self.file = Some(file);
+        }
+        Ok(self.file.as_mut().expect("just opened"))
+    }
+}
+
+impl std::io::Read for LazyFile {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.open()?.read(buf)?;
+        self.pos += n as u64;
+        if n == 0 && !buf.is_empty() {
+            self.file = None; // EOF — release the fd (reopens if read again)
+        }
+        Ok(n)
+    }
+}
+
+impl std::io::Seek for LazyFile {
+    fn seek(&mut self, to: std::io::SeekFrom) -> std::io::Result<u64> {
+        use std::io::SeekFrom;
+        match to {
+            // Answerable without an fd — don't reopen a released file.
+            SeekFrom::Start(p) if self.file.is_none() => {
+                self.pos = p;
+                Ok(p)
+            }
+            SeekFrom::Current(0) if self.file.is_none() => Ok(self.pos),
+            _ => {
+                self.pos = self.open()?.seek(to)?;
+                Ok(self.pos)
+            }
+        }
+    }
+}
+
 /// Write a deterministic squashfs image to `out`.
 pub fn write_image(trees: &[TreeSource], extra: &[ExtraFile], out: &Path) -> Result<()> {
     let err = |path: &Path, source: std::io::Error| Error::Io {
@@ -61,8 +124,10 @@ pub fn write_image(trees: &[TreeSource], extra: &[ExtraFile], out: &Path) -> Res
         .map_err(|e| berr("compressor init", e))?;
     fs.set_compressor(compressor);
 
-    // Keep file handles alive until write(); FilesystemWriter borrows readers.
-    let mut open_files: Vec<(PathBuf, String, u16)> = Vec::new();
+    // Files are pushed after the walk (stable data order) as lazy readers:
+    // FilesystemWriter holds every reader until write(), so eager opens
+    // would need one fd per file.
+    let mut lazy_files: Vec<(PathBuf, String, u16)> = Vec::new();
 
     for tree in trees {
         if !tree.prefix.is_empty() {
@@ -104,7 +169,7 @@ pub fn write_image(trees: &[TreeSource], extra: &[ExtraFile], out: &Path) -> Res
                 fs.push_dir_all(&dest, header(mode))
                     .map_err(|e| berr(&dest, e))?;
             } else if ftype.is_file() {
-                open_files.push((entry.path().to_path_buf(), dest, mode));
+                lazy_files.push((entry.path().to_path_buf(), dest, mode));
             } else if ftype.is_symlink() {
                 let target = std::fs::read_link(entry.path()).map_err(|e| err(entry.path(), e))?;
                 fs.push_symlink(target.to_string_lossy().as_ref(), &dest, header(0o777))
@@ -118,10 +183,9 @@ pub fn write_image(trees: &[TreeSource], extra: &[ExtraFile], out: &Path) -> Res
         }
     }
 
-    for (host_path, dest, mode) in &open_files {
-        let file = File::open(host_path).map_err(|e| err(host_path, e))?;
-        fs.push_file(file, dest, header(*mode))
-            .map_err(|e| berr(dest, e))?;
+    for (host_path, dest, mode) in lazy_files {
+        fs.push_file(LazyFile::new(host_path), &dest, header(mode))
+            .map_err(|e| berr(&dest, e))?;
     }
 
     for ef in extra {
@@ -220,6 +284,53 @@ mod tests {
         assert_eq!(
             basic.frag_index, 0xffffffff,
             "empty file must not reference a fragment"
+        );
+    }
+
+    #[test]
+    fn packing_many_files_holds_few_fds() {
+        // Packing must need O(1) fds, not one per file: a Next.js standalone
+        // tree has thousands of files and default `ulimit -n` is often 1024.
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        fn count_fds() -> usize {
+            std::fs::read_dir("/proc/self/fd").map(|d| d.count()).unwrap_or(0)
+        }
+
+        let src = tempfile::tempdir().unwrap();
+        for i in 0..512 {
+            std::fs::write(src.path().join(format!("f{i:04}")), format!("data {i:04}\n").repeat(64)).unwrap();
+        }
+        let out = tempfile::tempdir().unwrap();
+        let img = out.path().join("t.img");
+
+        let baseline = count_fds();
+        let stop = Arc::new(AtomicBool::new(false));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let sampler = {
+            let (stop, peak) = (stop.clone(), peak.clone());
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    peak.fetch_max(count_fds(), Ordering::Relaxed);
+                    std::thread::sleep(std::time::Duration::from_micros(100));
+                }
+            })
+        };
+
+        let tree = TreeSource {
+            dir: src.path(),
+            prefix: "",
+            filter: None,
+        };
+        write_image(std::slice::from_ref(&tree), &[], &img).unwrap();
+        stop.store(true, Ordering::Relaxed);
+        sampler.join().unwrap();
+
+        let peak = peak.load(Ordering::Relaxed);
+        assert!(
+            peak.saturating_sub(baseline) < 64,
+            "fd peak {peak} vs baseline {baseline} — writer is holding one fd per packed file"
         );
     }
 
