@@ -14,10 +14,10 @@
 
 <body class="bg-ground text-ink font-mono antialiased">
 
-    <div class="mx-auto max-w-6xl px-5">
+    <div class="mx-auto w-full px-20">
 
         <!-- nav -->
-        <header class="flex items-baseline justify-between py-4 border-b border-edge/50">
+        <header class="sticky top-0 z-10 bg-[#0c0f0df0] flex items-baseline justify-between py-4 border-b border-edge/50">
             <div class="flex items-baseline gap-1  justify-center  items-center">
                 <a href="https://plybox.sh" class="text-lg tracking-tight logo">ply</a>
                 <span class="text-sm tracking-tight accent opacity-[0.7]">box</span>
@@ -43,8 +43,9 @@ default = <span class="text-accent">"https://registry.plybox.sh/ply/{package}"</
 
         <!-- search + table -->
         <section class="pb-20">
+            <div id="search-sentinel" class="h-px"></div>
             <input id="search" type="search" placeholder="/ filter packages…" autocomplete="off"
-                class="w-full max-w-md border border-edge bg-card px-4 py-2.5 text-sm placeholder:text-fade focus:border-accent focus:outline-none">
+                class="sticky top-[14px] z-20 w-full max-w-md border border-edge bg-card px-4 py-2.5 text-sm placeholder:text-fade focus:border-accent focus:outline-none transition-[margin-left] duration-200">
 
             <div class="mt-6 overflow-x-auto border border-edge">
                 <table class="w-full text-sm">
@@ -100,6 +101,13 @@ default = <span class="text-accent">"https://registry.plybox.sh/ply/{package}"</
         document.addEventListener("keydown", (e) => {
             if (e.key === "/" && document.activeElement !== search) { e.preventDefault(); search.focus(); }
         });
+
+        // Dock the input beside the header logo only while it's actually
+        // stuck: a sentinel above it leaves the viewport exactly when the
+        // sticky engages (no native :stuck selector exists).
+        new IntersectionObserver(([entry]) => {
+            search.classList.toggle("md:ml-[183px]", !entry.isIntersecting);
+        }, { rootMargin: "-15px 0px 0px 0px" }).observe(document.getElementById("search-sentinel"));
     </script>
 </body>
 

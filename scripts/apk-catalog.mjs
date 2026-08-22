@@ -161,16 +161,28 @@ const BASE_PROVIDES = new Set([
 // apps vendored inside their dependents' kegs, not by name.
 const hasCommand = (p) => p.provides.some((x) => x.startsWith("cmd:"));
 
+// Desktop GUI applications don't belong in a container registry, and they
+// are the closure-vendoring worst case (every KDE app ships ~270 MiB of
+// Qt+frameworks). Linking a widget toolkit is the tell — X11/xcb alone is
+// NOT (ffmpeg and imagemagick link X but are headless workhorses).
+const GUI_TOOLKIT = /^so:lib(Qt[56]?|KF[56]|Kirigami|gtk[-_]?[34]?|gdk|adwaita|wx_|SDL2?)/i;
+const isGuiApp = (p) => p.depends.some((d) => GUI_TOOLKIT.test(d));
+
 // tier filter (after reverse_deps so counts reflect the whole universe)
 let selected = packages;
 if (args.tier === "core") selected = packages.filter((p) => !NOISE.test(p.apk));
 else if (args.tier === "main-core")
   selected = packages.filter((p) => !NOISE.test(p.apk) && p.repo === "main");
 else if (args.tier === "cli")
-  // main+community, noise removed, commands only, base internals excluded:
-  // the "anything a user would type in [dependencies]" tier
+  // main+community, noise removed, commands only, base internals and
+  // desktop GUI apps excluded: the "anything a user would type in
+  // [dependencies] on a server" tier
   selected = packages.filter(
-    (p) => !NOISE.test(p.apk) && hasCommand(p) && !BASE_PROVIDES.has(p.apk),
+    (p) =>
+      !NOISE.test(p.apk) &&
+      hasCommand(p) &&
+      !BASE_PROVIDES.has(p.apk) &&
+      !isGuiApp(p),
   );
 else if (args.tier !== "all") { console.error(`unknown tier: ${args.tier}`); process.exit(2); }
 selected.sort((a, b) => b.reverse_deps - a.reverse_deps); // load-bearing first

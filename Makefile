@@ -3,7 +3,7 @@
 TARGET := x86_64-unknown-linux-musl
 BIN    := target/$(TARGET)/release/ply
 
-.PHONY: check fmt build test static release install uninstall web web-serve registry-catalog registry-push registry-state registry
+.PHONY: check fmt build test static release install uninstall web web-serve registry-catalog registry-push registry-state registry registry-all
 
 # fast feedback: fmt + clippy + tests
 check:
@@ -76,28 +76,37 @@ web:
 web-serve:
 	./web/serve.sh
 
+# One pipeline, parameterized by ARCH (x64 default; arm64 = ARCH=arm64).
+# Separate catalog file per arch; shared ledger (per-arch keys) — so each
+# package's index.json ends up listing both arches. NEVER run two pushes
+# concurrently: the ledger is one file.
+#   make registry LIMIT=500              # x64: catalog refresh + delta push
+#   make registry ARCH=arm64 LIMIT=500   # arm64: same
+#   make registry-all                    # both, sequentially
+ARCH  ?= x64
+LIMIT ?= 200
+JOBS  ?= 6
+ALPINE_ARCH = $(if $(filter arm64,$(ARCH)),aarch64,x86_64)
+CATALOG     = scripts/apk2pkg$(if $(filter arm64,$(ARCH)),-arm64,).json
+
 # refresh the conversion catalog from the latest Alpine APKINDEX
 # (tier cli: main+community packages that ship a command — the set a user
 # could actually declare; pure libraries arrive vendored inside consumers)
 registry-catalog:
-	./scripts/apk-catalog.mjs --tier cli -o scripts/apk2pkg.json
+	./scripts/apk-catalog.mjs --tier cli --arch $(ALPINE_ARCH) -o $(CATALOG)
 
 # convert + upload the next batch of packages
-# (override: make registry-push LIMIT=500 JOBS=8)
-LIMIT ?= 200
-JOBS  ?= 6
 registry-push:
-	./scripts/registry-push.mjs --limit $(LIMIT) --jobs $(JOBS)
+	./scripts/registry-push.mjs --catalog $(CATALOG) --limit $(LIMIT) --jobs $(JOBS)
 
 # republish state.json + re-render the registry page, no conversions
 registry-state:
 	./scripts/registry-push.mjs --state-only
 
-# the daily job: catalog refresh + delta push
+# the daily job for one arch: catalog refresh + delta push
 registry: registry-catalog registry-push
 
-# same, for arm64 — separate catalog file, shared ledger (per-arch keys),
-# same index.json per package ends up listing both arches
-registry-arm64:
-	./scripts/apk-catalog.mjs --tier cli --arch aarch64 -o scripts/apk2pkg-arm64.json
-	./scripts/registry-push.mjs --catalog scripts/apk2pkg-arm64.json --limit $(LIMIT) --jobs $(JOBS)
+# both arches, sequentially (the nightly shape)
+registry-all:
+	$(MAKE) registry ARCH=x64
+	$(MAKE) registry ARCH=arm64

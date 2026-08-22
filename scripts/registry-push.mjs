@@ -293,6 +293,7 @@ async function publishState() {
     byKey.get(key).versions.push({
       version: e.version,
       img: e.img,
+      arch: e.img.endsWith("-arm64.img") ? "arm64" : "x64",
       path: e.upload_path,
       bytes: e.bytes ?? 0,
       pushed_at: e.pushed_at,

@@ -25,11 +25,30 @@ const fmtSize = (b) => !b ? "—"
 export function renderRegistry(state) {
   const template = readFileSync(join(WEB, "registry/index.html"), "utf8");
 
+  // arch is a property of each image file; derive from the filename when the
+  // state predates the explicit field
+  const archOf = (v) => v.arch ?? (v.img.endsWith("-arm64.img") ? "arm64" : "x64");
+
   const rows = state.packages.map((p) => {
     const latest = p.versions[p.versions.length - 1];
-    const versions = p.versions
-      .map((v) => `<a class="text-accent hover:underline" href="/${esc(v.path)}">${esc(v.version)}</a>`)
+    // one version number may exist as several per-arch files — group them:
+    // "2.7.6 x64 arm64" where each arch chip links to its image
+    const byVer = new Map();
+    for (const v of p.versions) {
+      if (!byVer.has(v.version)) byVer.set(v.version, []);
+      byVer.get(v.version).push(v);
+    }
+    const versions = [...byVer.entries()]
+      .map(([ver, files]) => {
+        const links = files
+          .sort((a, b) => archOf(a).localeCompare(archOf(b)) * -1) // x64 first
+          .map((v) =>
+            `<a class="border border-edge px-1 py-px text-[10px] text-fade hover:text-accent hover:border-accent" href="/${esc(v.path)}">${archOf(v)}</a>`)
+          .join(" ");
+        return `<span class="whitespace-nowrap">${esc(ver)} ${links}</span>`;
+      })
       .join(", ");
+    const arches = ["x64", "arm64"].filter((a) => p.versions.some((v) => archOf(v) === a));
     const label = p.namespace === "ply"
       ? esc(p.name)
       : `<span class="text-fade">${esc(p.namespace)}/</span>${esc(p.name)}`;
@@ -39,7 +58,7 @@ export function renderRegistry(state) {
     const dep = p.namespace === "ply"
       ? `${p.name} = "${range}"`
       : `${p.name} = { source = "${p.namespace}", version = "${range}" }`;
-    const search = esc(`${p.namespace}/${p.name} ${p.description}`.toLowerCase());
+    const search = esc(`${p.namespace}/${p.name} ${p.description} ${arches.join(" ")}`.toLowerCase());
     return `<tr class="border-b border-edge last:border-b-0 align-top" data-search="${search}">
       <td class="px-4 py-3 whitespace-nowrap">${label}<button
         class="copy-dep ml-2 border border-edge px-1.5 py-0.5 text-[10px] text-fade hover:text-accent align-middle"
