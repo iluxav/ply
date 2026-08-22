@@ -58,6 +58,11 @@ runs:
         HOST_KEY: ${{ inputs.host-key }}
       run: |
         set -eu
+        # GitHub's `required:` does not catch EMPTY inputs (an unset repo
+        # var/secret expands to "") — fail with a sentence, not an scp error.
+        [ -n "$HOST" ] || { echo "::error::'host' is empty — is the repo variable (e.g. DROPLET_HOST) set?"; exit 1; }
+        [ -n "$KEY" ] || { echo "::error::'ssh-key' is empty — is the repo secret (e.g. DEPLOY_SSH_KEY) set?"; exit 1; }
+        [ -f "$IMAGE" ] || { echo "::error::image '$IMAGE' not found — pass the build action's image output"; exit 1; }
         base=$(basename "$IMAGE")
         # app name from the canonical grammar <name>-<semver>-<os>-<arch>.img
         app=$(echo "$base" | sed -E 's/-[0-9]+\.[0-9]+\.[0-9]+-linux-(x64|arm64)\.img$//')
