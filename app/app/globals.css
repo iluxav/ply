@@ -1,0 +1,67 @@
+/* Design tokens: dark terminal, green phosphor accent (ported from web/input.css). */
+@import "tailwindcss";
+
+@theme {
+  --color-ground: #0b100d;
+  --color-card: #10160f;
+  --color-edge: #223026;
+  --color-ink: #d7e2d9;
+  --color-fade: #7f9584;
+  --color-accent: #4ec98a;
+  --color-deep: #1c5c3c;
+
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+}
+
+@layer base {
+  html {
+    background: var(--color-ground);
+  }
+  ::selection {
+    background: var(--color-deep);
+    color: var(--color-ink);
+  }
+}
+
+@keyframes blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+.cursor-blink { animation: blink 1.1s step-end infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .cursor-blink { animation: none; }
+}
+
+.logo {
+  background-color: #10170f;
+  border: 1px solid #223026;
+  border-radius: 6px 0 6px 6px;
+  padding: 0.1rem 0.45rem;
+}
+
+/* Rendered markdown (docs bodies come from marked at build time) */
+.doc h1 { font-size: 1.7rem; letter-spacing: -0.02em; margin: 0 0 1rem; }
+.doc h2 { font-size: 1.15rem; color: var(--color-ink); margin: 2.2rem 0 0.8rem; border-bottom: 1px solid var(--color-edge); padding-bottom: 0.4rem; }
+.doc h3 { font-size: 1rem; margin: 1.6rem 0 0.6rem; }
+.doc p, .doc li { color: var(--color-fade); line-height: 1.65; font-size: 0.9rem; }
+.doc li { margin: 0.3rem 0 0.3rem 1.2rem; list-style: square; }
+.doc a { color: var(--color-accent); }
+.doc a:hover { text-decoration: underline; }
+.doc strong { color: var(--color-ink); font-weight: 600; }
+.doc code { background: var(--color-card); border: 1px solid var(--color-edge); padding: 0.1rem 0.3rem; font-size: 0.85em; }
+.doc pre { background: var(--color-card); border: 1px solid var(--color-edge); padding: 0.9rem 1rem; overflow-x: auto; margin: 1rem 0; }
+.doc pre code { background: none; border: none; padding: 0; font-size: 0.85rem; line-height: 1.55; }
+.doc table { width: 100%; border: 1px solid var(--color-edge); border-collapse: collapse; margin: 1rem 0; font-size: 0.85rem; }
+.doc th, .doc td { border-bottom: 1px solid var(--color-edge); padding: 0.5rem 0.7rem; text-align: left; color: var(--color-fade); }
+.doc th { color: var(--color-ink); font-weight: 600; }
+.doc blockquote { border-left: 2px solid var(--color-deep); padding-left: 1rem; margin: 1rem 0; }
+.doc .anchor { color: var(--color-edge); margin-right: 0.4rem; text-decoration: none; }
+.doc h2:hover .anchor, .doc h3:hover .anchor { color: var(--color-accent); }
+
+/* highlight.js — minimal phosphor palette */
+.hljs-comment, .hljs-quote { color: #5b7263; }
+.hljs-keyword, .hljs-selector-tag, .hljs-section { color: #4ec98a; }
+.hljs-string, .hljs-attr, .hljs-number, .hljs-literal { color: #a8d8b9; }
+.hljs-title, .hljs-name, .hljs-built_in { color: #d7e2d9; }
+.hljs-meta, .hljs-variable { color: #7f9584; }

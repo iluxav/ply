@@ -1,0 +1,45 @@
+# plybox.sh — build the site (app/ + docs/) and roll it onto the web droplet.
+# Secrets: WEB_DEPLOY_SSH_KEY. Vars: WEB_DROPLET_HOST.
+name: deploy-web
+on:
+  push:
+    branches: [main]
+    paths: ["app/**", "docs/**", "install.sh"]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "24" }
+
+      - name: build site (standalone)
+        working-directory: app
+        run: |
+          npm ci
+          npm run build
+
+      - name: build image
+        id: img
+        uses: iluxav/ply@v1
+        with:
+          dir: "app"
+          upload: "false"
+
+      - name: ship + roll
+        uses: iluxav/ply/deploy@v1
+        with:
+          image: ${{ steps.img.outputs.image }}
+          host: ${{ vars.WEB_DROPLET_HOST }}
+          ssh-key: ${{ secrets.WEB_DEPLOY_SSH_KEY }}
+          scale: "2"
+          publish: "80:3000"
+
+      - name: verify from outside
+        run: |
+          for i in $(seq 1 20); do
+            curl -fsS -m 5 "http://${{ vars.WEB_DROPLET_HOST }}/" -o /dev/null && exit 0
+            sleep 3
+          done
+          exit 1

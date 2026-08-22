@@ -85,6 +85,8 @@ sudo systemctl enable --now ply-myapp
 
 Because a deploy is `scp` + one command over SSH, GitHub Actions can drive
 the whole thing — build on release, push the image to your host, roll
-with health gates, verify with `ply ps --json`. Dedicated `ply push` /
-`ply status` / `ply rollback` verbs for exactly this workflow are on the
-roadmap.
+with health gates, verify with `ply ps --json`. The published actions
+(`iluxav/ply@v1` to build, `iluxav/ply/deploy@v1` to ship and roll) do it
+in two workflow steps — the complete recipe is
+[Running on DigitalOcean](/docs/digitalocean/). Dedicated `ply push` /
+`ply status` / `ply rollback` verbs are on the roadmap.

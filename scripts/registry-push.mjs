@@ -323,11 +323,14 @@ async function publishState() {
   rmSync(file, { force: true });
   console.log(`state.json published (${out.package_count} packages, ${out.image_count} images)`);
 
-  // Re-render the registry page from the same state so the package table
-  // stays baked into the HTML (SEO — see web/render-registry.mjs).
-  const { renderRegistry } = await import(pathToFileURL(join(ROOT, "web/render-registry.mjs")).href);
+  // The browse UI lives at plybox.sh/registry now — the bucket's root page
+  // is a permanent redirect so old links keep working.
   const page = join(dir, "registry-index.html");
-  writeFileSync(page, renderRegistry(out));
+  writeFileSync(page, `<!doctype html><meta charset="utf-8">
+<meta http-equiv="refresh" content="0; url=https://plybox.sh/registry/">
+<title>ply registry</title>
+<a href="https://plybox.sh/registry/">browse the registry at plybox.sh/registry</a>
+`);
   execFileSync("npx", ["wrangler", "r2", "object", "put",
     `${args.bucket}/index.html`, "--file", page, "--remote",
     "--cache-control", "public, max-age=300", "--content-type", "text/html"],

@@ -3,7 +3,7 @@
 TARGET := x86_64-unknown-linux-musl
 BIN    := target/$(TARGET)/release/ply
 
-.PHONY: check fmt build test static release install uninstall web web-serve registry-catalog registry-push registry-state registry registry-all
+.PHONY: check fmt build test static release install uninstall registry-catalog registry-push registry-state registry registry-all
 
 # fast feedback: fmt + clippy + tests
 check:
@@ -65,16 +65,10 @@ uninstall:
 	sudo rm -f /usr/local/bin/ply /etc/apparmor.d/ply
 	@echo "removed /usr/local/bin/ply"
 
-# --- websites + official registry (R2 via wrangler) --------------------------
-
-# build tailwind + render registry page + push both sites
-# (plybox.sh ← web/landing, registry.plybox.sh ← web/registry)
-web:
-	./web/push.sh
-
-# preview both sites locally (landing :8180, registry :8181)
-web-serve:
-	./web/serve.sh
+# --- website + official registry ---------------------------------------------
+# The site (landing + /docs + /registry) is app/ — a Next.js app deployed to
+# the web droplet by .github/workflows/deploy-web.yml on push. Local dev:
+#   cd app && npm run dev
 
 # One pipeline, parameterized by ARCH (x64 default; arm64 = ARCH=arm64).
 # Separate catalog file per arch; shared ledger (per-arch keys) — so each
