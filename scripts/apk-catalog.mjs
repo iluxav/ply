@@ -151,11 +151,27 @@ for (const p of packages) {
 }
 for (const p of packages) p.reverse_deps = indegree[p.apk] ?? 0;
 
+// Provided by the alpine base package — never useful as a declared dep
+// (keep in sync with apk2pkg's BASE_PROVIDES).
+const BASE_PROVIDES = new Set([
+  "musl", "musl-utils", "busybox", "busybox-binsh", "alpine-baselayout",
+  "alpine-baselayout-data", "alpine-keys", "alpine-release", "libc-utils",
+]);
+// A package someone would DECLARE ships a command; pure libraries reach
+// apps vendored inside their dependents' kegs, not by name.
+const hasCommand = (p) => p.provides.some((x) => x.startsWith("cmd:"));
+
 // tier filter (after reverse_deps so counts reflect the whole universe)
 let selected = packages;
 if (args.tier === "core") selected = packages.filter((p) => !NOISE.test(p.apk));
 else if (args.tier === "main-core")
   selected = packages.filter((p) => !NOISE.test(p.apk) && p.repo === "main");
+else if (args.tier === "cli")
+  // main+community, noise removed, commands only, base internals excluded:
+  // the "anything a user would type in [dependencies]" tier
+  selected = packages.filter(
+    (p) => !NOISE.test(p.apk) && hasCommand(p) && !BASE_PROVIDES.has(p.apk),
+  );
 else if (args.tier !== "all") { console.error(`unknown tier: ${args.tier}`); process.exit(2); }
 selected.sort((a, b) => b.reverse_deps - a.reverse_deps); // load-bearing first
 

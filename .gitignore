@@ -10,4 +10,8 @@ AGENTS.md
 /scripts/.push-work
 /scripts/.tmp-report
 /scripts/apk2pkg.json
+/scripts/apk2pkg-arm64.json
 prompts.md
+.preview/
+/web/dist
+/scripts/apk2pkg-arm64.json

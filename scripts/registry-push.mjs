@@ -81,15 +81,23 @@ const catalog = JSON.parse(readFileSync(args.catalog, "utf8"));
 const state = existsSync(args.state) ? JSON.parse(readFileSync(args.state, "utf8")) : {};
 const saveState = () => writeFileSync(args.state, JSON.stringify(state, null, 1));
 
-const ledgerKey = (p) => `${p.apk}@${p.apk_version}`;
+// Keys carry the arch (apk@version:arm64); entries from before the arm64
+// era have bare keys — those were all x64 pushes, honored as such.
+const catalogArch = { x86_64: "x64", aarch64: "arm64" }[catalog.arch] ?? "x64";
+const ledgerKey = (p) => `${p.apk}@${p.apk_version}:${catalogArch}`;
+const alreadyPushed = (p) =>
+  state[ledgerKey(p)] || (catalogArch === "x64" && state[`${p.apk}@${p.apk_version}`]);
 
-let todo = catalog.packages.filter((p) => !state[ledgerKey(p)]);
+let todo = catalog.packages.filter((p) => !alreadyPushed(p));
 if (args.only) todo = todo.filter((p) => args.only.includes(p.apk) || args.only.includes(p.name));
 todo = todo.slice(0, args.limit);
 if (manualPushes.length > 0) todo = []; // --file mode replaces the catalog batch
 
 console.log(`catalog: ${catalog.package_count} (tier ${catalog.tier ?? "all"}, ${catalog.branch}/${catalog.arch})`);
-console.log(`ledger:  ${Object.keys(state).length} already processed`);
+console.log(
+  `ledger:  ${catalog.packages.filter(alreadyPushed).length}/${catalog.packages.length} of this catalog already pushed ` +
+  `(${Object.keys(state).length} ledger entries total, all arches)`,
+);
 console.log(`batch:   ${todo.length} to convert+push${args.dryRun ? " (dry run)" : ""}\n`);
 
 if (args.stateOnly) {
@@ -129,7 +137,7 @@ async function processOne(p) {
   try {
     // 1. convert (apk2pkg downloads the apk closure itself)
     await execFileAsync(args.apk2pkg,
-      [p.apk, "--alpine", catalog.branch.replace(/^v/, ""), "-o", dir],
+      [p.apk, "--alpine", catalog.branch.replace(/^v/, ""), "--arch", catalogArch, "-o", dir],
       { maxBuffer: 16 * 1024 * 1024 });
     const img = join(dir, p.img);
     if (!existsSync(img)) throw new Error(`converter did not produce ${p.img}`);

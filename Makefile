@@ -77,8 +77,10 @@ web-serve:
 	./web/serve.sh
 
 # refresh the conversion catalog from the latest Alpine APKINDEX
+# (tier cli: main+community packages that ship a command — the set a user
+# could actually declare; pure libraries arrive vendored inside consumers)
 registry-catalog:
-	./scripts/apk-catalog.mjs --tier main-core -o scripts/apk2pkg.json
+	./scripts/apk-catalog.mjs --tier cli -o scripts/apk2pkg.json
 
 # convert + upload the next batch of packages
 # (override: make registry-push LIMIT=500 JOBS=8)
@@ -93,3 +95,9 @@ registry-state:
 
 # the daily job: catalog refresh + delta push
 registry: registry-catalog registry-push
+
+# same, for arm64 — separate catalog file, shared ledger (per-arch keys),
+# same index.json per package ends up listing both arches
+registry-arm64:
+	./scripts/apk-catalog.mjs --tier cli --arch aarch64 -o scripts/apk2pkg-arm64.json
+	./scripts/registry-push.mjs --catalog scripts/apk2pkg-arm64.json --limit $(LIMIT) --jobs $(JOBS)
