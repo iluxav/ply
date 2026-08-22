@@ -407,3 +407,61 @@ pub struct AuditArgs {}
 
 #[derive(Args)]
 pub struct OutdatedArgs {}
+
+/// A Docker verb ply deliberately doesn't have → a pointer to the ply way.
+/// Shown instead of clap's generic "unrecognized subcommand" so switchers
+/// learn the model at exactly the moment they reach for the old habit.
+pub fn docker_hint(cmd: &str) -> Option<&'static str> {
+    Some(match cmd {
+        "pull" => "dependencies fetch on demand, pinned by ply.lock — there is nothing to pull.\n(`ply sync` pre-fetches a host policy's packages; docs: https://plybox.sh/docs/dependencies/)",
+        "push" => "publishing is copying a file: upload the .img to any file host (GitHub Releases, a bucket, a directory).\n(docs: https://plybox.sh/docs/registries/)",
+        "tag" => "no tags, on purpose: published versions are immutable — nothing like `:latest` can move.\nBump [package] version and `ply build` instead.",
+        "login" | "logout" => "registries have no accounts — any file host your network can GET works; the sha256 in ply.lock is the trust, not a login.",
+        "compose" | "up" => "no compose file: every app is its own ply.toml, and apps reach each other by `<app>.ply` names.\n(docs: https://plybox.sh/docs/running/)",
+        "logs" => "logs are stdout — `ply run` is a foreground process. Under systemd: journalctl -u ply-<app>",
+        "stop" | "kill" => "Ctrl-C the foreground run, `ply rm <app>`, or `systemctl stop ply-<app>` under systemd.",
+        "start" | "restart" => "`ply run IMAGE` starts instances; crash restarts are the [restart] policy's job, reboots are systemd's.\n(docs: https://plybox.sh/docs/deploy/)",
+        "inspect" => "`ply check IMAGE` validates an image; `ply ps` / `ply stats` show running instances.",
+        "cp" => "volumes are plain host directories (ply.toml [volumes]); dev mode: `ply run --link HOST:CONTAINER`.",
+        "save" | "load" | "export" => "an image already IS a single file — scp it; `ply run app.img` on the other side.",
+        "network" => "every instance gets its own IP and a `<app>.ply` name on the bridge — no port mappings, no network objects.",
+        "volume" => "declare [volumes] in ply.toml; data lives as plain directories under the volumes dir.\n(docs: https://plybox.sh/docs/volumes/)",
+        "commit" => "turning a live session into an image is `ply craft` (new → commit).\n(docs: https://plybox.sh/docs/packages/)",
+        "rmi" => "`ply gc` deletes store entries no app references; `rm -rf /var/lib/ply` is the factory reset.",
+        _ => return None,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn docker_verbs_get_hints_ply_verbs_do_not() {
+        assert!(docker_hint("pull").is_some());
+        assert!(docker_hint("compose").is_some());
+        assert!(docker_hint("run").is_none());
+        assert!(docker_hint("deploy").is_none());
+    }
+
+    /// A hint must never shadow a real subcommand: if a hinted verb becomes
+    /// a real ply command one day, this forces removing the stale hint.
+    #[test]
+    fn hints_only_cover_nonexistent_subcommands() {
+        for verb in [
+            "pull", "push", "tag", "login", "logout", "compose", "up", "logs", "stop", "kill",
+            "start", "restart", "inspect", "cp", "save", "load", "export", "network", "volume",
+            "commit", "rmi",
+        ] {
+            assert!(
+                docker_hint(verb).is_some(),
+                "{verb} missing from hint table"
+            );
+            assert!(
+                Cli::try_parse_from(["ply", verb]).is_err(),
+                "`ply {verb}` is a real subcommand now — remove its docker hint"
+            );
+        }
+    }
+}

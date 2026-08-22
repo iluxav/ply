@@ -71,7 +71,9 @@ fetches exactly like a dependency. In a base package's own manifest,
 version ranges against the `default` source; table values pick a source
 alias. Version syntax: `"22"` = any 22.x.y, `"6.1"` = any 6.1.x,
 `"1.2.3"` = exactly 1.2.3. Resolution is
-[Minimal Version Selection](/docs/dependencies/).
+[Minimal Version Selection](/docs/dependencies/). Names containing a dot
+must be TOML-quoted (`"boost1.84" = "1.84"`) — a bare dotted key means a
+nested table in TOML.
 
 **`[env]`** — composed after package contributions, before CLI overrides
 (`-e`, `--env-file`); last wins.

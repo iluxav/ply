@@ -1,0 +1,91 @@
+# Generic ship + roll: scp a built ply image to an SSH host and deploy it.
+# Self-bootstrapping — first run installs ply and the systemd unit; every
+# later run is a zero-downtime rolling deploy (health-gated by [health]).
+#
+#   - uses: iluxav/ply@v1            # build (see root action)
+#     id: img
+#     with: { upload: "false" }
+#   - uses: iluxav/ply/deploy@v1
+#     with:
+#       image: ${{ steps.img.outputs.image }}
+#       host: ${{ vars.DROPLET_HOST }}
+#       ssh-key: ${{ secrets.DEPLOY_SSH_KEY }}
+#       scale: "2"
+#       publish: "80:3400"
+#
+# Version bumps are handled with a stable symlink: the unit's ExecStart
+# points at /srv/<app>/current.img, re-linked on every ship — parent
+# restarts and reboots always come back on the latest deployed image.
+name: ply-deploy
+description: Ship a ply image to an SSH host and roll it (self-bootstrapping systemd unit)
+branding:
+  icon: upload-cloud
+  color: green
+inputs:
+  image:
+    description: Path of the built .img (e.g. the root action's `image` output)
+    required: true
+  host:
+    description: SSH host (IP or hostname)
+    required: true
+  ssh-key:
+    description: Private key authorized on the host
+    required: true
+  user:
+    description: SSH user
+    default: root
+  scale:
+    description: Instance count (used at first bootstrap; change via unit later)
+    default: "1"
+  publish:
+    description: "Optional --publish PORT[:INSTANCE_PORT] for the unit"
+    default: ""
+  host-key:
+    description: Pinned host key line for known_hosts (default = TOFU keyscan)
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: ship + roll
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        HOST: ${{ inputs.host }}
+        SSH_USER: ${{ inputs.user }}
+        KEY: ${{ inputs.ssh-key }}
+        SCALE: ${{ inputs.scale }}
+        PUBLISH: ${{ inputs.publish }}
+        HOST_KEY: ${{ inputs.host-key }}
+      run: |
+        set -eu
+        base=$(basename "$IMAGE")
+        # app name from the canonical grammar <name>-<semver>-<os>-<arch>.img
+        app=$(echo "$base" | sed -E 's/-[0-9]+\.[0-9]+\.[0-9]+-linux-(x64|arm64)\.img$//')
+        [ -n "$app" ] && [ "$app" != "$base" ] || { echo "::error::$base is not a canonical ply image name"; exit 1; }
+
+        mkdir -p ~/.ssh && chmod 700 ~/.ssh
+        printf '%s\n' "$KEY" > ~/.ssh/ply_deploy && chmod 600 ~/.ssh/ply_deploy
+        if [ -n "$HOST_KEY" ]; then printf '%s\n' "$HOST_KEY" >> ~/.ssh/known_hosts
+        else ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null; fi
+
+        scp -i ~/.ssh/ply_deploy "$IMAGE" "$SSH_USER@$HOST:/tmp/.ply-incoming-$base"
+        ssh -i ~/.ssh/ply_deploy "$SSH_USER@$HOST" \
+          "APP='$app' BASE='$base' SCALE='$SCALE' PUBLISH='$PUBLISH' bash -s" <<'REMOTE'
+        set -eu
+        command -v ply >/dev/null || curl -fsSL https://plybox.sh/install.sh | sh
+        dir=/srv/$APP
+        mkdir -p "$dir"
+        mv "/tmp/.ply-incoming-$BASE" "$dir/$BASE"
+        ln -sfn "$dir/$BASE" "$dir/current.img"
+        if systemctl is-active -q "ply-$APP"; then
+          ply deploy "$dir/current.img"
+        else
+          flags="--scale $SCALE"
+          [ -n "$PUBLISH" ] && flags="$flags --publish $PUBLISH"
+          ply systemd "$dir/current.img" $flags > "/etc/systemd/system/ply-$APP.service"
+          systemctl daemon-reload
+          systemctl enable --now "ply-$APP"
+        fi
+        sleep 2
+        ply ps
+        REMOTE

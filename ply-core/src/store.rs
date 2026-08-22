@@ -79,21 +79,33 @@ impl Store {
             let _ = std::fs::remove_file(file);
             return Ok(dest);
         }
-        let staging = self.root.join(format!(".tmp-{digest}"));
-        let _ = std::fs::remove_dir_all(&staging);
+        // Staging is unique per inserter: a shared `.tmp-<digest>` path let
+        // concurrent inserters of the same digest delete each other's
+        // half-staged files.
+        static STAGE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let staging = self.root.join(format!(
+            ".tmp-{digest}.{}.{}",
+            std::process::id(),
+            STAGE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         std::fs::create_dir_all(&staging).map_err(|source| Error::Io {
             path: staging.clone(),
             source,
         })?;
         let staged = staging.join("pkg.img");
-        move_file(file, &staged)?;
-        // Atomic claim of the digest dir; a concurrent winner is fine.
+        if let Err(e) = move_file(file, &staged) {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(e);
+        }
+        // Atomic claim of the digest dir; a concurrent winner is fine — the
+        // loser discards its staging.
         match std::fs::rename(&staging, &dir) {
             Ok(()) => {}
             Err(_) if dest.exists() => {
                 let _ = std::fs::remove_dir_all(&staging);
             }
             Err(source) => {
+                let _ = std::fs::remove_dir_all(&staging);
                 return Err(Error::Io { path: dir, source });
             }
         }
@@ -122,4 +134,47 @@ fn rustix_is_root() -> bool {
 extern "C" {
     #[link_name = "geteuid"]
     fn libc_geteuid() -> u32;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// N threads insert the same digest concurrently (a fleet fetching one
+    /// dep into a shared store). Every insert must succeed and the stored
+    /// bytes must be intact — fixed staging names corrupted this.
+    #[test]
+    fn concurrent_inserts_of_same_digest_are_safe() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("store");
+        std::fs::create_dir_all(&root).unwrap();
+        let content = vec![7u8; 300_000];
+        let digest = "sha256:test-digest";
+
+        let mut handles = Vec::new();
+        for i in 0..8 {
+            let root = root.clone();
+            let content = content.clone();
+            let src = tmp.path().join(format!("src-{i}"));
+            handles.push(std::thread::spawn(move || {
+                std::fs::write(&src, &content).unwrap();
+                Store::at(root).insert(&src, digest)
+            }));
+        }
+        for h in handles {
+            let path = h.join().unwrap().expect("insert must not race to failure");
+            assert!(path.ends_with(format!("{digest}/pkg.img")));
+        }
+        let store = Store::at(root);
+        let stored = std::fs::read(store.root().join(digest).join("pkg.img")).unwrap();
+        assert_eq!(stored.len(), content.len(), "stored bytes must be intact");
+        // no staging litter left behind
+        let litter: Vec<_> = std::fs::read_dir(store.root())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with(".tmp-"))
+            .collect();
+        assert!(litter.is_empty(), "staging litter: {litter:?}");
+    }
 }

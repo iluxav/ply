@@ -55,9 +55,11 @@ export function renderRegistry(state) {
     // manifest line: latest version relaxed to major.minor (the range style
     // demos use); non-default namespaces need an explicit source alias
     const range = latest.version.split(".").slice(0, 2).join(".");
+    // TOML: a bare key with a dot is a NESTED table — dotted names must be quoted
+    const key = p.name.includes(".") ? `"${p.name}"` : p.name;
     const dep = p.namespace === "ply"
-      ? `${p.name} = "${range}"`
-      : `${p.name} = { source = "${p.namespace}", version = "${range}" }`;
+      ? `${key} = "${range}"`
+      : `${key} = { source = "${p.namespace}", version = "${range}" }`;
     const search = esc(`${p.namespace}/${p.name} ${p.description} ${arches.join(" ")}`.toLowerCase());
     return `<tr class="border-b border-edge last:border-b-0 align-top" data-search="${search}">
       <td class="px-4 py-3 whitespace-nowrap">${label}<button

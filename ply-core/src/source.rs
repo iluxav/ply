@@ -151,7 +151,15 @@ impl Source {
             }
         }
         let filename = image.to_string();
-        let tmp = store.root().join(format!(".fetch-{filename}"));
+        // Unique per fetch: concurrent fetchers of the same image (parallel
+        // builds sharing a store) must never write through one temp path —
+        // they'd hash each other's half-written bytes.
+        static FETCH_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let tmp = store.root().join(format!(
+            ".fetch-{filename}.{}.{}",
+            std::process::id(),
+            FETCH_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
 
         match self {
             Source::Dir { path } => {
@@ -224,6 +232,47 @@ fn http_get_file(url: &str, dest: &Path) -> std::result::Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// N threads fetch the SAME image from a dir source into one store —
+    /// the fleet case. Fixed `.fetch-<name>` temp names made concurrent
+    /// fetchers hash each other's half-written bytes (poisoned store
+    /// entries) or lose the file mid-operation.
+    #[test]
+    fn concurrent_fetches_of_same_image_are_safe() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pkgs = tmp.path().join("pkgs");
+        std::fs::create_dir_all(&pkgs).unwrap();
+        let img = crate::image::name::ImageName::new(
+            "thing",
+            semver::Version::new(1, 0, 0),
+            crate::image::name::Os::Linux,
+            crate::image::name::Arch::X64,
+        )
+        .unwrap();
+        let bytes = vec![42u8; 400_000];
+        std::fs::write(pkgs.join(img.to_string()), &bytes).unwrap();
+        let expected = crate::digest::sha256_file(&pkgs.join(img.to_string())).unwrap();
+
+        let store_root = tmp.path().join("store");
+        std::fs::create_dir_all(&store_root).unwrap();
+        let src = format!("file://{}", pkgs.display());
+
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let (src, img, store_root) = (src.clone(), img.clone(), store_root.clone());
+            handles.push(std::thread::spawn(move || {
+                let source = Source::parse(&src, false).unwrap();
+                source.fetch(&img, None, &crate::store::Store::at(store_root))
+            }));
+        }
+        for h in handles {
+            let (digest, path) = h.join().unwrap().expect("fetch must not race to failure");
+            assert_eq!(digest, expected, "hashed someone else's partial bytes");
+            assert!(path.exists());
+        }
+        let stored = store_root.join(&expected).join("pkg.img");
+        assert_eq!(std::fs::read(stored).unwrap().len(), bytes.len());
+    }
 
     #[test]
     fn parses_source_kinds() {

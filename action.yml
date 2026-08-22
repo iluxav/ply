@@ -7,6 +7,9 @@
 #       dir: .
 name: ply-build-publish
 description: Build a ply image and upload it to the current GitHub release
+branding:
+  icon: package
+  color: green
 inputs:
   dir:
     description: Directory containing ply.toml

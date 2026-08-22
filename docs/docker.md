@@ -51,6 +51,33 @@ different kind of thing.
 | **split** | app layer + dependency references (default) | Node / Python / JVM |
 | **fat** | everything flattened | imports, airgap, legacy |
 
+## Coming from Docker: the translation table
+
+Muscle-memory map. Where a Docker verb has no ply row, that's a design
+decision, not a gap — the third column says why.
+
+| Docker | ply | Why it's different |
+|---|---|---|
+| `docker build .` | `ply build .` | manifest + lockfile, not a Dockerfile script; output is a deterministic file |
+| `docker run -d IMG` | `ply systemd IMG \| sudo tee …` | no daemon to detach into — supervision is systemd's job |
+| `docker run -p 8080:80` | `ply run --publish 8080:80` | not a port *mapping*: the run parent load-balances the whole pool |
+| `docker run -v` / `volume` | `[volumes]` in ply.toml | volumes are declared per app; plain host directories underneath |
+| `docker run -e` / `--env-file` | same flags | identical on purpose |
+| `docker compose up` | one ply.toml per app | the stack is *derived* from dependencies; apps find each other by `<app>.ply` names |
+| `docker ps` / `exec` / `stats` | same verbs | identical on purpose |
+| `docker logs` | stdout / `journalctl -u ply-<app>` | apps are foreground processes; logging is the supervisor's job |
+| `docker pull` | — | lockfiles fetch exact hashes on demand; `ply sync` pre-fetches a host's policy set |
+| `docker push` | copy a file | any file host is a registry — GitHub Releases, a bucket, a directory |
+| `docker tag` | — | versions are immutable; there is no `:latest` to move. Bump the version, rebuild |
+| `docker login` | — | registries have no accounts; the lockfile's sha256 is the trust |
+| `docker commit` | `ply craft` | same idea, done deliberately: session → inert, content-addressed package |
+| `docker save` / `load` | `scp` | an image already is a single file |
+| `docker network` | — | every instance has its own IP and `.ply` name; nothing to create |
+| `docker rmi` / `system prune` | `ply gc` | reachability from lockfiles decides; `rm -rf /var/lib/ply` is the factory reset |
+
+Typing the old habit is fine, too: `ply pull`, `ply tag`, `ply compose` and
+friends answer with a one-line pointer to the row above instead of an error.
+
 ## What doesn't cross the bridge
 
 Dockerfiles (ply builds from a manifest, not a script), docker-compose
