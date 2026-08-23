@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { IBM_Plex_Sans } from "next/font/google";
 import { JsonLd } from "@/components/JsonLd";
-import { ThemeToggle } from "@/components/ThemeToggle";
 import {
   GITHUB_URL,
   SITE_DESCRIPTION,
@@ -43,7 +42,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={plexSans.variable} suppressHydrationWarning>
+    <html lang="en" className={plexSans.variable}>
       <head>
         <link rel="describedby" href="/llms.txt" type="text/markdown" />
       </head>
@@ -58,12 +57,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             url: `${SITE_URL}/`,
             description: SITE_DESCRIPTION,
             inLanguage: "en",
-          }}
-        />
-        <script
-          // set the chosen theme before first paint (system pref needs no attribute)
-          dangerouslySetInnerHTML={{
-            __html: `try{var t=localStorage.getItem("theme");if(t)document.documentElement.dataset.theme=t}catch(e){}`,
           }}
         />
         <header className="sticky top-0 z-20 border-b border-edge/60 bg-ground/95 backdrop-blur-sm">
@@ -83,7 +76,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               >
                 github<span className="sr-only"> (opens in a new tab)</span>
               </a>
-              <ThemeToggle />
             </nav>
           </div>
         </header>

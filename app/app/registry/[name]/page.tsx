@@ -124,12 +124,12 @@ export default async function PackagePage({
       </p>
 
       <h2 className="mt-10 font-mono text-[10px] uppercase tracking-wider text-fade">use it</h2>
-      <div className="mt-2 flex items-stretch border border-edge bg-card">
+      <div className="utility-surface mt-2 flex items-stretch border border-edge">
         <pre className="min-w-0 flex-1 overflow-x-auto px-4 py-3 font-mono text-sm leading-6"><code>
           <span className="text-fade">[dependencies]</span>{"\n"}
           <span className="text-accent">{dependency}</span>
         </code></pre>
-        <CopyButton value={`[dependencies]\n${dependency}`} className="shrink-0 border-y-0 border-r-0" />
+        <CopyButton value={`[dependencies]\n${dependency}`} className="joined-control shrink-0 border-y-0 border-r-0" />
       </div>
 
       <h2 className="mt-10 font-mono text-[10px] uppercase tracking-wider text-fade">versions</h2>
@@ -145,7 +145,7 @@ export default async function PackagePage({
               <td className="px-4 py-2">
                 <a
                   href={`https://registry.plybox.sh/${v.path}`}
-                  className="inline-flex min-h-8 items-center border border-edge px-2 font-mono text-[10px] text-fade transition-colors hover:border-accent hover:text-accent"
+                  className="secondary-action inline-flex min-h-8 items-center border border-edge px-2 font-mono text-[10px] text-fade transition-colors hover:border-accent hover:text-accent"
                 >
                   {archOf(v)}
                 </a>

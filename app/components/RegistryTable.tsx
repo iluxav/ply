@@ -68,13 +68,13 @@ export function RegistryTable({ rows }: { rows: RegistryRow[] }) {
 
   return (
     <>
-      <div className="mt-6 divide-y divide-edge border-y border-edge lg:hidden">
+      <div className="ply-panel mt-6 divide-y divide-edge border border-edge px-4 lg:hidden">
         {rows.map((row) => (
           <MobileRow key={`${row.namespace}/${row.name}`} row={row} />
         ))}
       </div>
 
-      <div className="mt-6 hidden border-y border-edge lg:block">
+      <div className="registry-table-frame mt-6 hidden border border-edge lg:block">
         <table className="w-full table-fixed text-left">
           <colgroup>
             <col className="w-[48%]" />
@@ -83,7 +83,7 @@ export function RegistryTable({ rows }: { rows: RegistryRow[] }) {
             <col className="w-[10%]" />
             <col className="w-[16%]" />
           </colgroup>
-          <thead className="sticky top-[61px] z-10 bg-ground">
+          <thead className="registry-table-head sticky top-[61px] z-10">
             <tr className="border-b border-edge font-mono text-[10px] uppercase tracking-wider text-fade">
               <th className="px-5 py-3 font-normal">package</th>
               <th className="px-5 py-3 font-normal">latest</th>

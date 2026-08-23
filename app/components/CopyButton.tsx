@@ -55,7 +55,7 @@ export function CopyButton({
     <button
       type="button"
       onClick={copy}
-      className={`inline-flex min-h-11 items-center justify-center border border-edge font-mono text-[11px] text-fade transition-colors hover:border-accent hover:text-accent ${
+      className={`control-shape inline-flex min-h-11 items-center justify-center border border-edge font-mono text-[11px] text-fade transition-colors hover:border-accent hover:text-accent ${
         iconOnly ? "w-11 px-0" : "px-3 md:min-h-8"
       } ${className}`}
       aria-label={`${label} to clipboard`}

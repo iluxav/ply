@@ -1,58 +1,34 @@
-/* Design tokens: dark terminal, green phosphor accent (ported from web/input.css). */
+/* Design tokens: warm terminal black, apricot action, cool-blue secondary text. */
 @import "tailwindcss";
 
 @theme {
-  --color-ground: #0b100d;
-  --color-card: #111812;
-  --color-edge: #27382d;
-  --color-ink: #e2e9e3;
-  --color-fade: #8fa092;
-  --color-accent: #54d795;
-  --color-deep: #1c5c3c;
+  --color-ground: #0e0a07;
+  --color-card: #171310;
+  --color-edge: #3a2a20;
+  --color-ink: #e7e9e5;
+  --color-fade: #9fb9ce;
+  --color-accent: #ffbd81;
+  --color-deep: #5a3828;
+  --color-steel: #1c1918;
+  --color-steel-edge: #4a3d31;
+  --color-steel-ink: #e7eaed;
+  --color-steel-fade: #aaa99f;
 
   --font-sans: var(--font-plex-sans), "IBM Plex Sans", system-ui, sans-serif;
   --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas,
     "Liberation Mono", monospace;
 }
 
-/* Light mode: same phosphor identity on paper. Dark is the brand default;
-   system preference applies unless the toggle chose explicitly. */
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme="dark"]) {
-    --color-ground: #e1e5e0;
-    --color-card: #d7ddd6;
-    --color-edge: #b7c3b8;
-    --color-ink: #17251c;
-    --color-fade: #526a59;
-    --color-accent: #12724a;
-    --color-deep: #bfe4cf;
-    --hl-comment: #6d8172;
-    --hl-string: #2e6e4e;
-    --hl-title: #17251c;
-  }
-}
-:root[data-theme="light"] {
-  --color-ground: #e1e5e0;
-  --color-card: #d7ddd6;
-  --color-edge: #b7c3b8;
-  --color-ink: #17251c;
-  --color-fade: #526a59;
-  --color-accent: #12724a;
-  --color-deep: #bfe4cf;
-  --hl-comment: #6d8172;
-  --hl-string: #2e6e4e;
-  --hl-title: #17251c;
-}
-
 :root {
-  --hl-comment: #5b7263;
-  --hl-string: #a8d8b9;
-  --hl-title: #d7e2d9;
+  --hl-comment: #738596;
+  --hl-string: #ffbd81;
+  --hl-title: #e7e9e5;
 }
 
 @layer base {
   html {
     background: var(--color-ground);
+    color-scheme: dark;
     scroll-behavior: smooth;
   }
   body {
@@ -105,42 +81,134 @@
   text-transform: uppercase;
 }
 
-.closure-line {
-  position: relative;
-}
-.closure-line::before {
-  background: var(--color-edge);
-  content: "";
-  height: calc(100% + 0.75rem);
-  left: 0.42rem;
-  position: absolute;
-  top: 1.15rem;
-  width: 1px;
-}
-.closure-line:last-child::before {
-  display: none;
-}
-
-/* Hero box: a neutral "window". Tailwind utilities resolve through the
-   --color-* variables, so overriding them here re-themes every descendant. */
-.hero-box {
-  --color-card: #131313;
-  --color-ground: #0c0c0c;
-  --color-edge: #2a2a2a;
+/* Steel surfaces separate transport and navigation from apricot actions. */
+.utility-surface {
+  --color-edge: var(--color-steel-edge);
+  --color-fade: var(--color-steel-fade);
+  --color-ink: var(--color-steel-ink);
+  background: var(--color-steel);
   border-radius: 6px;
   overflow: hidden;
 }
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme="dark"]) .hero-box {
-    --color-card: #ffffff;
-    --color-ground: #f3f5f2;
-    --color-edge: #c9d3cb;
-  }
+.secondary-action {
+  --color-edge: var(--color-steel-edge);
+  --color-fade: var(--color-steel-fade);
+  background: var(--color-steel);
+  border-radius: 4px;
 }
-:root[data-theme="light"] .hero-box {
-  --color-card: #ffffff;
-  --color-ground: #f3f5f2;
-  --color-edge: #c9d3cb;
+.registry-table-head {
+  --color-edge: var(--color-steel-edge);
+  --color-fade: var(--color-steel-fade);
+  --color-ink: var(--color-steel-ink);
+  background: var(--color-steel);
+}
+.registry-table-frame {
+  border-radius: 6px;
+  overflow: clip;
+}
+.primary-action,
+.control-shape {
+  border-radius: 4px;
+}
+.joined-control {
+  border-radius: 0;
+}
+.ply-panel {
+  border-radius: 6px;
+  overflow: hidden;
+}
+.doc-nav-current {
+  border-left: 2px solid var(--color-accent);
+  color: var(--color-ink);
+  font-weight: 500;
+  padding-left: 0.625rem;
+}
+
+/* The hero reads as a physical artifact dossier without ornamental chrome. */
+.hero-stage {
+  position: relative;
+}
+
+.hero-box {
+  --color-card: #151210;
+  --color-ground: #100e0d;
+  --color-edge: #352c27;
+  border-radius: 9px;
+  box-shadow: 0 20px 55px rgb(0 0 0 / 0.26);
+  overflow: hidden;
+  position: relative;
+}
+.hero-toolbar {
+  --color-edge: var(--color-steel-edge);
+  --color-fade: var(--color-steel-fade);
+  --color-ink: var(--color-steel-ink);
+  background: var(--color-steel);
+  min-height: 3.75rem;
+}
+.artifact-ticket {
+  align-items: center;
+  background: color-mix(in srgb, var(--color-accent) 7%, var(--color-ground));
+  border: 1px solid var(--color-accent);
+  box-shadow: 4px 4px 0 var(--color-ground), 5px 5px 0 var(--color-edge);
+  border-radius: 5px;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  padding: 0.85rem 1rem;
+  position: relative;
+}
+.artifact-ticket::before {
+  background: var(--color-accent);
+  content: "";
+  inset: -1px auto -1px -1px;
+  position: absolute;
+  width: 3px;
+}
+.closure-layer {
+  border-radius: 3px;
+  box-shadow: 2px 2px 0 color-mix(in srgb, var(--color-edge) 45%, transparent);
+}
+.closure-layer:first-child {
+  border-color: color-mix(in srgb, var(--color-accent) 62%, var(--color-edge));
+}
+.hero-panel {
+  opacity: 0;
+  transform: translateY(5px);
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+.hero-panel.is-active {
+  opacity: 1;
+  transform: translateY(0);
+}
+.hero-proof {
+  color: var(--color-fade);
+  display: flex;
+  font-family: var(--font-mono);
+  font-size: 0.5rem;
+  gap: 0.9rem;
+  justify-content: flex-end;
+  letter-spacing: 0.1em;
+  padding: 0.7rem 0.2rem 0;
+  text-transform: uppercase;
+}
+.hero-proof span {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.9rem;
+}
+.hero-proof span + span::before {
+  background: var(--color-edge);
+  content: "";
+  height: 2px;
+  width: 2px;
+}
+
+@media (max-width: 420px) {
+  .hero-proof span:nth-child(2) { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-panel { transition: none; }
 }
 
 /* Rendered markdown (docs bodies come from marked at build time) */
@@ -152,8 +220,8 @@
 .doc a { color: var(--color-accent); }
 .doc a:hover { text-decoration: underline; }
 .doc strong { color: var(--color-ink); font-weight: 600; }
-.doc code { background: var(--color-card); border: 1px solid var(--color-edge); font-family: var(--font-mono); padding: 0.1rem 0.3rem; font-size: 0.84em; }
-.doc pre { background: var(--color-card); border: 1px solid var(--color-edge); padding: 1rem; overflow-x: auto; margin: 1.2rem 0; }
+.doc code { background: var(--color-steel); border: 1px solid var(--color-steel-edge); border-radius: 3px; color: var(--color-steel-ink); font-family: var(--font-mono); padding: 0.1rem 0.3rem; font-size: 0.84em; }
+.doc pre { background: var(--color-steel); border: 1px solid var(--color-steel-edge); border-radius: 6px; padding: 1rem; overflow-x: auto; margin: 1.2rem 0; }
 .doc pre code { background: none; border: none; padding: 0; font-size: 0.85rem; line-height: 1.55; }
 .doc table { display: block; max-width: 100%; overflow-x: auto; width: 100%; border: 1px solid var(--color-edge); border-collapse: collapse; margin: 1rem 0; font-family: var(--font-mono); font-size: 0.8rem; }
 .doc th, .doc td { border-bottom: 1px solid var(--color-edge); padding: 0.5rem 0.7rem; text-align: left; color: var(--color-fade); }
@@ -162,7 +230,7 @@
 .doc .anchor { color: var(--color-edge); margin-right: 0.4rem; text-decoration: none; }
 .doc h2:hover .anchor, .doc h3:hover .anchor { color: var(--color-accent); }
 
-/* highlight.js — minimal phosphor palette, theme-aware */
+/* highlight.js — minimal terminal palette, theme-aware */
 .hljs-comment, .hljs-quote { color: var(--hl-comment); }
 .hljs-keyword, .hljs-selector-tag, .hljs-section { color: var(--color-accent); }
 .hljs-string, .hljs-attr, .hljs-number, .hljs-literal { color: var(--hl-string); }

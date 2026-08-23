@@ -138,7 +138,7 @@ async function RegistryCatalog({
           <label htmlFor="package-search" className="mb-2 block font-mono text-[10px] uppercase tracking-wider text-fade">
             Search every package
           </label>
-          <div className="flex border border-edge bg-card focus-within:border-accent">
+          <div className="utility-surface flex border border-edge focus-within:border-accent">
             <input
               id="package-search"
               name="q"
@@ -150,7 +150,7 @@ async function RegistryCatalog({
             />
             <button
               type="submit"
-              className="min-h-11 border-l border-edge px-4 font-mono text-xs text-fade transition-colors hover:text-accent"
+              className="joined-control min-h-11 border-l border-edge px-4 font-mono text-xs text-fade transition-colors hover:text-accent"
             >
               search
             </button>
@@ -235,7 +235,7 @@ export default async function RegistryPage({ searchParams }: RegistryPageProps) 
           <p className="mt-4 font-mono text-[11px] text-fade">{stats}</p>
         </div>
 
-        <div className="mt-7 flex max-w-3xl items-center border border-edge bg-card">
+        <div className="utility-surface mt-7 flex max-w-3xl items-center border border-edge">
           <span className="hidden shrink-0 border-r border-edge px-3 font-mono text-[10px] uppercase tracking-wider text-fade sm:inline-flex sm:min-h-11 sm:items-center">
             source
           </span>
@@ -246,7 +246,7 @@ export default async function RegistryPage({ searchParams }: RegistryPageProps) 
             value={`[sources]\n${DEFAULT_SOURCE}`}
             label="copy registry source"
             iconOnly
-            className="shrink-0 border-y-0 border-r-0"
+            className="joined-control shrink-0 border-y-0 border-r-0"
           />
         </div>
       </div>

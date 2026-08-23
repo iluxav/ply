@@ -92,7 +92,7 @@ export default async function DocPage({
           ],
         }}
       />
-      <details className="group mb-8 border border-edge bg-card md:hidden">
+      <details className="utility-surface group mb-8 border border-edge md:hidden">
         <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between px-4 font-mono text-xs text-fade [&::-webkit-details-marker]:hidden">
           <span>
             <span className="mr-2 text-accent">docs /</span>
@@ -110,7 +110,7 @@ export default async function DocPage({
                   href={page.url}
                   aria-current={page.slug === doc.slug ? "page" : undefined}
                   className={`block min-h-9 py-2 text-sm ${
-                    page.slug === doc.slug ? "text-accent" : "text-fade"
+                    page.slug === doc.slug ? "doc-nav-current" : "text-fade"
                   }`}
                 >
                   {page.title}
@@ -135,7 +135,7 @@ export default async function DocPage({
                 aria-current={p.slug === doc.slug ? "page" : undefined}
                 className={`block py-1.5 text-sm transition-colors ${
                   p.slug === doc.slug
-                    ? "text-accent"
+                    ? "doc-nav-current"
                     : "text-fade hover:text-ink"
                 }`}
               >

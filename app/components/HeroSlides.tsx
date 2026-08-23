@@ -66,37 +66,37 @@ const DEPLOY: TermLine[] = [
 ];
 
 const CLOSURE = [
-  { name: APP, version: "1.4.0", hash: "9b72…f31a", role: "app" },
-  { name: "ffmpeg", version: "6.1.1", hash: "64e8…a210", role: "dependency" },
-  { name: "python3", version: "3.12.13", hash: "2c1f…8d09", role: "dependency" },
-  { name: "alpine", version: "3.20.7", hash: "a44c…e781", role: "base" },
+  { name: APP, version: "1.4.0", hash: "9b72…f31a", role: "app", location: "image" },
+  { name: "ffmpeg", version: "6.1.1", hash: "64e8…a210", role: "dep", location: "store" },
+  { name: "python3", version: "3.12.13", hash: "2c1f…8d09", role: "runtime", location: "store" },
+  { name: "alpine", version: "3.20.7", hash: "a44c…e781", role: "base", location: "store" },
 ];
 
 const SLIDES = [
-  { id: "files", label: "project files", caption: `${APP}/`, badge: "python" },
-  { id: "manifest", label: "ply.toml", caption: "ply.toml", badge: `${MANIFEST.split("\n").length} lines` },
-  { id: "run", label: "build and run", caption: "terminal", badge: "3 instances" },
-  { id: "deploy", label: "rolling deploy", caption: "deploy", badge: "zero downtime" },
-  { id: "closure", label: "resolved closure", caption: "resolved closure", badge: "verified" },
+  { id: "closure", label: "artifact", caption: "resolved closure", badge: "verified" },
+  { id: "files", label: "project", caption: `${APP}/`, badge: "4 files" },
+  { id: "manifest", label: "manifest", caption: "ply.toml", badge: `${MANIFEST.split("\n").length} lines` },
+  { id: "run", label: "run ×3", caption: "terminal", badge: "3 instances" },
+  { id: "deploy", label: "deploy", caption: "rolling deploy", badge: "healthy" },
 ] as const;
 
-const INTERVAL_MS = 5000;
+const INTERVAL_MS = 6000;
 
 function FilesSlide() {
   return (
-    <div className="p-4 font-mono text-sm sm:p-5">
+    <div className="p-5 font-mono text-sm sm:p-6">
       <p className="text-ink">{APP}/</p>
-      <ul className="mt-1">
-        {FILES.map((f, i) => (
-          <li key={f.name} className="flex items-baseline gap-3 leading-7">
-            <span className="text-fade">{i === FILES.length - 1 ? "└──" : "├──"}</span>
-            <span className="text-ink">{f.name}</span>
-            {f.note && <span className="ml-auto text-right text-xs text-fade">{f.note}</span>}
+      <ul className="mt-2">
+        {FILES.map((f, index) => (
+          <li key={f.name} className="flex items-baseline gap-3 leading-8">
+            <span className="text-fade">{index === FILES.length - 1 ? "└──" : "├──"}</span>
+            <span className={f.note ? "text-ink" : "text-fade"}>{f.name}</span>
+            {f.note && <span className="ml-auto text-right text-[10px] text-fade">{f.note}</span>}
           </li>
         ))}
       </ul>
-      <p className="mt-5 border-t border-edge pt-4 font-sans text-xs leading-5 text-fade">
-        ply.toml is what you declare; ply.lock is what ply proved. Commit both.
+      <p className="mt-6 border-t border-edge pt-4 font-sans text-xs leading-5 text-fade">
+        You declare ply.toml. ply build resolves the graph and writes ply.lock.
       </p>
     </div>
   );
@@ -104,7 +104,7 @@ function FilesSlide() {
 
 function ManifestSlide() {
   return (
-    <pre className="whitespace-pre-wrap [overflow-wrap:anywhere] p-4 font-mono text-[13px] leading-6 sm:p-5">
+    <pre className="whitespace-pre-wrap [overflow-wrap:anywhere] p-5 font-mono text-[12px] leading-[1.65] sm:p-6">
       <code>
         {MANIFEST.split("\n").map((line, i) => {
           const eq = line.indexOf(" = ");
@@ -125,8 +125,8 @@ function ManifestSlide() {
 
 function Term({ lines, note }: { lines: TermLine[]; note: string }) {
   return (
-    <div className="p-4 sm:p-5">
-      <pre className="whitespace-pre-wrap [overflow-wrap:anywhere] font-mono text-[13px] leading-6"><code>
+    <div className="p-5 sm:p-6">
+      <pre className="whitespace-pre-wrap [overflow-wrap:anywhere] font-mono text-[12px] leading-[1.65]"><code>
         {lines.map((line, i) =>
           line.kind === "gap" ? (
             <span key={i} className="block"> </span>
@@ -162,43 +162,78 @@ const DeploySlide = () => (
 
 function ClosureSlide() {
   return (
-    <>
-      <div className="border-b border-edge bg-ground/50 px-4 py-4">
-        <p className="font-mono text-sm text-ink">{IMG}</p>
-        <p className="mt-1 font-mono text-[10px] uppercase tracking-wider text-fade">
-          one file · {SIZE}
-        </p>
+    <div className="p-5 sm:p-6">
+      <div className="artifact-ticket">
+        <div className="min-w-0">
+          <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-accent">build output</p>
+          <p className="mt-1.5 truncate font-mono text-sm text-ink">{IMG}</p>
+        </div>
+        <div className="shrink-0 text-right font-mono">
+          <p className="text-sm text-ink">{SIZE}</p>
+          <p className="mt-1 text-[9px] uppercase tracking-[0.16em] text-fade">squashfs</p>
+        </div>
       </div>
-      <div className="p-4 sm:p-5">
-        <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-fade">
-          mounted lowerdirs
-        </p>
-        <p className="mt-1 font-mono text-[10px] text-fade">
-          app in the image · dependencies by hash from your sources
-        </p>
-        <ol className="mt-3 space-y-2.5">
-          {CLOSURE.map((pkg) => (
-            <li key={pkg.name} className="closure-line flex gap-3">
-              <span className="relative z-10 mt-3 size-[9px] shrink-0 rounded-full border border-accent bg-card" />
-              <div className="flex min-w-0 flex-1 items-center justify-between gap-3 rounded-[4px] border border-edge bg-ground px-3 py-2 font-mono">
-                <div className="min-w-0">
-                  <span className="text-sm text-ink">{pkg.name}</span>
-                  <span className="ml-1.5 text-xs text-fade">@{pkg.version}</span>
-                </div>
-                <div className="flex shrink-0 items-center gap-2 text-[10px] text-fade">
-                  <span className="hidden sm:inline">{pkg.hash}</span>
-                  <span className="border border-edge px-1.5 py-0.5">{pkg.role}</span>
-                </div>
-              </div>
-            </li>
-          ))}
-        </ol>
+
+      <div className="mt-5 flex items-end justify-between gap-3 font-mono">
+        <div>
+          <p className="text-[10px] uppercase tracking-[0.16em] text-fade">mounted closure</p>
+          <p className="mt-1 text-[10px] text-fade">one version per package</p>
+        </div>
+        <p className="text-[10px] text-accent">4 / 4 digests match</p>
       </div>
-    </>
+
+      <ol className="mt-3 space-y-1.5">
+        {CLOSURE.map((pkg, index) => (
+          <li key={pkg.name} className="closure-layer grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 border border-edge bg-ground px-3 py-2 font-mono">
+            <span className="text-[9px] text-fade">{String(index + 1).padStart(2, "0")}</span>
+            <div className="min-w-0">
+              <span className="text-xs text-ink">{pkg.name}</span>
+              <span className="ml-1.5 text-[10px] text-fade">@{pkg.version}</span>
+            </div>
+            <div className="flex items-center gap-2 text-[9px] uppercase tracking-wider text-fade">
+              <span className="hidden sm:inline">{pkg.hash}</span>
+              <span className={pkg.location === "image" ? "text-accent" : ""}>{pkg.location}</span>
+              <span className="w-12 border-l border-edge pl-2 text-right">{pkg.role}</span>
+            </div>
+          </li>
+        ))}
+      </ol>
+
+      <div className="mt-4 flex items-center gap-3 border-t border-edge pt-4 font-mono text-[10px] text-fade">
+        <span className="inline-flex items-center gap-2 text-accent">
+          <span className="size-1.5 bg-accent" /> exact bytes
+        </span>
+        <span aria-hidden="true">→</span>
+        <span>one mounted root</span>
+      </div>
+    </div>
   );
 }
 
-const BODIES = [FilesSlide, ManifestSlide, RunSlide, DeploySlide, ClosureSlide];
+const BODIES = [ClosureSlide, FilesSlide, ManifestSlide, RunSlide, DeploySlide];
+
+function PlyMark() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 64 64" className="size-8 shrink-0">
+      <path
+        d="M63 1V51A12 12 0 0 1 51 63H13A12 12 0 0 1 1 51V13A12 12 0 0 1 13 1Z"
+        fill="var(--color-ground)"
+        stroke="var(--color-edge)"
+        strokeWidth="2"
+      />
+      <text
+        x="32"
+        y="41"
+        fill="var(--color-accent)"
+        fontFamily="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+        fontSize="26"
+        textAnchor="middle"
+      >
+        ply
+      </text>
+    </svg>
+  );
+}
 
 export function HeroSlides() {
   const [index, setIndex] = useState(0);
@@ -245,68 +280,82 @@ export function HeroSlides() {
   const slide = SLIDES[index];
 
   return (
-    <figure
-      className="hero-box min-w-0 border border-edge bg-card lg:mt-5"
-      onMouseEnter={() => setPaused(true)}
-      onMouseLeave={() => setPaused(false)}
-      onFocus={() => setPaused(true)}
-      onBlur={() => setPaused(false)}
-    >
-      <figcaption className="flex items-center justify-between border-b border-edge px-4 py-3 font-mono text-[11px] text-fade">
-        <span>{slide.caption}</span>
-        <span className="flex items-center gap-2 text-accent">
-          <span className="size-1.5 rounded-full bg-accent" /> {slide.badge}
-        </span>
-      </figcaption>
-
-      <div className="grid grid-cols-[minmax(0,1fr)]">
-        {BODIES.map((Body, i) => {
-          const active = i === index;
-          return (
-            <div
-              key={SLIDES[i].id}
-              id={`${baseId}-panel-${i}`}
-              role="tabpanel"
-              aria-labelledby={`${baseId}-tab-${i}`}
-              aria-hidden={!active}
-              inert={!active}
-              className={`col-start-1 row-start-1 min-w-0 transition-opacity duration-150 ${active ? "opacity-100" : "invisible opacity-0"}`}
-            >
-              <Body />
-            </div>
-          );
-        })}
-      </div>
-
-      <div
-        role="tablist"
-        aria-label="How ply works"
-        onKeyDown={onKeyDown}
-        className="flex items-center justify-center border-t border-edge px-2 py-1"
+    <div className="hero-stage min-w-0 lg:mt-5">
+      <figure
+        className="hero-box min-w-0 border border-edge bg-card"
+        onMouseEnter={() => setPaused(true)}
+        onMouseLeave={() => setPaused(false)}
+        onFocus={() => setPaused(true)}
+        onBlur={() => setPaused(false)}
       >
-        {SLIDES.map((s, i) => {
-          const active = i === index;
-          return (
-            <button
-              key={s.id}
-              ref={(el) => { tabs.current[i] = el; }}
-              id={`${baseId}-tab-${i}`}
-              type="button"
-              role="tab"
-              aria-selected={active}
-              aria-controls={`${baseId}-panel-${i}`}
-              aria-label={s.label}
-              tabIndex={active ? 0 : -1}
-              onClick={() => select(i)}
-              className="group flex size-8 items-center justify-center"
-            >
-              <span
-                className={`block h-1.5 rounded-full transition-all duration-150 ${active ? "w-4 bg-accent" : "w-1.5 bg-edge group-hover:bg-fade"}`}
-              />
-            </button>
-          );
-        })}
+        <figcaption className="hero-toolbar flex items-center justify-between gap-4 border-b border-edge px-4 py-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <PlyMark />
+            <div className="min-w-0 font-mono">
+              <p className="text-[10px] uppercase tracking-[0.16em] text-fade">ply artifact</p>
+              <p className="mt-0.5 truncate text-[11px] text-ink">{slide.caption}</p>
+            </div>
+          </div>
+          <span className="flex shrink-0 items-center gap-2 font-mono text-[10px] uppercase tracking-[0.12em] text-accent">
+            <span className="size-1.5 bg-accent" /> {slide.badge}
+          </span>
+        </figcaption>
+
+        <div className="grid min-h-[386px] grid-cols-[minmax(0,1fr)] sm:min-h-[404px]">
+          {BODIES.map((Body, i) => {
+            const active = i === index;
+            return (
+              <div
+                key={SLIDES[i].id}
+                id={`${baseId}-panel-${i}`}
+                role="tabpanel"
+                aria-labelledby={`${baseId}-tab-${i}`}
+                aria-hidden={!active}
+                inert={!active}
+                className={`hero-panel col-start-1 row-start-1 min-w-0 ${active ? "is-active" : "invisible"}`}
+              >
+                <Body />
+              </div>
+            );
+          })}
+        </div>
+
+        <div
+          role="tablist"
+          aria-label="How ply works"
+          onKeyDown={onKeyDown}
+          className="grid grid-cols-5 border-t border-edge bg-ground/40"
+        >
+          {SLIDES.map((s, i) => {
+            const active = i === index;
+            return (
+              <button
+                key={s.id}
+                ref={(el) => { tabs.current[i] = el; }}
+                id={`${baseId}-tab-${i}`}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                aria-controls={`${baseId}-panel-${i}`}
+                tabIndex={active ? 0 : -1}
+                onClick={() => select(i)}
+                className={`hero-tab relative min-w-0 border-r border-edge px-1 py-3 font-mono text-[9px] uppercase tracking-[0.08em] transition-colors last:border-r-0 sm:px-2 sm:text-[10px] ${
+                  active ? "bg-card text-ink" : "text-fade hover:bg-card/60 hover:text-ink"
+                }`}
+              >
+                <span className="block truncate">{s.label}</span>
+                <span className={`absolute inset-x-2 bottom-0 h-px ${active ? "bg-accent" : "bg-transparent"}`} />
+              </button>
+            );
+          })}
+        </div>
+      </figure>
+
+      <div className="hero-proof" aria-hidden="true">
+        <span>content addressed</span>
+        <span>daemonless</span>
+        <span>linux · x64</span>
       </div>
-    </figure>
+    </div>
   );
 }

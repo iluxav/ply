@@ -85,23 +85,23 @@ export default function Home() {
             registry server.
           </p>
 
-          <div className="mt-8 flex max-w-xl items-stretch border border-edge bg-card">
+          <div className="utility-surface mt-8 flex max-w-xl items-stretch border border-edge">
             <code className="min-w-0 flex-1 overflow-x-auto px-4 py-3.5 font-mono text-[13px] leading-5 text-ink">
               {INSTALL_COMMAND}
             </code>
-            <CopyButton value={INSTALL_COMMAND} label="copy" className="shrink-0 border-y-0 border-r-0" />
+            <CopyButton value={INSTALL_COMMAND} label="copy" className="joined-control shrink-0 border-y-0 border-r-0" />
           </div>
 
           <div className="mt-6 flex flex-wrap gap-3 font-mono text-[13px]">
             <Link
               href="/docs/quickstart/"
-              className="inline-flex min-h-11 items-center border border-accent bg-accent px-4 text-ground transition-colors hover:bg-transparent hover:text-accent"
+              className="primary-action inline-flex min-h-11 items-center border border-accent bg-accent px-4 text-ground transition-colors hover:bg-transparent hover:text-accent"
             >
               start with ply →
             </Link>
             <Link
               href="/registry/"
-              className="inline-flex min-h-11 items-center border border-edge px-4 text-fade transition-colors hover:border-accent hover:text-accent"
+              className="secondary-action inline-flex min-h-11 items-center border border-edge px-4 text-fade transition-colors hover:border-accent hover:text-accent"
             >
               browse packages
             </Link>
@@ -120,7 +120,7 @@ export default function Home() {
               <span className="block text-fade">all the way down.</span>
             </h2>
           </div>
-          <dl className="grid gap-px border border-edge bg-edge md:grid-cols-3">
+          <dl className="ply-panel grid gap-px border border-edge bg-edge md:grid-cols-3">
             {PRINCIPLES.map((item) => (
               <div key={item.token} className="bg-ground p-5 sm:p-6">
                 <dt>
@@ -145,7 +145,7 @@ export default function Home() {
           </p>
         </div>
 
-        <ol className="mt-9 grid gap-px border border-edge bg-edge lg:grid-cols-3">
+        <ol className="ply-panel mt-9 grid gap-px border border-edge bg-edge lg:grid-cols-3">
           {LOOP.map((step, index) => (
             <li key={step.verb} className="bg-card p-5 sm:p-6">
               <div className="flex items-center justify-between font-mono text-[10px] uppercase tracking-wider">
