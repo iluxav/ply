@@ -15,7 +15,8 @@ pub fn exec(args: PsArgs) -> Result<()> {
         return Ok(());
     }
 
-    if states.is_empty() {
+    let waiting = ply_core::runtime::after::WaitingMarker::list();
+    if states.is_empty() && waiting.is_empty() {
         println!("no instances running");
         return Ok(());
     }
@@ -40,6 +41,20 @@ pub fn exec(args: PsArgs) -> Result<()> {
             human_duration(now.saturating_sub(s.started)),
             s.restarts,
             status
+        );
+    }
+    // Parents blocked on --after have no instances yet; show them so the
+    // wait is visible rather than a silent gap.
+    for w in &waiting {
+        println!(
+            "{:<24} {:>8} {:<14} {:<20} {:>8} {:>8} waiting on {}",
+            w.app,
+            w.pid,
+            "—",
+            "—",
+            human_duration(now.saturating_sub(w.since)),
+            "—",
+            w.after.join(", ")
         );
     }
     Ok(())

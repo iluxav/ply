@@ -65,7 +65,7 @@ decision, not a gap — the third column says why.
 | `docker run -p 8080:80` | `ply run --publish 8080:80` | not a port *mapping*: the run parent load-balances the whole pool |
 | `docker run -v` / `volume` | `[volumes]` in ply.toml | volumes are declared per app; plain host directories underneath |
 | `docker run -e` / `--env-file` | same flags | identical on purpose |
-| `docker compose up` | one ply.toml per app | the stack is *derived* from dependencies; apps find each other by `<app>.ply` names |
+| `docker compose up` | one ply.toml per app, `ply run --after db app.img` | apps find each other by `<app>.ply` names; `--after` waits for the other app's health gate |
 | `docker ps` / `exec` / `stats` | same verbs | identical on purpose |
 | `docker logs` | stdout / `journalctl -u ply-<app>` | apps are foreground processes; logging is the supervisor's job |
 | `docker pull` | — | lockfiles fetch exact hashes on demand; `ply sync` pre-fetches a host's policy set |

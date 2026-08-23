@@ -33,6 +33,11 @@ pub struct RunOptions {
     pub links: Vec<(PathBuf, String)>,
     /// `--publish`: the parent binds this host port and L4-balances the pool.
     pub publish: Option<crate::runtime::publish::Publish>,
+    /// `--after`: apps on this host that must be healthy before the first
+    /// instance launches (waited for once, at parent start).
+    pub after: Vec<String>,
+    /// `--after-timeout`: how long to wait for `after` before giving up.
+    pub after_timeout: std::time::Duration,
 }
 
 /// Live wiring for a published pool, threaded through instance launches.
@@ -105,6 +110,21 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
         }
         None => None,
     };
+
+    // --after: block until the named apps pass their health gates. Placed
+    // after --publish so a taken port still fails fast, before any launch so
+    // the wait happens exactly once per parent.
+    if !opts.after.is_empty() {
+        let me = &ctx.manifest.package.name;
+        if opts.after.iter().any(|a| a == me) {
+            return Err(Error::Runtime(format!(
+                "--after {me}: an app cannot wait for itself"
+            )));
+        }
+        let _waiting = crate::runtime::after::WaitingMarker::write(me, &opts.after)?;
+        crate::runtime::after::wait_for(&opts.after, opts.after_timeout)?;
+        eprintln!("ply: starting {me}");
+    }
 
     if !rootless {
         network::ensure_bridge()?;
@@ -835,6 +855,7 @@ fn launch_instance(
         image: app_image.display().to_string(),
         started,
         restarts,
+        health_port: manifest.health.as_ref().and_then(|h| h.port),
     };
     state.save()?;
     if !rootless {

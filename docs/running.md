@@ -36,6 +36,13 @@ instance IPs:
 curl http://myapp.ply:3000        # round-robins across instances via DNS
 ```
 
+Instances reach the internet through the host: each rootful run enables
+IPv4 forwarding and a source-NAT rule for `10.77.0.0/16` (nft, or iptables
+where that is all the host has) and gives the instance the host's real
+upstream resolvers — a `127.0.0.53` systemd-resolved stub is replaced by
+what it forwards to. Rootless instances share the host network and need
+none of this.
+
 Ports in the manifest are **labels** of what the app binds internally —
 not host port claims. Two apps both declaring port 3000 never conflict.
 
@@ -75,6 +82,25 @@ The two modes differ in who picks the instance-side port:
 
 The line it never crosses: TCP only. Hostnames, TLS, HTTP — that's the
 edge's job (`ply proxy`); publishing is port exposure, not a proxy.
+
+## Start order
+
+Apps that depend on each other are still separate apps — a server and its
+database each have their own manifest, image, volumes and restart policy.
+`--after` orders their start without a stack file:
+
+```sh
+ply run pgdb.img &
+ply run --scale 10 --after pgdb pgapp.img     # blocks until pgdb is healthy
+```
+
+"Healthy" is the app's own `[health]` gate (its port accepting a TCP
+connection); an app without `[health]` only has to be running. The parent
+prints what it is waiting for, `ply ps` lists it as `waiting on pgdb`, and
+after `--after-timeout` (default `60s`) it gives up with a non-zero exit.
+The same flag goes into a unit: `ply systemd --after pgdb pgapp.img` emits
+`After=`/`Wants=ply-pgdb.service` so systemd orders the start and ply gates
+on readiness.
 
 ## Environment
 

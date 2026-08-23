@@ -22,6 +22,10 @@ pub struct InstanceState {
     /// Times the run parent respawned this slot ([restart] policy).
     #[serde(default)]
     pub restarts: u32,
+    /// `[health] port` of the manifest this instance runs — what `--after`
+    /// probes. Absent in state written by older parents (alive is the bar).
+    #[serde(default)]
+    pub health_port: Option<u16>,
 }
 
 fn state_dir() -> PathBuf {

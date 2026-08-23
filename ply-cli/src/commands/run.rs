@@ -39,6 +39,9 @@ pub fn exec(args: RunArgs) -> Result<()> {
         scale: args.scale,
         links,
         publish,
+        after: args.after.clone(),
+        after_timeout: ply_core::manifest::parse_duration(&args.after_timeout)
+            .map_err(|e| anyhow::anyhow!("--after-timeout: {e}"))?,
     })?;
     std::process::exit(code);
 }

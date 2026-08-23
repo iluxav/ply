@@ -11,6 +11,7 @@ use crate::error::{Error, Result};
 
 pub const BRIDGE: &str = "ply0";
 pub const GATEWAY: Ipv4Addr = Ipv4Addr::new(10, 77, 0, 1);
+pub const SUBNET: &str = "10.77.0.0/16";
 
 fn sh(program: &str, args: &[&str]) -> Result<()> {
     let output = Command::new(program)
@@ -54,7 +55,110 @@ pub fn ensure_bridge() -> Result<()> {
     let _ = Command::new("ip")
         .args(["addr", "add", &format!("{GATEWAY}/16"), "dev", BRIDGE])
         .output();
-    sh("ip", &["link", "set", BRIDGE, "up"])
+    sh("ip", &["link", "set", BRIDGE, "up"])?;
+    ensure_egress();
+    Ok(())
+}
+
+/// nft program that source-NATs the bridge subnet on its way out. Applied
+/// once; `nft list table ip ply` succeeding means it is in place.
+pub fn nft_egress_script() -> String {
+    format!(
+        "table ip ply {{\n  chain postrouting {{\n    type nat hook postrouting priority srcnat; policy accept;\n    ip saddr {SUBNET} oifname != \"{BRIDGE}\" masquerade\n  }}\n}}\n"
+    )
+}
+
+/// The same rule for hosts that only have iptables (checked with -C, added with -A).
+pub fn iptables_egress_rule() -> [&'static str; 8] {
+    [
+        "POSTROUTING",
+        "-s",
+        SUBNET,
+        "!",
+        "-o",
+        BRIDGE,
+        "-j",
+        "MASQUERADE",
+    ]
+}
+
+pub fn forwarding_needs_enable(current: &str) -> bool {
+    current.trim() != "1"
+}
+
+fn has(program: &str) -> bool {
+    Command::new(program)
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+fn succeeds(program: &str, args: &[&str]) -> bool {
+    Command::new(program)
+        .args(args)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Instances sit behind the bridge in their own netns; without IPv4
+/// forwarding and source NAT on the host they can reach each other and
+/// nothing else. Idempotent; warns instead of failing so a host without
+/// nft/iptables still runs apps that need no egress.
+pub fn ensure_egress() {
+    const FORWARD: &str = "/proc/sys/net/ipv4/ip_forward";
+    if forwarding_needs_enable(&std::fs::read_to_string(FORWARD).unwrap_or_default()) {
+        if let Err(e) = std::fs::write(FORWARD, "1") {
+            eprintln!(
+                "ply: warning: cannot enable {FORWARD} ({e}) — instances have no internet egress"
+            );
+        }
+    }
+    if has("nft") {
+        if succeeds("nft", &["list", "table", "ip", "ply"]) {
+            return;
+        }
+        let script = nft_egress_script();
+        let run = Command::new("nft")
+            .args(["-f", "-"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                use std::io::Write;
+                if let Some(mut stdin) = child.stdin.take() {
+                    stdin.write_all(script.as_bytes())?;
+                }
+                child.wait_with_output()
+            });
+        match run {
+            Ok(o) if o.status.success() => return,
+            Ok(o) => eprintln!(
+                "ply: warning: nft NAT setup failed: {}",
+                String::from_utf8_lossy(&o.stderr).trim()
+            ),
+            Err(e) => eprintln!("ply: warning: nft NAT setup failed: {e}"),
+        }
+    }
+    if has("iptables") {
+        let rule = iptables_egress_rule();
+        let mut check = vec!["-t", "nat", "-C"];
+        check.extend(rule);
+        if succeeds("iptables", &check) {
+            return;
+        }
+        let mut add = vec!["-t", "nat", "-A"];
+        add.extend(rule);
+        if let Err(e) = sh("iptables", &add) {
+            eprintln!("ply: warning: iptables NAT setup failed: {e}");
+        }
+        return;
+    }
+    eprintln!(
+        "ply: warning: neither nft nor iptables found — instances have no internet egress (install nftables)"
+    );
 }
 
 /// Lowest free 10.77.x.y outside {.0.0, .0.1}.
@@ -118,4 +222,49 @@ pub fn setup_instance(pid: i32, ip: Ipv4Addr) -> Result<()> {
         .args(["neigh", "del", &ip.to_string(), "dev", BRIDGE])
         .output();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nft_script_masquerades_the_bridge_subnet_only_when_leaving_the_bridge() {
+        let s = nft_egress_script();
+        assert!(s.contains("table ip ply"), "{s}");
+        assert!(
+            s.contains("type nat hook postrouting priority srcnat"),
+            "{s}"
+        );
+        assert!(
+            s.contains(&format!(
+                "ip saddr {SUBNET} oifname != \"{BRIDGE}\" masquerade"
+            )),
+            "{s}"
+        );
+    }
+
+    #[test]
+    fn iptables_rule_matches_the_nft_semantics() {
+        assert_eq!(
+            iptables_egress_rule(),
+            [
+                "POSTROUTING",
+                "-s",
+                SUBNET,
+                "!",
+                "-o",
+                BRIDGE,
+                "-j",
+                "MASQUERADE"
+            ]
+        );
+    }
+
+    #[test]
+    fn forwarding_is_only_written_when_off() {
+        assert!(forwarding_needs_enable("0\n"));
+        assert!(forwarding_needs_enable(""));
+        assert!(!forwarding_needs_enable("1\n"));
+    }
 }

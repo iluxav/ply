@@ -285,9 +285,8 @@ fn quote_unit_arg(arg: &str) -> String {
 
 /// `ply systemd <image> [run flags]` — supervision is systemd's job; emit a
 /// unit whose ExecStart carries the run flags (scale, publish, env).
-pub fn systemd_unit(image: &Path, run_flags: &[String]) -> Result<String> {
+pub fn systemd_unit(image: &Path, run_flags: &[String], after: &[String]) -> Result<String> {
     let manifest = read_manifest(image)?;
-    let app = &manifest.package.name;
     let image_abs = std::path::absolute(image).map_err(|source| Error::Io {
         path: image.to_path_buf(),
         source,
@@ -295,15 +294,42 @@ pub fn systemd_unit(image: &Path, run_flags: &[String]) -> Result<String> {
     let ply = std::env::current_exe()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|_| "/usr/local/bin/ply".into());
-    Ok(format!(
+    Ok(render_unit(
+        &manifest.package.name,
+        &ply,
+        &image.display().to_string(),
+        &image_abs.display().to_string(),
+        run_flags,
+        after,
+    ))
+}
+
+/// The unit text. `after` apps become `After=`/`Wants=` on their ply units
+/// (systemd orders the start; `--after` in ExecStart gates on readiness).
+pub fn render_unit(
+    app: &str,
+    ply: &str,
+    image: &str,
+    image_path: &str,
+    run_flags: &[String],
+    after: &[String],
+) -> String {
+    let mut unit = format!(
         "# ply-{app}.service — install with:\n\
          #   ply systemd {image} | sudo tee /etc/systemd/system/ply-{app}.service\n\
          #   sudo systemctl enable --now ply-{app}\n\
          [Unit]\n\
          Description=ply app {app}\n\
          After=network-online.target\n\
-         Wants=network-online.target\n\
-         \n\
+         Wants=network-online.target\n"
+    );
+    for dep in after {
+        unit.push_str(&format!(
+            "After=ply-{dep}.service\nWants=ply-{dep}.service\n"
+        ));
+    }
+    unit.push_str(&format!(
+        "\n\
          [Service]\n\
          Type=exec\n\
          ExecStart={ply} run{flags} {image_path}\n\
@@ -314,13 +340,12 @@ pub fn systemd_unit(image: &Path, run_flags: &[String]) -> Result<String> {
          \n\
          [Install]\n\
          WantedBy=multi-user.target\n",
-        image = image.display(),
-        image_path = image_abs.display(),
         flags = run_flags
             .iter()
             .map(|f| format!(" {}", quote_unit_arg(f)))
             .collect::<String>(),
-    ))
+    ));
+    unit
 }
 
 /// `ply sync` — pre-fetch everything the host policy lists into the store.
@@ -459,5 +484,42 @@ mod tests {
         );
         assert_eq!(quote_unit_arg("A=say \"hi\""), "\"A=say \\\"hi\\\"\"");
         assert_eq!(quote_unit_arg(""), "\"\"");
+    }
+
+    #[test]
+    fn render_unit_orders_after_ply_units_and_passes_the_flag() {
+        let flags = vec![
+            "--scale".to_string(),
+            "10".into(),
+            "--after".into(),
+            "pgdb".into(),
+        ];
+        let unit = render_unit(
+            "pgapp",
+            "/usr/local/bin/ply",
+            "pgapp.img",
+            "/srv/pgapp.img",
+            &flags,
+            &["pgdb".into()],
+        );
+        assert!(unit.contains("After=network-online.target\nWants=network-online.target\nAfter=ply-pgdb.service\nWants=ply-pgdb.service\n"), "{unit}");
+        assert!(
+            unit.contains(
+                "ExecStart=/usr/local/bin/ply run --scale 10 --after pgdb /srv/pgapp.img\n"
+            ),
+            "{unit}"
+        );
+        let plain = render_unit(
+            "pgdb",
+            "/usr/local/bin/ply",
+            "pgdb.img",
+            "/srv/pgdb.img",
+            &[],
+            &[],
+        );
+        assert!(
+            !plain.contains("After=ply-"),
+            "no dependency lines without --after:\n{plain}"
+        );
     }
 }

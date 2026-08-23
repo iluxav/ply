@@ -203,6 +203,15 @@ pub struct RunArgs {
     /// TLS are the edge's job). PORT, or HOST_PORT:INSTANCE_PORT.
     #[arg(long, value_name = "PORT[:INSTANCE_PORT]")]
     pub publish: Option<String>,
+
+    /// Start only after APP is healthy (repeatable): waits for an instance
+    /// of APP to pass its [health] gate — or just to be running if it has none
+    #[arg(long, value_name = "APP")]
+    pub after: Vec<String>,
+
+    /// How long to wait for --after apps before giving up
+    #[arg(long, value_name = "DURATION", default_value = "60s")]
+    pub after_timeout: String,
 }
 
 #[derive(Args)]
@@ -411,6 +420,11 @@ pub struct SystemdArgs {
     /// Environment file read at start (secrets stay out of the unit)
     #[arg(long, value_name = "FILE")]
     pub env_file: Option<PathBuf>,
+
+    /// Start after APP is healthy (repeatable): ordered in [Unit] and
+    /// gated by `--after` in ExecStart
+    #[arg(long, value_name = "APP")]
+    pub after: Vec<String>,
 }
 
 #[derive(Args)]
@@ -521,5 +535,23 @@ mod tests {
                 "`ply {verb}` is a real subcommand now — remove its docker hint"
             );
         }
+    }
+
+    #[test]
+    fn run_after_is_repeatable_with_a_default_timeout() {
+        let cli = Cli::try_parse_from([
+            "ply", "run", "--after", "pgdb", "--after", "redis", "app.img",
+        ])
+        .unwrap();
+        let Command::Run(args) = cli.command else {
+            panic!("expected run")
+        };
+        assert_eq!(args.after, vec!["pgdb", "redis"]);
+        assert_eq!(args.after_timeout, "60s");
+        let cli = Cli::try_parse_from(["ply", "systemd", "--after", "pgdb", "app.img"]).unwrap();
+        let Command::Systemd(args) = cli.command else {
+            panic!("expected systemd")
+        };
+        assert_eq!(args.after, vec!["pgdb"]);
     }
 }

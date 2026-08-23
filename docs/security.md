@@ -66,7 +66,8 @@ sudo ply setup
 ```
 
 One-time and idempotent: creates the store, the bridge, and the hosts-file
-management. The installer runs it automatically when installed as root, and
+management. Forwarding and the bridge's NAT rule are (re)applied by every
+rootful `ply run`, so a rebooted host needs nothing extra. The installer runs it automatically when installed as root, and
 prints the hint only when a host actually needs it.
 
 ## Secrets

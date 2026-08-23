@@ -79,9 +79,15 @@ fn setup_and_exec(spec: &ContainerSpec) -> Result<isize> {
     // Containers see the host's name database: `<app>.ply` entries ply
     // manages plus the host's DNS config. Written to the upperdir, so the
     // image layers stay untouched.
-    for file in ["hosts", "resolv.conf"] {
-        let _ = std::fs::copy(format!("/etc/{file}"), root.join("etc").join(file));
+    let _ = std::fs::copy("/etc/hosts", root.join("etc/hosts"));
+    let host_resolv = std::fs::read_to_string("/etc/resolv.conf").unwrap_or_default();
+    let upstream = std::fs::read_to_string("/run/systemd/resolve/resolv.conf").ok();
+    let (resolv, warning) =
+        resolv_conf_for_instance(&host_resolv, upstream.as_deref(), spec.rootless);
+    if let Some(w) = warning {
+        eprintln!("ply: warning: {w}");
     }
+    let _ = std::fs::write(root.join("etc/resolv.conf"), resolv);
     // The container's own hostname MUST resolve locally: anything calling
     // getfqdn()/gethostbyname(hostname) otherwise stalls ~5s in DNS
     // (python's http.server does this at bind).
@@ -398,4 +404,118 @@ fn setup_dev_mounts(rootless: bool) -> Result<()> {
         nix::mount::MsFlags::MS_NOEXEC | nix::mount::MsFlags::MS_NODEV,
     )?;
     Ok(())
+}
+
+/// What the instance's /etc/resolv.conf should say. Rootless shares the
+/// host netns, so the host file works as is. A rootful instance has its own
+/// netns, where a loopback stub resolver (systemd-resolved's 127.0.0.53) is
+/// unreachable — substitute the resolver's real upstreams, keeping the
+/// host's search/options lines.
+pub fn resolv_conf_for_instance(
+    host: &str,
+    resolved_upstream: Option<&str>,
+    rootless: bool,
+) -> (String, Option<String>) {
+    fn nameservers(text: &str) -> Vec<String> {
+        text.lines()
+            .filter_map(|l| l.trim().strip_prefix("nameserver"))
+            .map(|r| r.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    }
+    fn is_loopback(ns: &str) -> bool {
+        ns.parse::<std::net::IpAddr>()
+            .map(|ip| ip.is_loopback())
+            .unwrap_or(false)
+    }
+    if rootless {
+        return (host.to_string(), None);
+    }
+    let host_ns = nameservers(host);
+    if !host_ns.is_empty() && !host_ns.iter().all(|n| is_loopback(n)) {
+        return (host.to_string(), None);
+    }
+    let mut upstream: Vec<String> = Vec::new();
+    for n in resolved_upstream.map(nameservers).unwrap_or_default() {
+        if !is_loopback(&n) && !upstream.contains(&n) {
+            upstream.push(n);
+        }
+    }
+    if upstream.is_empty() {
+        return (
+            host.to_string(),
+            Some(
+                "the host's /etc/resolv.conf points at a loopback stub resolver and no upstream was found — instances cannot resolve names; set a real nameserver in /etc/resolv.conf"
+                    .into(),
+            ),
+        );
+    }
+    let mut out = String::new();
+    for n in &upstream {
+        out.push_str(&format!("nameserver {n}\n"));
+    }
+    for line in host.lines() {
+        let t = line.trim();
+        if t.starts_with("search") || t.starts_with("options") || t.starts_with("domain") {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    (out, None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const STUB: &str =
+        "# systemd-resolved\nnameserver 127.0.0.53\noptions edns0 trust-ad\nsearch example.com\n";
+    const UPSTREAM: &str = "nameserver 10.124.15.254\nnameserver 10.124.15.254\n";
+    const REAL: &str = "nameserver 1.1.1.1\nsearch lan\n";
+
+    #[test]
+    fn rootless_keeps_the_host_file_verbatim() {
+        let (text, warn) = resolv_conf_for_instance(STUB, Some(UPSTREAM), true);
+        assert_eq!(text, STUB);
+        assert!(warn.is_none());
+    }
+
+    #[test]
+    fn rootful_with_real_nameservers_keeps_the_host_file() {
+        let (text, warn) = resolv_conf_for_instance(REAL, Some(UPSTREAM), false);
+        assert_eq!(text, REAL);
+        assert!(warn.is_none());
+    }
+
+    #[test]
+    fn rootful_loopback_stub_is_replaced_by_systemd_resolved_upstreams() {
+        let (text, warn) = resolv_conf_for_instance(STUB, Some(UPSTREAM), false);
+        assert!(warn.is_none());
+        assert!(text.contains("nameserver 10.124.15.254"), "{text}");
+        assert!(!text.contains("127.0.0.53"), "{text}");
+        assert!(
+            text.contains("search example.com"),
+            "host search/options survive: {text}"
+        );
+        assert_eq!(
+            text.matches("nameserver").count(),
+            1,
+            "duplicates collapsed: {text}"
+        );
+    }
+
+    #[test]
+    fn rootful_loopback_stub_without_upstreams_warns() {
+        let (text, warn) = resolv_conf_for_instance(STUB, None, false);
+        assert_eq!(text, STUB);
+        assert!(
+            warn.as_deref().unwrap_or("").contains("loopback"),
+            "{warn:?}"
+        );
+        let (_, warn) = resolv_conf_for_instance(STUB, Some("nameserver 127.0.0.1\n"), false);
+        assert!(
+            warn.is_some(),
+            "upstream that is itself loopback is no upstream"
+        );
+    }
 }

@@ -85,7 +85,13 @@ pub fn systemd(args: SystemdArgs) -> Result<()> {
         let file = std::path::absolute(file)?;
         flags.extend(["--env-file".into(), file.display().to_string()]);
     }
-    print!("{}", lifecycle::systemd_unit(&args.image, &flags)?);
+    for app in &args.after {
+        flags.extend(["--after".into(), app.clone()]);
+    }
+    print!(
+        "{}",
+        lifecycle::systemd_unit(&args.image, &flags, &args.after)?
+    );
     Ok(())
 }
 
