@@ -22,7 +22,7 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
-const MAX_IMAGE_BYTES = 120 * 2 ** 20; // hard ceiling; the catalog pre-rejects at 100 MB of apks // keep in sync with apk-catalog.mjs / registry-push.mjs
+const MAX_IMAGE_BYTES = 100 * 2 ** 20; // hard ceiling; the catalog pre-rejects at 100 MB of apks // keep in sync with apk-catalog.mjs / registry-push.mjs
 
 const args = { state: join(ROOT, "scripts/registry-state.json"), bucket: "ply-registry", keep: [], del: false, jobs: 6 };
 const argv = process.argv.slice(2);

@@ -62128,8 +62128,7 @@
   "img": "gcc-riscv-none-elf-14.1.0-linux-x64.img",
   "bytes": 105308160,
   "skipped": "image 100 MiB > 100 MiB cap",
-  "skipped_at": "2026-08-23T04:40:00Z",
-  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+  "skipped_at": "2026-08-23T05:34:36.708Z"
  },
  "chromium@131.0.6778.108-r0:x64": {
   "name": "chromium",

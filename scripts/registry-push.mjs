@@ -47,7 +47,7 @@ const args = {
 };
 // Hard cap on what this registry serves (keep in sync with apk-catalog.mjs):
 // enforced on converted images and on --file pushes alike.
-const MAX_IMAGE_BYTES = 120 * 2 ** 20; // hard ceiling; the catalog pre-rejects at 100 MB of apks
+const MAX_IMAGE_BYTES = 100 * 2 ** 20; // hard ceiling; the catalog pre-rejects at 100 MB of apks
 
 const argv = process.argv.slice(2);
 for (let i = 0; i < argv.length; i++) {

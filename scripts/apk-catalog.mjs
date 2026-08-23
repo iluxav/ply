@@ -203,7 +203,7 @@ const isTrademarked = (p) => TRADEMARKED.test(p.apk);
 // the hard ceiling registry-push also enforces after conversion. The gap
 // between the two is the accepted rounding error.
 const MAX_CLOSURE_DOWNLOAD = 100 * 1000 * 1000; // 100 MB of apks
-const MAX_IMAGE_BYTES = 120 * 2 ** 20;           // keep in sync with registry-push.mjs / registry-prune.mjs
+const MAX_IMAGE_BYTES = 100 * 2 ** 20;           // keep in sync with registry-push.mjs / registry-prune.mjs
 const byApk = new Map(packages.map((p) => [p.apk, p]));
 const closureDownload = (root) => {
   const seen = new Set();
