@@ -1,36 +1,93 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { IBM_Plex_Sans } from "next/font/google";
+import { JsonLd } from "@/components/JsonLd";
+import { ThemeToggle } from "@/components/ThemeToggle";
+import {
+  GITHUB_URL,
+  SITE_DESCRIPTION,
+  SITE_NAME,
+  SITE_URL,
+} from "@/lib/site";
 import "./globals.css";
 
+const plexSans = IBM_Plex_Sans({
+  subsets: ["latin"],
+  variable: "--font-plex-sans",
+  display: "swap",
+});
+
 export const metadata: Metadata = {
-  metadataBase: new URL("https://plybox.sh"),
+  metadataBase: new URL(SITE_URL),
   title: { default: "ply — npm for containers", template: "%s · ply" },
-  description:
-    "A daemonless container runtime and package manager. One static binary, deterministic images, any file host is a registry.",
+  description: SITE_DESCRIPTION,
+  applicationName: SITE_NAME,
+  category: "developer tools",
+  creator: SITE_NAME,
+  publisher: SITE_NAME,
+  openGraph: {
+    type: "website",
+    locale: "en_US",
+    siteName: SITE_NAME,
+    title: "ply — npm for containers",
+    description: SITE_DESCRIPTION,
+    url: SITE_URL,
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "ply — npm for containers",
+    description: SITE_DESCRIPTION,
+  },
+  robots: { index: true, follow: true },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
-      <body className="bg-ground text-ink font-mono antialiased">
-        <div className="mx-auto w-full max-w-6xl px-5">
-          <header className="sticky top-0 z-10 bg-[#0b100df0] flex items-baseline justify-between py-4 border-b border-edge/50">
+    <html lang="en" className={plexSans.variable} suppressHydrationWarning>
+      <head>
+        <link rel="describedby" href="/llms.txt" type="text/markdown" />
+      </head>
+      <body className="bg-ground font-sans text-ink antialiased">
+        <JsonLd
+          data={{
+            "@context": "https://schema.org",
+            "@type": "WebSite",
+            "@id": `${SITE_URL}/#website`,
+            name: SITE_NAME,
+            alternateName: "plybox",
+            url: `${SITE_URL}/`,
+            description: SITE_DESCRIPTION,
+            inLanguage: "en",
+          }}
+        />
+        <script
+          // set the chosen theme before first paint (system pref needs no attribute)
+          dangerouslySetInnerHTML={{
+            __html: `try{var t=localStorage.getItem("theme");if(t)document.documentElement.dataset.theme=t}catch(e){}`,
+          }}
+        />
+        <header className="sticky top-0 z-20 border-b border-edge/60 bg-ground/95 backdrop-blur-sm">
+          <div className="mx-auto flex w-full max-w-[1480px] items-center justify-between px-5 py-2 sm:px-7">
             <div className="flex items-center gap-1">
-              <Link href="/" className="text-lg tracking-tight logo">ply</Link>
-              <span className="text-sm tracking-tight text-accent opacity-70">box</span>
+              <Link href="/" className="logo font-mono text-lg tracking-tight" aria-label="ply home">ply</Link>
+              <span className="font-mono text-xs tracking-tight text-fade">box</span>
             </div>
-            <nav className="flex gap-6 text-sm text-fade">
-              <Link href="/docs/" className="hover:text-accent">docs</Link>
-              <Link href="/registry/" className="hover:text-accent">registry</Link>
-              <a href="https://github.com/iluxav/ply" className="hover:text-accent">github</a>
+            <nav aria-label="Primary navigation" className="flex items-center gap-1 font-mono text-[13px] text-fade sm:gap-2">
+              <Link href="/docs/" className="inline-flex min-h-11 items-center px-2 transition-colors hover:text-accent sm:px-3">docs</Link>
+              <Link href="/registry/" className="inline-flex min-h-11 items-center px-2 transition-colors hover:text-accent sm:px-3">registry</Link>
+              <a
+                target="_blank"
+                rel="noreferrer"
+                href={GITHUB_URL}
+                className="hidden min-h-11 items-center px-3 transition-colors hover:text-accent sm:inline-flex"
+              >
+                github<span className="sr-only"> (opens in a new tab)</span>
+              </a>
+              <ThemeToggle />
             </nav>
-          </header>
-          {children}
-          <footer className="border-t border-edge py-8 mt-16 text-xs text-fade flex flex-wrap gap-x-6 gap-y-2">
-            <span>content-addressed · append-only · any file host is a mirror</span>
-            <a href="https://registry.plybox.sh" className="hover:text-accent">registry.plybox.sh</a>
-          </footer>
-        </div>
+          </div>
+        </header>
+        {children}
       </body>
     </html>
   );

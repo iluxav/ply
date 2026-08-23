@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- the .logo badge: rounded chip with a square top-right corner -->
+  <path d="M63 1 V51 A12 12 0 0 1 51 63 H13 A12 12 0 0 1 1 51 V13 A12 12 0 0 1 13 1 Z"
+        fill="#10170f" stroke="#223026" stroke-width="2"/>
+  <text x="32" y="41" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace"
+        font-size="26" fill="#5fc78c" text-anchor="middle">ply</text>
+</svg>

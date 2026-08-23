@@ -1,22 +1,25 @@
-// Docs come from the repo's own docs/*.md (the source of truth lives next
-// to the code it describes). Read + rendered at BUILD time — the standalone
-// server never touches the filesystem for these.
+// Docs come from the repo's own docs/*.md and are synced into .content before
+// dev/build. Public routes render at build time; keeping the small source copy
+// in the standalone output also lets unknown dynamic routes return a clean 404.
 import fs from "node:fs";
 import path from "node:path";
 import matter from "gray-matter";
 import { Marked } from "marked";
 import hljs from "highlight.js";
 
-const DOCS_DIR = path.join(process.cwd(), "..", "docs");
+const DOCS_DIR = path.join(process.cwd(), ".content", "docs");
 const SECTIONS = ["Start", "Guides", "Reference", "Concepts"];
 
 export type DocPage = {
   slug: string;          // "index" | "quickstart" | …
   url: string;           // "/docs/" | "/docs/quickstart/"
+  markdownUrl: string;
   title: string;
   description: string;
   section: string;
   order: number;
+  markdown: string;
+  updatedAt: string;
   html: string;
 };
 
@@ -56,13 +59,17 @@ export function allDocs(): DocPage[] {
     );
     if (!data.title) continue; // design notes (e.g. ply-vm.md) aren't site pages
     const slug = path.basename(file, ".md");
+    const updatedAt = fs.statSync(path.join(DOCS_DIR, file)).mtime.toISOString();
     pages.push({
       slug,
       url: slug === "index" ? "/docs/" : `/docs/${slug}/`,
+      markdownUrl: `/docs-md/${slug}.md`,
       title: data.title,
       description: data.description ?? "",
       section: data.section ?? "Guides",
       order: data.order ?? 99,
+      markdown: content.trim(),
+      updatedAt,
       html: marked.parse(content) as string,
     });
   }

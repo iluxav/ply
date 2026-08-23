@@ -3,25 +3,82 @@
 
 @theme {
   --color-ground: #0b100d;
-  --color-card: #10160f;
-  --color-edge: #223026;
-  --color-ink: #d7e2d9;
-  --color-fade: #7f9584;
-  --color-accent: #4ec98a;
+  --color-card: #111812;
+  --color-edge: #27382d;
+  --color-ink: #e2e9e3;
+  --color-fade: #8fa092;
+  --color-accent: #54d795;
   --color-deep: #1c5c3c;
 
+  --font-sans: var(--font-plex-sans), "IBM Plex Sans", system-ui, sans-serif;
   --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas,
     "Liberation Mono", monospace;
+}
+
+/* Light mode: same phosphor identity on paper. Dark is the brand default;
+   system preference applies unless the toggle chose explicitly. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --color-ground: #e1e5e0;
+    --color-card: #d7ddd6;
+    --color-edge: #b7c3b8;
+    --color-ink: #17251c;
+    --color-fade: #526a59;
+    --color-accent: #12724a;
+    --color-deep: #bfe4cf;
+    --hl-comment: #6d8172;
+    --hl-string: #2e6e4e;
+    --hl-title: #17251c;
+  }
+}
+:root[data-theme="light"] {
+  --color-ground: #e1e5e0;
+  --color-card: #d7ddd6;
+  --color-edge: #b7c3b8;
+  --color-ink: #17251c;
+  --color-fade: #526a59;
+  --color-accent: #12724a;
+  --color-deep: #bfe4cf;
+  --hl-comment: #6d8172;
+  --hl-string: #2e6e4e;
+  --hl-title: #17251c;
+}
+
+:root {
+  --hl-comment: #5b7263;
+  --hl-string: #a8d8b9;
+  --hl-title: #d7e2d9;
 }
 
 @layer base {
   html {
     background: var(--color-ground);
+    scroll-behavior: smooth;
+  }
+  body {
+    min-width: 320px;
+  }
+  * {
+    scrollbar-color: var(--color-edge) transparent;
+    scrollbar-width: thin;
+  }
+  button,
+  a,
+  input,
+  summary {
+    outline-offset: 4px;
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
   }
   ::selection {
     background: var(--color-deep);
     color: var(--color-ink);
   }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
 }
 
 @keyframes blink {
@@ -34,34 +91,80 @@
 }
 
 .logo {
-  background-color: #10170f;
-  border: 1px solid #223026;
+  background-color: var(--color-card);
+  border: 1px solid var(--color-edge);
   border-radius: 6px 0 6px 6px;
   padding: 0.1rem 0.45rem;
 }
 
+.eyebrow {
+  color: var(--color-accent);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.closure-line {
+  position: relative;
+}
+.closure-line::before {
+  background: var(--color-edge);
+  content: "";
+  height: calc(100% + 0.75rem);
+  left: 0.42rem;
+  position: absolute;
+  top: 1.15rem;
+  width: 1px;
+}
+.closure-line:last-child::before {
+  display: none;
+}
+
+/* Hero box: a neutral "window". Tailwind utilities resolve through the
+   --color-* variables, so overriding them here re-themes every descendant. */
+.hero-box {
+  --color-card: #131313;
+  --color-ground: #0c0c0c;
+  --color-edge: #2a2a2a;
+  border-radius: 6px;
+  overflow: hidden;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) .hero-box {
+    --color-card: #ffffff;
+    --color-ground: #f3f5f2;
+    --color-edge: #c9d3cb;
+  }
+}
+:root[data-theme="light"] .hero-box {
+  --color-card: #ffffff;
+  --color-ground: #f3f5f2;
+  --color-edge: #c9d3cb;
+}
+
 /* Rendered markdown (docs bodies come from marked at build time) */
-.doc h1 { font-size: 1.7rem; letter-spacing: -0.02em; margin: 0 0 1rem; }
-.doc h2 { font-size: 1.15rem; color: var(--color-ink); margin: 2.2rem 0 0.8rem; border-bottom: 1px solid var(--color-edge); padding-bottom: 0.4rem; }
-.doc h3 { font-size: 1rem; margin: 1.6rem 0 0.6rem; }
-.doc p, .doc li { color: var(--color-fade); line-height: 1.65; font-size: 0.9rem; }
+.doc h1 { font-size: clamp(2rem, 5vw, 2.65rem); font-weight: 500; letter-spacing: -0.035em; line-height: 1.05; margin: 0 0 1.2rem; }
+.doc h2 { font-size: 1.35rem; font-weight: 500; letter-spacing: -0.02em; color: var(--color-ink); margin: 2.6rem 0 0.9rem; border-bottom: 1px solid var(--color-edge); padding-bottom: 0.5rem; }
+.doc h3 { font-size: 1.05rem; font-weight: 600; margin: 1.8rem 0 0.65rem; }
+.doc p, .doc li { color: var(--color-fade); line-height: 1.72; font-size: 1rem; }
 .doc li { margin: 0.3rem 0 0.3rem 1.2rem; list-style: square; }
 .doc a { color: var(--color-accent); }
 .doc a:hover { text-decoration: underline; }
 .doc strong { color: var(--color-ink); font-weight: 600; }
-.doc code { background: var(--color-card); border: 1px solid var(--color-edge); padding: 0.1rem 0.3rem; font-size: 0.85em; }
-.doc pre { background: var(--color-card); border: 1px solid var(--color-edge); padding: 0.9rem 1rem; overflow-x: auto; margin: 1rem 0; }
+.doc code { background: var(--color-card); border: 1px solid var(--color-edge); font-family: var(--font-mono); padding: 0.1rem 0.3rem; font-size: 0.84em; }
+.doc pre { background: var(--color-card); border: 1px solid var(--color-edge); padding: 1rem; overflow-x: auto; margin: 1.2rem 0; }
 .doc pre code { background: none; border: none; padding: 0; font-size: 0.85rem; line-height: 1.55; }
-.doc table { width: 100%; border: 1px solid var(--color-edge); border-collapse: collapse; margin: 1rem 0; font-size: 0.85rem; }
+.doc table { display: block; max-width: 100%; overflow-x: auto; width: 100%; border: 1px solid var(--color-edge); border-collapse: collapse; margin: 1rem 0; font-family: var(--font-mono); font-size: 0.8rem; }
 .doc th, .doc td { border-bottom: 1px solid var(--color-edge); padding: 0.5rem 0.7rem; text-align: left; color: var(--color-fade); }
 .doc th { color: var(--color-ink); font-weight: 600; }
 .doc blockquote { border-left: 2px solid var(--color-deep); padding-left: 1rem; margin: 1rem 0; }
 .doc .anchor { color: var(--color-edge); margin-right: 0.4rem; text-decoration: none; }
 .doc h2:hover .anchor, .doc h3:hover .anchor { color: var(--color-accent); }
 
-/* highlight.js — minimal phosphor palette */
-.hljs-comment, .hljs-quote { color: #5b7263; }
-.hljs-keyword, .hljs-selector-tag, .hljs-section { color: #4ec98a; }
-.hljs-string, .hljs-attr, .hljs-number, .hljs-literal { color: #a8d8b9; }
-.hljs-title, .hljs-name, .hljs-built_in { color: #d7e2d9; }
-.hljs-meta, .hljs-variable { color: #7f9584; }
+/* highlight.js — minimal phosphor palette, theme-aware */
+.hljs-comment, .hljs-quote { color: var(--hl-comment); }
+.hljs-keyword, .hljs-selector-tag, .hljs-section { color: var(--color-accent); }
+.hljs-string, .hljs-attr, .hljs-number, .hljs-literal { color: var(--hl-string); }
+.hljs-title, .hljs-name, .hljs-built_in { color: var(--hl-title); }
+.hljs-meta, .hljs-variable { color: var(--color-fade); }

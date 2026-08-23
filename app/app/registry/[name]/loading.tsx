@@ -1,7 +1,7 @@
 export default function Loading() {
   return (
-    <main className="pt-8 pb-20 max-w-3xl">
-      <p className="text-sm text-fade">loading package…</p>
+    <main className="mx-auto w-full max-w-3xl px-5 pb-20 pt-14 sm:px-7">
+      <p className="font-mono text-sm text-fade">resolving package metadata…</p>
     </main>
   );
 }

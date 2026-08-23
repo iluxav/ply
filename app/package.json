@@ -3,12 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "sync-content": "rm -rf .content && mkdir -p .content && cp -a ../docs .content/docs && cp ../install.sh public/install.sh",
+    "predev": "npm run sync-content",
     "dev": "next dev",
     "build": "next build",
     "start": "node .next/standalone/server.js",
     "lint": "eslint",
-    "prebuild": "cp ../install.sh public/install.sh",
-    "postbuild": "cp -r .next/static .next/standalone/.next/static && cp -r public .next/standalone/public"
+    "prebuild": "npm run sync-content",
+    "postbuild": "rm -rf .next/standalone/.next/static .next/standalone/public .next/standalone/.content && cp -r .next/static .next/standalone/.next/static && cp -r public .next/standalone/public && cp -r .content .next/standalone/.content"
   },
   "dependencies": {
     "gray-matter": "^4.0.3",

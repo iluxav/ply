@@ -1,6 +1,6 @@
 // The registry's machine-readable snapshot, cached server-side: visitors
 // never download the raw state; the droplet refetches on a short lifetime.
-import { unstable_cacheLife as cacheLife } from "next/cache";
+import { cacheLife } from "next/cache";
 
 export type RegistryVersion = {
   version: string;
