@@ -19,13 +19,17 @@
 //   version: leading digits/dots of the apk version, padded to x.y.z
 
 import { gunzipSync } from "node:zlib";
-import { writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
 const MIRROR = "https://dl-cdn.alpinelinux.org/alpine";
 const ARCH_MAP = { x86_64: "x64", aarch64: "arm64" };
 
 // --- tiny arg parser -------------------------------------------------------
-const args = { branch: "v3.20", arch: "x86_64", repos: "main,community", output: "apk2pkg.json", tier: "all" };
+const args = { branch: "v3.20", arch: "x86_64", repos: "main,community", output: "apk2pkg.json", tier: "all", ledger: join(ROOT, "scripts/registry-state.json") };
 const argv = process.argv.slice(2);
 for (let i = 0; i < argv.length; i++) {
   const next = () => argv[++i];
@@ -34,6 +38,7 @@ for (let i = 0; i < argv.length; i++) {
   else if (argv[i] === "--repos") args.repos = next();
   else if (argv[i] === "-o" || argv[i] === "--output") args.output = next();
   else if (argv[i] === "--tier") args.tier = next();
+  else if (argv[i] === "--ledger") args.ledger = next();
   else { console.error(`unknown argument: ${argv[i]}`); process.exit(2); }
 }
 if (!ARCH_MAP[args.arch]) { console.error(`unsupported arch: ${args.arch}`); process.exit(2); }
@@ -168,6 +173,81 @@ const hasCommand = (p) => p.provides.some((x) => x.startsWith("cmd:"));
 const GUI_TOOLKIT = /^so:lib(Qt[56]?|KF[56]|Kirigami|gtk[-_]?[34]?|gdk|adwaita|wx_|SDL2?)/i;
 const isGuiApp = (p) => p.depends.some((d) => GUI_TOOLKIT.test(d));
 
+// --- license hygiene: only redistribute what clearly grants redistribution ---
+// Alpine's main/community admit only open-source licenses, but the field is
+// free text: "custom", "SSH-OpenSSH", "GD" are real permissive licenses
+// without an SPDX id. We exclude only what is genuinely unclear — an empty
+// field, "Unknown"/"none", or an explicit non-free marker — and show the
+// declared string plus the aports link (where the license file lives) for
+// everything else.
+const licenseProblem = (p) => {
+  const expr = (p.license ?? "").trim();
+  if (!expr) return "no license declared";
+  const parts = expr.split(/\s+(?:AND|OR|WITH)\s+|[()]/i).map((t) => t.trim()).filter(Boolean);
+  if (parts.some((t) => /^(unknown|none|proprietary|nonfree|non-free|commercial)$/i.test(t))) return `license "${expr}"`;
+  return null;
+};
+
+// --- trademark-restricted names: not worth carrying in a CLI registry ---------
+// Branded builds whose trademark policies restrict redistribution of the
+// official name/artwork. Matched on the apk name.
+const TRADEMARKED = /^(firefox|thunderbird|seamonkey|librewolf|tor-browser|waterfox|mozilla-|chrome-|google-chrome|oracle-|java-oracle|mongodb|redis-stack|elasticsearch|kibana|vscode|code-oss|docker-desktop)/i;
+const isTrademarked = (p) => TRADEMARKED.test(p.apk);
+
+// --- size cap: the registry serves CLI tools, not toolchains or game data ------
+// The target is "about 100 MB per image". Before converting, a package is
+// rejected when its apk closure (everything apk2pkg vendors, base excluded)
+// downloads more than MAX_CLOSURE_DOWNLOAD — that is roughly the image size
+// (squashfs/zstd vs gzip'd apks: typically within ±20%). Packages already
+// converted are judged by their real image size against MAX_IMAGE_BYTES,
+// the hard ceiling registry-push also enforces after conversion. The gap
+// between the two is the accepted rounding error.
+const MAX_CLOSURE_DOWNLOAD = 100 * 1000 * 1000; // 100 MB of apks
+const MAX_IMAGE_BYTES = 120 * 2 ** 20;           // keep in sync with registry-push.mjs / registry-prune.mjs
+const byApk = new Map(packages.map((p) => [p.apk, p]));
+const closureDownload = (root) => {
+  const seen = new Set();
+  const stack = [root.apk];
+  let bytes = 0;
+  while (stack.length) {
+    const apk = stack.pop();
+    if (seen.has(apk) || BASE_PROVIDES.has(apk)) continue;
+    seen.add(apk);
+    const q = byApk.get(apk);
+    if (!q) continue;
+    bytes += q.size;
+    for (const d of q.depends) {
+      if (d.startsWith("!")) continue;
+      const provider = providerOf[d.split(/[<>=~]/)[0]];
+      if (provider) stack.push(provider);
+    }
+  }
+  return bytes;
+};
+// ply name -> real image size for this arch. An uploaded image is the truth;
+// a skipped (too large, never uploaded) record only counts when nothing of
+// that name was ever uploaded — a newer, smaller conversion may have made it.
+const knownImageBytes = {};
+if (existsSync(args.ledger)) {
+  const uploaded = {}, skippedOnly = {};
+  for (const e of Object.values(JSON.parse(readFileSync(args.ledger, "utf8")))) {
+    const arch = e.img?.endsWith("-arm64.img") ? "arm64" : "x64";
+    if (arch !== plyArch || !e.bytes) continue;
+    const bucket = e.upload_path ? uploaded : skippedOnly;
+    bucket[e.name] = Math.max(bucket[e.name] ?? 0, e.bytes);
+  }
+  for (const [name, bytes] of Object.entries(skippedOnly)) if (!(name in uploaded)) knownImageBytes[name] = bytes;
+  Object.assign(knownImageBytes, uploaded);
+}
+const MiB = (b) => `${Math.round(b / 2 ** 20)} MiB`;
+const MB = (b) => `${Math.round(b / 1e6)} MB`;
+const tooLarge = (p) => {
+  const known = knownImageBytes[p.name];
+  if (known !== undefined) return known > MAX_IMAGE_BYTES ? `image ${MiB(known)} > ${MiB(MAX_IMAGE_BYTES)} cap` : null;
+  const download = closureDownload(p);
+  return download > MAX_CLOSURE_DOWNLOAD ? `closure downloads ${MB(download)} > ${MB(MAX_CLOSURE_DOWNLOAD)} cap` : null;
+};
+
 // tier filter (after reverse_deps so counts reflect the whole universe)
 let selected = packages;
 if (args.tier === "core") selected = packages.filter((p) => !NOISE.test(p.apk));
@@ -177,13 +257,12 @@ else if (args.tier === "cli")
   // main+community, noise removed, commands only, base internals and
   // desktop GUI apps excluded: the "anything a user would type in
   // [dependencies] on a server" tier
-  selected = packages.filter(
-    (p) =>
-      !NOISE.test(p.apk) &&
-      hasCommand(p) &&
-      !BASE_PROVIDES.has(p.apk) &&
-      !isGuiApp(p),
-  );
+  selected = packages.filter((p) => {
+    if (!(!NOISE.test(p.apk) && hasCommand(p) && !BASE_PROVIDES.has(p.apk) && !isGuiApp(p))) return false;
+    const why = licenseProblem(p) ?? (isTrademarked(p) ? "trademark-restricted name" : null) ?? tooLarge(p);
+    if (why) { skipped.push({ apk: p.apk, apk_version: p.apk_version, repo: p.repo, reason: why }); return false; }
+    return true;
+  });
 else if (args.tier !== "all") { console.error(`unknown tier: ${args.tier}`); process.exit(2); }
 selected.sort((a, b) => b.reverse_deps - a.reverse_deps); // load-bearing first
 
@@ -199,4 +278,5 @@ const catalog = {
   skipped,
 };
 writeFileSync(args.output, JSON.stringify(catalog, null, 1));
-console.error(`${args.output}: ${selected.length} packages (tier: ${args.tier}), ${skipped.length} skipped`);
+const count = (re) => skipped.filter((x) => re.test(x.reason)).length;
+console.error(`${args.output}: ${selected.length} packages (tier: ${args.tier}), ${skipped.length} skipped (${count(/cap/)} over the size cap, ${count(/license/)} license, ${count(/trademark/)} trademark)`);

@@ -45,6 +45,10 @@ const args = {
   files: [],
   namespace: "ply",
 };
+// Hard cap on what this registry serves (keep in sync with apk-catalog.mjs):
+// enforced on converted images and on --file pushes alike.
+const MAX_IMAGE_BYTES = 120 * 2 ** 20; // hard ceiling; the catalog pre-rejects at 100 MB of apks
+
 const argv = process.argv.slice(2);
 for (let i = 0; i < argv.length; i++) {
   const next = () => argv[++i];
@@ -72,6 +76,11 @@ const manualPushes = args.files.map((file) => {
     process.exit(2);
   }
   if (!existsSync(file)) { console.error(`--file ${file}: no such file`); process.exit(2); }
+  const fileBytes = statSync(file).size;
+  if (fileBytes > MAX_IMAGE_BYTES) {
+    console.error(`--file ${file}: ${Math.round(fileBytes / 2 ** 20)} MiB exceeds the ${MAX_IMAGE_BYTES / 2 ** 20} MiB image cap — not pushing`);
+    process.exit(2);
+  }
   return { file, img: base, name: m[1], version: m[2],
            upload_path: `${args.namespace}/${m[1]}/${base}` };
 });
@@ -85,8 +94,11 @@ const saveState = () => writeFileSync(args.state, JSON.stringify(state, null, 1)
 // era have bare keys — those were all x64 pushes, honored as such.
 const catalogArch = { x86_64: "x64", aarch64: "arm64" }[catalog.arch] ?? "x64";
 const ledgerKey = (p) => `${p.apk}@${p.apk_version}:${catalogArch}`;
+// Done = uploaded, or recorded as too large under a cap the image still
+// exceeds. A skipped record whose size now fits (cap raised) is retried.
+const settled = (e) => e && (e.upload_path || (e.skipped && (e.bytes ?? 0) > MAX_IMAGE_BYTES));
 const alreadyPushed = (p) =>
-  state[ledgerKey(p)] || (catalogArch === "x64" && state[`${p.apk}@${p.apk_version}`]);
+  settled(state[ledgerKey(p)]) || (catalogArch === "x64" && settled(state[`${p.apk}@${p.apk_version}`]));
 
 let todo = catalog.packages.filter((p) => !alreadyPushed(p));
 if (args.only) todo = todo.filter((p) => args.only.includes(p.apk) || args.only.includes(p.name));
@@ -118,7 +130,7 @@ if (todo.length === 0 && manualPushes.length === 0 && !args.reindex) {
 const workdir = join(ROOT, "scripts/.push-work");
 mkdirSync(workdir, { recursive: true });
 const touchedRepos = new Set();
-let ok = 0, failed = 0, cursor = 0;
+let ok = 0, failed = 0, tooBig = 0, cursor = 0;
 
 
 // wrangler buries the real error mid-stderr behind ANSI color codes;
@@ -131,6 +143,7 @@ function errLine(e) {
 
 async function processOne(p) {
   const t0 = Date.now();
+  console.log(`  converting ${p.apk}@${p.apk_version}…`);
   // private subdir per task — parallel apk2pkg runs must not share an output dir
   const dir = join(workdir, `job-${p.name}-${p.version}`);
   mkdirSync(dir, { recursive: true });
@@ -141,6 +154,22 @@ async function processOne(p) {
       { maxBuffer: 16 * 1024 * 1024 });
     const img = join(dir, p.img);
     if (!existsSync(img)) throw new Error(`converter did not produce ${p.img}`);
+
+    // Size cap (the catalog only estimates; this is the real number). A
+    // too-large image is recorded in the ledger without an upload_path so
+    // the next catalog excludes it and the next batch does not retry it.
+    const bytes = statSync(img).size;
+    if (bytes > MAX_IMAGE_BYTES) {
+      state[ledgerKey(p)] = {
+        name: p.name, version: p.version, img: p.img, bytes,
+        skipped: `image ${Math.round(bytes / 2 ** 20)} MiB > ${MAX_IMAGE_BYTES / 2 ** 20} MiB cap`,
+        skipped_at: new Date().toISOString(),
+      };
+      saveState();
+      tooBig++;
+      console.log(`[${ok + failed + tooBig}/${todo.length}] ${p.apk}@${p.apk_version} SKIPPED: ${state[ledgerKey(p)].skipped}`);
+      return;
+    }
 
     // 2. upload, immutable-cached (content-named — the bytes never change)
     await execFileAsync("npx", ["wrangler", "r2", "object", "put",
@@ -156,17 +185,17 @@ async function processOne(p) {
       version: p.version,
       img: p.img,
       upload_path: p.upload_path,
-      bytes: statSync(img).size,
+      bytes,
       pushed_at: new Date().toISOString(),
     };
     saveState();
     touchedRepos.add(dirname(p.upload_path)); // repo dir on the CDN, e.g. ply/jq
     ok++;
-    console.log(`[${ok + failed}/${todo.length}] ${p.apk}@${p.apk_version} ok (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
+    console.log(`[${ok + failed + tooBig}/${todo.length}] ${p.apk}@${p.apk_version} ok (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
   } catch (e) {
     failed++;
     const msg = errLine(e);
-    console.log(`[${ok + failed}/${todo.length}] ${p.apk}@${p.apk_version} FAILED: ${msg}`);
+    console.log(`[${ok + failed + tooBig}/${todo.length}] ${p.apk}@${p.apk_version} FAILED: ${msg}`);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -261,7 +290,7 @@ if (indexFailed > 0) {
 // recorded (or by hand) get a one-time HEAD against the CDN, cached back
 // into the ledger.
 async function publishState() {
-  const entries = Object.values(state);
+  const entries = Object.values(state).filter((e) => e.upload_path);
 
   for (const e of entries) {
     if (e.bytes) continue;
@@ -287,6 +316,9 @@ async function publishState() {
         description: m?.description ?? "",
         license: m?.license ?? "",
         homepage: m?.url ?? "",
+        // Provenance: unmodified Alpine build. repo/apk/origin locate the
+        // package page and the aports recipe (license text, source tarball).
+        alpine: m ? { branch: catalog.branch, repo: m.repo, apk: m.apk, origin: m.origin } : undefined,
         versions: [],
       });
     }

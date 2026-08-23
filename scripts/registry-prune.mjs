@@ -22,6 +22,8 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
+const MAX_IMAGE_BYTES = 120 * 2 ** 20; // hard ceiling; the catalog pre-rejects at 100 MB of apks // keep in sync with apk-catalog.mjs / registry-push.mjs
+
 const args = { state: join(ROOT, "scripts/registry-state.json"), bucket: "ply-registry", keep: [], del: false, jobs: 6 };
 const argv = process.argv.slice(2);
 for (let i = 0; i < argv.length; i++) {
@@ -53,6 +55,7 @@ const saveState = () => writeFileSync(args.state, JSON.stringify(state, null, 1)
 const junk = [];
 let keepCount = 0, junkBytes = 0;
 for (const [key, e] of Object.entries(state)) {
+  if (!e.upload_path) { keepCount++; continue; } // size-capped: nothing on the CDN
   const arch = e.img.endsWith("-arm64.img") ? "arm64" : "x64";
   if (key.startsWith("manual:") || keepNames[arch].has(e.name)) { keepCount++; continue; }
   junk.push({ key, ...e });
@@ -87,8 +90,19 @@ async function worker() {
     const e = junk[cursor++];
     try {
       await rm(e.upload_path);
-      delete state[e.key]; // ledger updated per object — crash-safe resume
-      saveState();
+      // An over-cap image stays in the ledger as a skipped record (no
+      // upload_path): the catalog excludes it by real size and push never
+      // retries it. Anything else is simply forgotten.
+      if ((e.bytes ?? 0) > MAX_IMAGE_BYTES) {
+        state[e.key] = {
+          name: e.name, version: e.version, img: e.img, bytes: e.bytes,
+          skipped: `image ${Math.round(e.bytes / 2 ** 20)} MiB > ${MAX_IMAGE_BYTES / 2 ** 20} MiB cap`,
+          skipped_at: new Date().toISOString(),
+        };
+      } else {
+        delete state[e.key];
+      }
+      saveState(); // ledger updated per object — crash-safe resume
       done++;
       if (done % 50 === 0) console.log(`  ${done}/${junk.length} deleted`);
     } catch (err) {

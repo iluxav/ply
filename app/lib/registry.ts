@@ -11,14 +11,29 @@ export type RegistryVersion = {
   pushed_at: string;
 };
 
+export type AlpineProvenance = {
+  branch: string; // e.g. "v3.20"
+  repo: string; // "main" | "community"
+  apk: string; // Alpine package name
+  origin: string; // source package (aports directory)
+};
+
 export type RegistryPackage = {
   namespace: string;
   name: string;
   description: string;
   license: string;
   homepage: string;
+  alpine?: AlpineProvenance;
   versions: RegistryVersion[];
 };
+
+// Where an unmodified Alpine build came from: the package page and the
+// aports recipe (APKBUILD, license file, source tarball reference).
+export const alpineLinks = (a: AlpineProvenance) => ({
+  package: `https://pkgs.alpinelinux.org/package/${a.branch}/${a.repo}/x86_64/${a.apk}`,
+  source: `https://git.alpinelinux.org/aports/tree/${a.repo}/${a.origin}?h=${a.branch.replace(/^v/, "")}-stable`,
+});
 
 export type RegistryState = {
   updated: string;

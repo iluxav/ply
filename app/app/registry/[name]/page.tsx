@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import {
   registryState,
   archOf,
+  alpineLinks,
   depLine,
   fmtSize,
   type RegistryPackage,
@@ -122,6 +123,18 @@ export default async function PackagePage({
           <a href={p.homepage} className="text-accent hover:underline">{p.homepage}</a>
         )}
       </p>
+      {p.alpine && (
+        <p className="mt-2 font-mono text-xs text-fade">
+          unmodified Alpine Linux {p.alpine.branch} build ·{" "}
+          <a href={alpineLinks(p.alpine).package} className="text-accent hover:underline">
+            package
+          </a>{" "}
+          ·{" "}
+          <a href={alpineLinks(p.alpine).source} className="text-accent hover:underline">
+            source (aports)
+          </a>
+        </p>
+      )}
 
       <h2 className="mt-10 font-mono text-[10px] uppercase tracking-wider text-fade">use it</h2>
       <div className="utility-surface mt-2 flex items-stretch border border-edge">

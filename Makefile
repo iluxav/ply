@@ -103,4 +103,4 @@ registry: registry-catalog registry-push
 # both arches, sequentially (the nightly shape)
 registry-all:
 	$(MAKE) registry ARCH=x64
-# 	$(MAKE) registry ARCH=arm64
+	$(MAKE) registry ARCH=arm64

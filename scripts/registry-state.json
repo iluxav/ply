@@ -783,22 +783,6 @@
   "bytes": 36737024,
   "pushed_at": "2026-08-20T06:31:42.689Z"
  },
- "rust@1.78.0-r1": {
-  "name": "rust",
-  "version": "1.78.0",
-  "img": "rust-1.78.0-linux-x64.img",
-  "upload_path": "ply/rust/rust-1.78.0-linux-x64.img",
-  "bytes": 288002048,
-  "pushed_at": "2026-08-20T06:32:51.662Z"
- },
- "cargo@1.78.0-r1": {
-  "name": "cargo",
-  "version": "1.78.0",
-  "img": "cargo-1.78.0-linux-x64.img",
-  "upload_path": "ply/cargo/cargo-1.78.0-linux-x64.img",
-  "bytes": 301469696,
-  "pushed_at": "2026-08-20T06:42:29.158Z"
- },
  "squashfs-tools@4.6.1-r1": {
   "name": "squashfs-tools",
   "version": "4.6.1",
@@ -1783,14 +1767,6 @@
   "bytes": 147456,
   "pushed_at": "2026-08-20T16:27:15.007Z"
  },
- "clang16@16.0.6-r5": {
-  "name": "clang16",
-  "version": "16.0.6",
-  "img": "clang16-16.0.6-linux-x64.img",
-  "upload_path": "ply/clang16/clang16-16.0.6-linux-x64.img",
-  "bytes": 139460608,
-  "pushed_at": "2026-08-20T16:27:15.216Z"
- },
  "cracklib@2.9.11-r7": {
   "name": "cracklib",
   "version": "2.9.11",
@@ -1830,14 +1806,6 @@
   "upload_path": "ply/dtc/dtc-1.7.0-linux-x64.img",
   "bytes": 102400,
   "pushed_at": "2026-08-20T16:27:31.457Z"
- },
- "clang17@17.0.6-r1": {
-  "name": "clang17",
-  "version": "17.0.6",
-  "img": "clang17-17.0.6-linux-x64.img",
-  "upload_path": "ply/clang17/clang17-17.0.6-linux-x64.img",
-  "bytes": 154193920,
-  "pushed_at": "2026-08-20T16:27:32.481Z"
  },
  "ethtool@6.7-r0": {
   "name": "ethtool",
@@ -2399,14 +2367,6 @@
   "bytes": 90112,
   "pushed_at": "2026-08-20T16:52:23.552Z"
  },
- "clang15@15.0.7-r19": {
-  "name": "clang15",
-  "version": "15.0.7",
-  "img": "clang15-15.0.7-linux-x64.img",
-  "upload_path": "ply/clang15/clang15-15.0.7-linux-x64.img",
-  "bytes": 157466624,
-  "pushed_at": "2026-08-20T16:52:42.474Z"
- },
  "lockfile-progs@0.1.19-r3": {
   "name": "lockfile-progs",
   "version": "0.1.19",
@@ -2534,14 +2494,6 @@
   "upload_path": "ply/perl-module-scandeps/perl-module-scandeps-1.35.0-linux-x64.img",
   "bytes": 9515008,
   "pushed_at": "2026-08-20T17:30:27.581Z"
- },
- "llvm17@17.0.6-r2": {
-  "name": "llvm17",
-  "version": "17.0.6",
-  "img": "llvm17-17.0.6-linux-x64.img",
-  "upload_path": "ply/llvm17/llvm17-17.0.6-linux-x64.img",
-  "bytes": 113086464,
-  "pushed_at": "2026-08-20T17:31:00.038Z"
  },
  "perl-utils@5.38.5-r0": {
   "name": "perl-utils",
@@ -2790,14 +2742,6 @@
   "upload_path": "ply/xl2tpd/xl2tpd-1.3.18-linux-x64.img",
   "bytes": 2707456,
   "pushed_at": "2026-08-20T17:32:32.929Z"
- },
- "aaudit@0.7.2-r3": {
-  "name": "aaudit",
-  "version": "0.7.2",
-  "img": "aaudit-0.7.2-linux-x64.img",
-  "upload_path": "ply/aaudit/aaudit-0.7.2-linux-x64.img",
-  "bytes": 323584,
-  "pushed_at": "2026-08-20T17:32:33.871Z"
  },
  "wireguard-tools-wg-quick@1.0.20210914-r4": {
   "name": "wireguard-tools-wg-quick",
@@ -3527,22 +3471,6 @@
   "bytes": 87347200,
   "pushed_at": "2026-08-20T20:22:13.646Z"
  },
- "clang18@18.1.6-r0": {
-  "name": "clang18",
-  "version": "18.1.6",
-  "img": "clang18-18.1.6-linux-x64.img",
-  "upload_path": "ply/clang18/clang18-18.1.6-linux-x64.img",
-  "bytes": 156114944,
-  "pushed_at": "2026-08-20T20:22:29.670Z"
- },
- "clang17-extra-tools@17.0.6-r1": {
-  "name": "clang17-extra-tools",
-  "version": "17.0.6",
-  "img": "clang17-extra-tools-17.0.6-linux-x64.img",
-  "upload_path": "ply/clang17-extra-tools/clang17-extra-tools-17.0.6-linux-x64.img",
-  "bytes": 220803072,
-  "pushed_at": "2026-08-20T20:22:46.189Z"
- },
  "llvm16-test-utils@16.0.6-r9": {
   "name": "llvm16-test-utils",
   "version": "16.0.6",
@@ -3598,14 +3526,6 @@
   "upload_path": "ply/llvm18-test-utils/llvm18-test-utils-18.1.8-linux-x64.img",
   "bytes": 13967360,
   "pushed_at": "2026-08-20T20:45:52.775Z"
- },
- "llvm18@18.1.8-r1": {
-  "name": "llvm18",
-  "version": "18.1.8",
-  "img": "llvm18-18.1.8-linux-x64.img",
-  "upload_path": "ply/llvm18/llvm18-18.1.8-linux-x64.img",
-  "bytes": 118280192,
-  "pushed_at": "2026-08-20T20:46:19.822Z"
  },
  "lua5.4-busted@2.2.0-r0": {
   "name": "lua5.4-busted",
@@ -4679,30 +4599,6 @@
   "bytes": 831488,
   "pushed_at": "2026-08-22T00:16:23.494Z"
  },
- "rust@1.78.0-r1:arm64": {
-  "name": "rust",
-  "version": "1.78.0",
-  "img": "rust-1.78.0-linux-arm64.img",
-  "upload_path": "ply/rust/rust-1.78.0-linux-arm64.img",
-  "bytes": 275832832,
-  "pushed_at": "2026-08-22T00:17:07.454Z"
- },
- "cargo@1.78.0-r1:arm64": {
-  "name": "cargo",
-  "version": "1.78.0",
-  "img": "cargo-1.78.0-linux-arm64.img",
-  "upload_path": "ply/cargo/cargo-1.78.0-linux-arm64.img",
-  "bytes": 289349632,
-  "pushed_at": "2026-08-22T00:17:13.805Z"
- },
- "ocaml@4.14.2-r1:x64": {
-  "name": "ocaml",
-  "version": "4.14.2",
-  "img": "ocaml-4.14.2-linux-x64.img",
-  "upload_path": "ply/ocaml/ocaml-4.14.2-linux-x64.img",
-  "bytes": 106618880,
-  "pushed_at": "2026-08-22T01:06:07.810Z"
- },
  "py3-django@4.2.16-r0:x64": {
   "name": "py3-django",
   "version": "4.2.16",
@@ -4854,22 +4750,6 @@
   "upload_path": "ply/py3-fonttools/py3-fonttools-4.51.0-linux-x64.img",
   "bytes": 15872000,
   "pushed_at": "2026-08-22T01:12:19.052Z"
- },
- "nextcloud28@28.0.14-r0:x64": {
-  "name": "nextcloud28",
-  "version": "28.0.14",
-  "img": "nextcloud28-28.0.14-linux-x64.img",
-  "upload_path": "ply/nextcloud28/nextcloud28-28.0.14-linux-x64.img",
-  "bytes": 130125824,
-  "pushed_at": "2026-08-22T01:12:34.965Z"
- },
- "nextcloud@29.0.16-r0:x64": {
-  "name": "nextcloud",
-  "version": "29.0.16",
-  "img": "nextcloud-29.0.16-linux-x64.img",
-  "upload_path": "ply/nextcloud/nextcloud-29.0.16-linux-x64.img",
-  "bytes": 134295552,
-  "pushed_at": "2026-08-22T01:12:35.388Z"
  },
  "py3-distro@1.9.0-r2:x64": {
   "name": "py3-distro",
@@ -5999,14 +5879,6 @@
   "bytes": 12603392,
   "pushed_at": "2026-08-22T01:31:28.474Z"
  },
- "folks@0.15.7-r0:x64": {
-  "name": "folks",
-  "version": "0.15.7",
-  "img": "folks-0.15.7-linux-x64.img",
-  "upload_path": "ply/folks/folks-0.15.7-linux-x64.img",
-  "bytes": 154275840,
-  "pushed_at": "2026-08-22T01:31:45.055Z"
- },
  "perf@6.6.31-r0:x64": {
   "name": "perf",
   "version": "6.6.31",
@@ -6279,14 +6151,6 @@
   "bytes": 89030656,
   "pushed_at": "2026-08-22T01:36:59.389Z"
  },
- "gcc-riscv-none-elf@14.1.0-r0:x64": {
-  "name": "gcc-riscv-none-elf",
-  "version": "14.1.0",
-  "img": "gcc-riscv-none-elf-14.1.0-linux-x64.img",
-  "upload_path": "ply/gcc-riscv-none-elf/gcc-riscv-none-elf-14.1.0-linux-x64.img",
-  "bytes": 105308160,
-  "pushed_at": "2026-08-22T01:37:23.872Z"
- },
  "jupyter-nbconvert@7.16.3-r1:x64": {
   "name": "jupyter-nbconvert",
   "version": "7.16.3",
@@ -6454,14 +6318,6 @@
   "upload_path": "ply/py3-cmsis-pack-manager/py3-cmsis-pack-manager-0.5.3-linux-x64.img",
   "bytes": 13692928,
   "pushed_at": "2026-08-22T01:39:09.118Z"
- },
- "chromium@131.0.6778.108-r0:x64": {
-  "name": "chromium",
-  "version": "131.0.6778",
-  "img": "chromium-131.0.6778-linux-x64.img",
-  "upload_path": "ply/chromium/chromium-131.0.6778-linux-x64.img",
-  "bytes": 221941760,
-  "pushed_at": "2026-08-22T01:39:10.531Z"
  },
  "py3-dulwich@0.21.7-r1:x64": {
   "name": "py3-dulwich",
@@ -7415,14 +7271,6 @@
   "bytes": 311296,
   "pushed_at": "2026-08-22T01:54:03.176Z"
  },
- "barkery-browser@0.6.1-r0:x64": {
-  "name": "barkery-browser",
-  "version": "0.6.1",
-  "img": "barkery-browser-0.6.1-linux-x64.img",
-  "upload_path": "ply/barkery-browser/barkery-browser-0.6.1-linux-x64.img",
-  "bytes": 107634688,
-  "pushed_at": "2026-08-22T01:55:16.714Z"
- },
  "brightnessctl@0.5.1-r6:x64": {
   "name": "brightnessctl",
   "version": "0.5.1",
@@ -7655,14 +7503,6 @@
   "bytes": 18706432,
   "pushed_at": "2026-08-22T01:59:09.603Z"
  },
- "gr-osmosdr@0.2.5-r5:x64": {
-  "name": "gr-osmosdr",
-  "version": "0.2.5",
-  "img": "gr-osmosdr-0.2.5-linux-x64.img",
-  "upload_path": "ply/gr-osmosdr/gr-osmosdr-0.2.5-linux-x64.img",
-  "bytes": 116539392,
-  "pushed_at": "2026-08-22T02:00:51.315Z"
- },
  "py3-django@4.2.16-r0:arm64": {
   "name": "py3-django",
   "version": "4.2.16",
@@ -7815,14 +7655,6 @@
   "bytes": 14192640,
   "pushed_at": "2026-08-22T02:19:18.769Z"
  },
- "nextcloud28@28.0.14-r0:arm64": {
-  "name": "nextcloud28",
-  "version": "28.0.14",
-  "img": "nextcloud28-28.0.14-linux-arm64.img",
-  "upload_path": "ply/nextcloud28/nextcloud28-28.0.14-linux-arm64.img",
-  "bytes": 119349248,
-  "pushed_at": "2026-08-22T02:19:20.078Z"
- },
  "pipewire-jack@1.0.6-r1:arm64": {
   "name": "pipewire-jack",
   "version": "1.0.6",
@@ -7830,14 +7662,6 @@
   "upload_path": "ply/pipewire-jack/pipewire-jack-1.0.6-linux-arm64.img",
   "bytes": 11464704,
   "pushed_at": "2026-08-22T02:19:22.396Z"
- },
- "nextcloud@29.0.16-r0:arm64": {
-  "name": "nextcloud",
-  "version": "29.0.16",
-  "img": "nextcloud-29.0.16-linux-arm64.img",
-  "upload_path": "ply/nextcloud/nextcloud-29.0.16-linux-arm64.img",
-  "bytes": 122875904,
-  "pushed_at": "2026-08-22T02:19:24.929Z"
  },
  "py3-distro@1.9.0-r2:arm64": {
   "name": "py3-distro",
@@ -8078,14 +7902,6 @@
   "upload_path": "ply/cgmanager/cgmanager-0.42.0-linux-arm64.img",
   "bytes": 749568,
   "pushed_at": "2026-08-22T02:25:00.099Z"
- },
- "ghc@9.8.2-r1:arm64": {
-  "name": "ghc",
-  "version": "9.8.2",
-  "img": "ghc-9.8.2-linux-arm64.img",
-  "upload_path": "ply/ghc/ghc-9.8.2-linux-arm64.img",
-  "bytes": 284811264,
-  "pushed_at": "2026-08-22T02:25:01.483Z"
  },
  "connman@1.42-r2:arm64": {
   "name": "connman",
@@ -9503,14 +9319,6 @@
   "bytes": 44748800,
   "pushed_at": "2026-08-22T02:38:55.039Z"
  },
- "folks@0.15.7-r0:arm64": {
-  "name": "folks",
-  "version": "0.15.7",
-  "img": "folks-0.15.7-linux-arm64.img",
-  "upload_path": "ply/folks/folks-0.15.7-linux-arm64.img",
-  "bytes": 147345408,
-  "pushed_at": "2026-08-22T02:39:00.934Z"
- },
  "podman@5.2.5-r0:arm64": {
   "name": "podman",
   "version": "5.2.5",
@@ -9935,14 +9743,6 @@
   "bytes": 9945088,
   "pushed_at": "2026-08-22T02:42:24.316Z"
  },
- "clang16@16.0.6-r5:arm64": {
-  "name": "clang16",
-  "version": "16.0.6",
-  "img": "clang16-16.0.6-linux-arm64.img",
-  "upload_path": "ply/clang16/clang16-16.0.6-linux-arm64.img",
-  "bytes": 114241536,
-  "pushed_at": "2026-08-22T02:42:24.812Z"
- },
  "faac@1.30-r5:arm64": {
   "name": "faac",
   "version": "1.30.0",
@@ -9966,14 +9766,6 @@
   "upload_path": "ply/fstrcmp/fstrcmp-0.7.0-linux-arm64.img",
   "bytes": 12288,
   "pushed_at": "2026-08-22T02:42:26.784Z"
- },
- "clang17@17.0.6-r1:arm64": {
-  "name": "clang17",
-  "version": "17.0.6",
-  "img": "clang17-17.0.6-linux-arm64.img",
-  "upload_path": "ply/clang17/clang17-17.0.6-linux-arm64.img",
-  "bytes": 124719104,
-  "pushed_at": "2026-08-22T02:42:37.105Z"
  },
  "gmobile@0.2.1-r0:arm64": {
   "name": "gmobile",
@@ -10166,14 +9958,6 @@
   "upload_path": "ply/open-vm-tools-hgfs/open-vm-tools-hgfs-12.4.0-linux-arm64.img",
   "bytes": 3063808,
   "pushed_at": "2026-08-22T02:45:48.240Z"
- },
- "chromium@131.0.6778.108-r0:arm64": {
-  "name": "chromium",
-  "version": "131.0.6778",
-  "img": "chromium-131.0.6778-linux-arm64.img",
-  "upload_path": "ply/chromium/chromium-131.0.6778-linux-arm64.img",
-  "bytes": 212041728,
-  "pushed_at": "2026-08-22T02:45:51.888Z"
  },
  "php82-fpm@8.2.28-r0:arm64": {
   "name": "php82-fpm",
@@ -12111,14 +11895,6 @@
   "bytes": 32768,
   "pushed_at": "2026-08-22T03:17:41.818Z"
  },
- "clang15@15.0.7-r19:arm64": {
-  "name": "clang15",
-  "version": "15.0.7",
-  "img": "clang15-15.0.7-linux-arm64.img",
-  "upload_path": "ply/clang15/clang15-15.0.7-linux-arm64.img",
-  "bytes": 129937408,
-  "pushed_at": "2026-08-22T03:17:42.422Z"
- },
  "samba-client@4.19.9-r0:arm64": {
   "name": "samba-client",
   "version": "4.19.9",
@@ -12567,22 +12343,6 @@
   "bytes": 14553088,
   "pushed_at": "2026-08-22T03:25:20.755Z"
  },
- "gr-osmosdr@0.2.5-r5:arm64": {
-  "name": "gr-osmosdr",
-  "version": "0.2.5",
-  "img": "gr-osmosdr-0.2.5-linux-arm64.img",
-  "upload_path": "ply/gr-osmosdr/gr-osmosdr-0.2.5-linux-arm64.img",
-  "bytes": 107397120,
-  "pushed_at": "2026-08-22T03:26:57.802Z"
- },
- "grass-gis@8.3.2-r3:arm64": {
-  "name": "grass-gis",
-  "version": "8.3.2",
-  "img": "grass-gis-8.3.2-linux-arm64.img",
-  "upload_path": "ply/grass-gis/grass-gis-8.3.2-linux-arm64.img",
-  "bytes": 112500736,
-  "pushed_at": "2026-08-22T03:27:00.502Z"
- },
  "jupyter-nbclassic@1.0.0-r1:arm64": {
   "name": "jupyter-nbclassic",
   "version": "1.0.0",
@@ -12878,14 +12638,6 @@
   "upload_path": "ply/paris-traceroute/paris-traceroute-0.93.0-linux-arm64.img",
   "bytes": 73728,
   "pushed_at": "2026-08-22T03:32:29.176Z"
- },
- "libreoffice-base@7.6.7.2-r0:arm64": {
-  "name": "libreoffice-base",
-  "version": "7.6.7",
-  "img": "libreoffice-base-7.6.7-linux-arm64.img",
-  "upload_path": "ply/libreoffice-base/libreoffice-base-7.6.7-linux-arm64.img",
-  "bytes": 236896256,
-  "pushed_at": "2026-08-22T03:32:33.479Z"
  },
  "pass@1.7.4-r3:arm64": {
   "name": "pass",
@@ -13767,14 +13519,6 @@
   "bytes": 97853440,
   "pushed_at": "2026-08-22T03:40:34.610Z"
  },
- "texlive-context@20240210.69778-r4:arm64": {
-  "name": "texlive-context",
-  "version": "20240210.69778.0",
-  "img": "texlive-context-20240210.69778.0-linux-arm64.img",
-  "upload_path": "ply/texlive-context/texlive-context-20240210.69778.0-linux-arm64.img",
-  "bytes": 106618880,
-  "pushed_at": "2026-08-22T03:40:35.487Z"
- },
  "vboot-utils@6310032-r8:arm64": {
   "name": "vboot-utils",
   "version": "6310032.0.0",
@@ -13910,14 +13654,6 @@
   "upload_path": "ply/yubico-c-client/yubico-c-client-2.15.0-linux-arm64.img",
   "bytes": 4521984,
   "pushed_at": "2026-08-22T03:41:52.846Z"
- },
- "aaudit@0.7.2-r3:arm64": {
-  "name": "aaudit",
-  "version": "0.7.2",
-  "img": "aaudit-0.7.2-linux-arm64.img",
-  "upload_path": "ply/aaudit/aaudit-0.7.2-linux-arm64.img",
-  "bytes": 339968,
-  "pushed_at": "2026-08-22T03:41:57.436Z"
  },
  "yamllint@1.35.1-r1:arm64": {
   "name": "yamllint",
@@ -14310,22 +14046,6 @@
   "upload_path": "ply/espeak/espeak-1.48.4-linux-arm64.img",
   "bytes": 4632576,
   "pushed_at": "2026-08-22T03:43:15.577Z"
- },
- "clang18@18.1.6-r0:arm64": {
-  "name": "clang18",
-  "version": "18.1.6",
-  "img": "clang18-18.1.6-linux-arm64.img",
-  "upload_path": "ply/clang18/clang18-18.1.6-linux-arm64.img",
-  "bytes": 126652416,
-  "pushed_at": "2026-08-22T03:44:00.702Z"
- },
- "clang17-extra-tools@17.0.6-r1:arm64": {
-  "name": "clang17-extra-tools",
-  "version": "17.0.6",
-  "img": "clang17-extra-tools-17.0.6-linux-arm64.img",
-  "upload_path": "ply/clang17-extra-tools/clang17-extra-tools-17.0.6-linux-arm64.img",
-  "bytes": 179077120,
-  "pushed_at": "2026-08-22T03:44:14.078Z"
  },
  "flock@2.40.1-r1:arm64": {
   "name": "flock",
@@ -15639,14 +15359,6 @@
   "bytes": 1212416,
   "pushed_at": "2026-08-22T04:03:27.930Z"
  },
- "afl++@4.20c-r0:arm64": {
-  "name": "aflpp",
-  "version": "4.20.0",
-  "img": "aflpp-4.20.0-linux-arm64.img",
-  "upload_path": "ply/aflpp/aflpp-4.20.0-linux-arm64.img",
-  "bytes": 192024576,
-  "pushed_at": "2026-08-22T04:03:29.987Z"
- },
  "bpftrace@0.20.4-r0:arm64": {
   "name": "bpftrace",
   "version": "0.20.4",
@@ -15654,14 +15366,6 @@
   "upload_path": "ply/bpftrace/bpftrace-0.20.4-linux-arm64.img",
   "bytes": 95305728,
   "pushed_at": "2026-08-22T04:03:45.554Z"
- },
- "biber2.19@2.19-r1:arm64": {
-  "name": "biber2.19",
-  "version": "2.19.0",
-  "img": "biber2.19-2.19.0-linux-arm64.img",
-  "upload_path": "ply/biber2.19/biber2.19-2.19.0-linux-arm64.img",
-  "bytes": 117534720,
-  "pushed_at": "2026-08-22T04:03:53.170Z"
  },
  "ceph17-mon-daemon@17.2.7-r8:arm64": {
   "name": "ceph17-mon-daemon",
@@ -16023,14 +15727,6 @@
   "bytes": 2797568,
   "pushed_at": "2026-08-22T04:10:43.285Z"
  },
- "cabal@3.10.3.0-r0:arm64": {
-  "name": "cabal",
-  "version": "3.10.3",
-  "img": "cabal-3.10.3-linux-arm64.img",
-  "upload_path": "ply/cabal/cabal-3.10.3-linux-arm64.img",
-  "bytes": 291438592,
-  "pushed_at": "2026-08-22T04:10:49.808Z"
- },
  "fetchmail@6.4.38-r2:arm64": {
   "name": "fetchmail",
   "version": "6.4.38",
@@ -16070,14 +15766,6 @@
   "upload_path": "ply/elixir/elixir-1.16.3-linux-arm64.img",
   "bytes": 40054784,
   "pushed_at": "2026-08-22T04:11:00.772Z"
- },
- "crystal@1.12.2-r0:arm64": {
-  "name": "crystal",
-  "version": "1.12.2",
-  "img": "crystal-1.12.2-linux-arm64.img",
-  "upload_path": "ply/crystal/crystal-1.12.2-linux-arm64.img",
-  "bytes": 115228672,
-  "pushed_at": "2026-08-22T04:11:08.873Z"
  },
  "foot@1.17.2-r0:arm64": {
   "name": "foot",
@@ -16151,22 +15839,6 @@
   "bytes": 55365632,
   "pushed_at": "2026-08-22T04:15:04.884Z"
  },
- "g++-msp430-elf@14.1.0-r0:arm64": {
-  "name": "gpp-msp430-elf",
-  "version": "14.1.0",
-  "img": "gpp-msp430-elf-14.1.0-linux-arm64.img",
-  "upload_path": "ply/gpp-msp430-elf/gpp-msp430-elf-14.1.0-linux-arm64.img",
-  "bytes": 105607168,
-  "pushed_at": "2026-08-22T04:15:24.772Z"
- },
- "g++-aarch64-none-elf@14.1.0-r0:arm64": {
-  "name": "gpp-aarch64-none-elf",
-  "version": "14.1.0",
-  "img": "gpp-aarch64-none-elf-14.1.0-linux-arm64.img",
-  "upload_path": "ply/gpp-aarch64-none-elf/gpp-aarch64-none-elf-14.1.0-linux-arm64.img",
-  "bytes": 107536384,
-  "pushed_at": "2026-08-22T04:15:24.895Z"
- },
  "git-lfs@3.5.1-r4:arm64": {
   "name": "git-lfs",
   "version": "3.5.1",
@@ -16175,14 +15847,6 @@
   "bytes": 12054528,
   "pushed_at": "2026-08-22T04:15:29.642Z"
  },
- "g++-or1k-elf@14.1.0-r0:arm64": {
-  "name": "gpp-or1k-elf",
-  "version": "14.1.0",
-  "img": "gpp-or1k-elf-14.1.0-linux-arm64.img",
-  "upload_path": "ply/gpp-or1k-elf/gpp-or1k-elf-14.1.0-linux-arm64.img",
-  "bytes": 110981120,
-  "pushed_at": "2026-08-22T04:15:35.347Z"
- },
  "gnome-browser-connector@42.1-r3:arm64": {
   "name": "gnome-browser-connector",
   "version": "42.1.0",
@@ -16190,22 +15854,6 @@
   "upload_path": "ply/gnome-browser-connector/gnome-browser-connector-42.1.0-linux-arm64.img",
   "bytes": 17633280,
   "pushed_at": "2026-08-22T04:16:20.313Z"
- },
- "g++-arm-none-eabi@14.1.0-r0:arm64": {
-  "name": "gpp-arm-none-eabi",
-  "version": "14.1.0",
-  "img": "gpp-arm-none-eabi-14.1.0-linux-arm64.img",
-  "upload_path": "ply/gpp-arm-none-eabi/gpp-arm-none-eabi-14.1.0-linux-arm64.img",
-  "bytes": 171200512,
-  "pushed_at": "2026-08-22T04:17:13.388Z"
- },
- "g++-riscv-none-elf@14.1.0-r0:arm64": {
-  "name": "gpp-riscv-none-elf",
-  "version": "14.1.0",
-  "img": "gpp-riscv-none-elf-14.1.0-linux-arm64.img",
-  "upload_path": "ply/gpp-riscv-none-elf/gpp-riscv-none-elf-14.1.0-linux-arm64.img",
-  "bytes": 236482560,
-  "pushed_at": "2026-08-22T04:19:23.704Z"
  },
  "gnome-remote-desktop@45.1-r2:arm64": {
   "name": "gnome-remote-desktop",
@@ -16422,22 +16070,6 @@
   "upload_path": "ply/incus-utils/incus-utils-6.0.3-linux-arm64.img",
   "bytes": 50704384,
   "pushed_at": "2026-08-22T04:24:29.934Z"
- },
- "gnome-extensions-app@46.1-r0:arm64": {
-  "name": "gnome-extensions-app",
-  "version": "46.1.0",
-  "img": "gnome-extensions-app-46.1.0-linux-arm64.img",
-  "upload_path": "ply/gnome-extensions-app/gnome-extensions-app-46.1.0-linux-arm64.img",
-  "bytes": 212717568,
-  "pushed_at": "2026-08-22T04:24:45.438Z"
- },
- "jellyfin@10.9.9-r0:arm64": {
-  "name": "jellyfin",
-  "version": "10.9.9",
-  "img": "jellyfin-10.9.9-linux-arm64.img",
-  "upload_path": "ply/jellyfin/jellyfin-10.9.9-linux-arm64.img",
-  "bytes": 139665408,
-  "pushed_at": "2026-08-22T04:27:47.757Z"
  },
  "kcgi@0.13.3-r0:arm64": {
   "name": "kcgi",
@@ -16663,14 +16295,6 @@
   "bytes": 52490240,
   "pushed_at": "2026-08-22T04:49:43.083Z"
  },
- "libreoffice-impress@7.6.7.2-r0:arm64": {
-  "name": "libreoffice-impress",
-  "version": "7.6.7",
-  "img": "libreoffice-impress-7.6.7-linux-arm64.img",
-  "upload_path": "ply/libreoffice-impress/libreoffice-impress-7.6.7-linux-arm64.img",
-  "bytes": 233365504,
-  "pushed_at": "2026-08-22T04:51:54.134Z"
- },
  "lzop@1.04-r0:arm64": {
   "name": "lzop",
   "version": "1.4.0",
@@ -16686,38 +16310,6 @@
   "upload_path": "ply/makepasswd/makepasswd-0.5.4-linux-arm64.img",
   "bytes": 2093056,
   "pushed_at": "2026-08-22T04:52:01.292Z"
- },
- "libreoffice-draw@7.6.7.2-r0:arm64": {
-  "name": "libreoffice-draw",
-  "version": "7.6.7",
-  "img": "libreoffice-draw-7.6.7-linux-arm64.img",
-  "upload_path": "ply/libreoffice-draw/libreoffice-draw-7.6.7-linux-arm64.img",
-  "bytes": 233607168,
-  "pushed_at": "2026-08-22T04:52:36.679Z"
- },
- "libreoffice-calc@7.6.7.2-r0:arm64": {
-  "name": "libreoffice-calc",
-  "version": "7.6.7",
-  "img": "libreoffice-calc-7.6.7-linux-arm64.img",
-  "upload_path": "ply/libreoffice-calc/libreoffice-calc-7.6.7-linux-arm64.img",
-  "bytes": 242397184,
-  "pushed_at": "2026-08-22T04:52:53.184Z"
- },
- "libreoffice-math@7.6.7.2-r0:arm64": {
-  "name": "libreoffice-math",
-  "version": "7.6.7",
-  "img": "libreoffice-math-7.6.7-linux-arm64.img",
-  "upload_path": "ply/libreoffice-math/libreoffice-math-7.6.7-linux-arm64.img",
-  "bytes": 233033728,
-  "pushed_at": "2026-08-22T04:52:53.295Z"
- },
- "libreoffice-writer@7.6.7.2-r0:arm64": {
-  "name": "libreoffice-writer",
-  "version": "7.6.7",
-  "img": "libreoffice-writer-7.6.7-linux-arm64.img",
-  "upload_path": "ply/libreoffice-writer/libreoffice-writer-7.6.7-linux-arm64.img",
-  "bytes": 238080000,
-  "pushed_at": "2026-08-22T04:52:58.158Z"
  },
  "maturin@1.5.1-r0:arm64": {
   "name": "maturin",
@@ -17623,14 +17215,6 @@
   "bytes": 622592,
   "pushed_at": "2026-08-22T19:14:08.168Z"
  },
- "grass-gis@8.3.2-r3:x64": {
-  "name": "grass-gis",
-  "version": "8.3.2",
-  "img": "grass-gis-8.3.2-linux-x64.img",
-  "upload_path": "ply/grass-gis/grass-gis-8.3.2-linux-x64.img",
-  "bytes": 123404288,
-  "pushed_at": "2026-08-22T19:14:09.480Z"
- },
  "profiled@1.0.13-r1:x64": {
   "name": "profiled",
   "version": "1.0.13",
@@ -18223,14 +17807,6 @@
   "bytes": 86016,
   "pushed_at": "2026-08-22T19:19:13.289Z"
  },
- "libreoffice-base@7.6.7.2-r0:x64": {
-  "name": "libreoffice-base",
-  "version": "7.6.7",
-  "img": "libreoffice-base-7.6.7-linux-x64.img",
-  "upload_path": "ply/libreoffice-base/libreoffice-base-7.6.7-linux-x64.img",
-  "bytes": 237953024,
-  "pushed_at": "2026-08-22T19:19:14.956Z"
- },
  "stress-ng@0.17.08-r0:x64": {
   "name": "stress-ng",
   "version": "0.17.8",
@@ -18286,14 +17862,6 @@
   "upload_path": "ply/tacacspng/tacacspng-0.0.0-linux-x64.img",
   "bytes": 2682880,
   "pushed_at": "2026-08-22T19:19:28.191Z"
- },
- "ghc@9.8.2-r1:x64": {
-  "name": "ghc",
-  "version": "9.8.2",
-  "img": "ghc-9.8.2-linux-x64.img",
-  "upload_path": "ply/ghc/ghc-9.8.2-linux-x64.img",
-  "bytes": 276889600,
-  "pushed_at": "2026-08-22T19:19:28.220Z"
  },
  "salt@3007.0-r4:x64": {
   "name": "salt",
@@ -18734,14 +18302,6 @@
   "upload_path": "ply/wpewebkit/wpewebkit-2.40.5-linux-x64.img",
   "bytes": 91631616,
   "pushed_at": "2026-08-22T19:22:07.795Z"
- },
- "texlive-context@20240210.69778-r4:x64": {
-  "name": "texlive-context",
-  "version": "20240210.69778.0",
-  "img": "texlive-context-20240210.69778.0-linux-x64.img",
-  "upload_path": "ply/texlive-context/texlive-context-20240210.69778.0-linux-x64.img",
-  "bytes": 106196992,
-  "pushed_at": "2026-08-22T19:22:08.689Z"
  },
  "pgexporter@0.5.0-r1:arm64": {
   "name": "pgexporter",
@@ -19655,14 +19215,6 @@
   "bytes": 8941568,
   "pushed_at": "2026-08-22T19:29:17.598Z"
  },
- "aaudit-server@0.7.2-r3:arm64": {
-  "name": "aaudit-server",
-  "version": "0.7.2",
-  "img": "aaudit-server-0.7.2-linux-arm64.img",
-  "upload_path": "ply/aaudit-server/aaudit-server-0.7.2-linux-arm64.img",
-  "bytes": 8310784,
-  "pushed_at": "2026-08-22T19:29:18.898Z"
- },
  "acpid@2.0.34-r4:arm64": {
   "name": "acpid",
   "version": "2.0.34",
@@ -20326,14 +19878,6 @@
   "upload_path": "ply/aports-build/aports-build-1.5.5-linux-arm64.img",
   "bytes": 75718656,
   "pushed_at": "2026-08-22T19:31:30.190Z"
- },
- "clang17-analyzer@17.0.6-r1:arm64": {
-  "name": "clang17-analyzer",
-  "version": "17.0.6",
-  "img": "clang17-analyzer-17.0.6-linux-arm64.img",
-  "upload_path": "ply/clang17-analyzer/clang17-analyzer-17.0.6-linux-arm64.img",
-  "bytes": 144068608,
-  "pushed_at": "2026-08-22T19:32:08.021Z"
  },
  "pingu@1.5-r5:x64": {
   "name": "pingu",
@@ -21135,14 +20679,6 @@
   "bytes": 323584,
   "pushed_at": "2026-08-22T19:47:45.255Z"
  },
- "biber2.19@2.19-r1:x64": {
-  "name": "biber2.19",
-  "version": "2.19.0",
-  "img": "biber2.19-2.19.0-linux-x64.img",
-  "upload_path": "ply/biber2.19/biber2.19-2.19.0-linux-x64.img",
-  "bytes": 116789248,
-  "pushed_at": "2026-08-22T19:47:47.300Z"
- },
  "cs-firewall-bouncer@0.0.28-r8:x64": {
   "name": "cs-firewall-bouncer",
   "version": "0.0.28",
@@ -21214,14 +20750,6 @@
   "upload_path": "ply/ecl/ecl-23.9.9-linux-x64.img",
   "bytes": 4087808,
   "pushed_at": "2026-08-22T19:48:19.076Z"
- },
- "afl++@4.20c-r0:x64": {
-  "name": "aflpp",
-  "version": "4.20.0",
-  "img": "aflpp-4.20.0-linux-x64.img",
-  "upload_path": "ply/aflpp/aflpp-4.20.0-linux-x64.img",
-  "bytes": 205164544,
-  "pushed_at": "2026-08-22T19:48:20.123Z"
  },
  "eggdbus@0.6-r8:x64": {
   "name": "eggdbus",
@@ -21439,14 +20967,6 @@
   "bytes": 17240064,
   "pushed_at": "2026-08-22T19:50:57.515Z"
  },
- "crystal@1.12.2-r0:x64": {
-  "name": "crystal",
-  "version": "1.12.2",
-  "img": "crystal-1.12.2-linux-x64.img",
-  "upload_path": "ply/crystal/crystal-1.12.2-linux-x64.img",
-  "bytes": 121720832,
-  "pushed_at": "2026-08-22T19:51:19.640Z"
- },
  "gcc-avr@14.1.0-r1:x64": {
   "name": "gcc-avr",
   "version": "14.1.0",
@@ -21470,14 +20990,6 @@
   "upload_path": "ply/gnu-libiconv/gnu-libiconv-1.17.0-linux-x64.img",
   "bytes": 712704,
   "pushed_at": "2026-08-22T19:52:13.178Z"
- },
- "g++-aarch64-none-elf@14.1.0-r0:x64": {
-  "name": "gpp-aarch64-none-elf",
-  "version": "14.1.0",
-  "img": "gpp-aarch64-none-elf-14.1.0-linux-x64.img",
-  "upload_path": "ply/gpp-aarch64-none-elf/gpp-aarch64-none-elf-14.1.0-linux-x64.img",
-  "bytes": 110686208,
-  "pushed_at": "2026-08-22T19:52:46.024Z"
  },
  "gnuplot@6.0.0-r0:x64": {
   "name": "gnuplot",
@@ -21503,14 +21015,6 @@
   "bytes": 3502080,
   "pushed_at": "2026-08-22T19:52:58.013Z"
  },
- "g++-msp430-elf@14.1.0-r0:x64": {
-  "name": "gpp-msp430-elf",
-  "version": "14.1.0",
-  "img": "gpp-msp430-elf-14.1.0-linux-x64.img",
-  "upload_path": "ply/gpp-msp430-elf/gpp-msp430-elf-14.1.0-linux-x64.img",
-  "bytes": 109625344,
-  "pushed_at": "2026-08-22T19:53:04.942Z"
- },
  "grepcidr3@3.0-r1:x64": {
   "name": "grepcidr3",
   "version": "3.0.0",
@@ -21527,14 +21031,6 @@
   "bytes": 8208384,
   "pushed_at": "2026-08-22T19:53:14.179Z"
  },
- "g++-or1k-elf@14.1.0-r0:x64": {
-  "name": "gpp-or1k-elf",
-  "version": "14.1.0",
-  "img": "gpp-or1k-elf-14.1.0-linux-x64.img",
-  "upload_path": "ply/gpp-or1k-elf/gpp-or1k-elf-14.1.0-linux-x64.img",
-  "bytes": 113786880,
-  "pushed_at": "2026-08-22T19:53:18.172Z"
- },
  "gsoap-tools@2.8.134-r0:x64": {
   "name": "gsoap-tools",
   "version": "2.8.134",
@@ -21542,14 +21038,6 @@
   "upload_path": "ply/gsoap-tools/gsoap-tools-2.8.134-linux-x64.img",
   "bytes": 4136960,
   "pushed_at": "2026-08-22T19:53:24.461Z"
- },
- "cabal@3.10.3.0-r0:x64": {
-  "name": "cabal",
-  "version": "3.10.3",
-  "img": "cabal-3.10.3-linux-x64.img",
-  "upload_path": "ply/cabal/cabal-3.10.3-linux-x64.img",
-  "bytes": 283082752,
-  "pushed_at": "2026-08-22T19:53:28.412Z"
  },
  "harec@0.24.0-r0:x64": {
   "name": "harec",
@@ -21775,14 +21263,6 @@
   "bytes": 3358720,
   "pushed_at": "2026-08-22T19:54:43.736Z"
  },
- "g++-arm-none-eabi@14.1.0-r0:x64": {
-  "name": "gpp-arm-none-eabi",
-  "version": "14.1.0",
-  "img": "gpp-arm-none-eabi-14.1.0-linux-x64.img",
-  "upload_path": "ply/gpp-arm-none-eabi/gpp-arm-none-eabi-14.1.0-linux-x64.img",
-  "bytes": 174170112,
-  "pushed_at": "2026-08-22T19:55:10.689Z"
- },
  "incus-utils@6.0.3-r1:x64": {
   "name": "incus-utils",
   "version": "6.0.3",
@@ -21790,14 +21270,6 @@
   "upload_path": "ply/incus-utils/incus-utils-6.0.3-linux-x64.img",
   "bytes": 51830784,
   "pushed_at": "2026-08-22T19:55:15.743Z"
- },
- "go@1.22.10-r0:x64": {
-  "name": "go",
-  "version": "1.22.10",
-  "img": "go-1.22.10-linux-x64.img",
-  "upload_path": "ply/go/go-1.22.10-linux-x64.img",
-  "bytes": 105058304,
-  "pushed_at": "2026-08-22T19:55:21.460Z"
  },
  "librime-tools@1.11.2-r0:x64": {
   "name": "librime-tools",
@@ -21855,14 +21327,6 @@
   "bytes": 2285568,
   "pushed_at": "2026-08-22T19:57:05.348Z"
  },
- "g++-riscv-none-elf@14.1.0-r0:x64": {
-  "name": "gpp-riscv-none-elf",
-  "version": "14.1.0",
-  "img": "gpp-riscv-none-elf-14.1.0-linux-x64.img",
-  "upload_path": "ply/gpp-riscv-none-elf/gpp-riscv-none-elf-14.1.0-linux-x64.img",
-  "bytes": 241405952,
-  "pushed_at": "2026-08-22T19:57:06.454Z"
- },
  "linux-tools-usbip@6.6.31-r0:x64": {
   "name": "linux-tools-usbip",
   "version": "6.6.31",
@@ -21902,14 +21366,6 @@
   "upload_path": "ply/lldpd/lldpd-1.0.18-linux-x64.img",
   "bytes": 4468736,
   "pushed_at": "2026-08-22T19:57:19.699Z"
- },
- "gnome-extensions-app@46.1-r0:x64": {
-  "name": "gnome-extensions-app",
-  "version": "46.1.0",
-  "img": "gnome-extensions-app-46.1.0-linux-x64.img",
-  "upload_path": "ply/gnome-extensions-app/gnome-extensions-app-46.1.0-linux-x64.img",
-  "bytes": 219250688,
-  "pushed_at": "2026-08-22T19:57:25.645Z"
  },
  "kodi-x11@21.0-r0:x64": {
   "name": "kodi-x11",
@@ -22038,14 +21494,6 @@
   "upload_path": "ply/msitools/msitools-0.103.0-linux-x64.img",
   "bytes": 3338240,
   "pushed_at": "2026-08-22T19:58:43.257Z"
- },
- "jellyfin@10.9.9-r0:x64": {
-  "name": "jellyfin",
-  "version": "10.9.9",
-  "img": "jellyfin-10.9.9-linux-x64.img",
-  "upload_path": "ply/jellyfin/jellyfin-10.9.9-linux-x64.img",
-  "bytes": 144650240,
-  "pushed_at": "2026-08-22T19:58:43.420Z"
  },
  "mtr@0.95-r2:x64": {
   "name": "mtr",
@@ -22535,22 +21983,6 @@
   "bytes": 11927552,
   "pushed_at": "2026-08-22T20:03:01.987Z"
  },
- "libreoffice-writer@7.6.7.2-r0:x64": {
-  "name": "libreoffice-writer",
-  "version": "7.6.7",
-  "img": "libreoffice-writer-7.6.7-linux-x64.img",
-  "upload_path": "ply/libreoffice-writer/libreoffice-writer-7.6.7-linux-x64.img",
-  "bytes": 239144960,
-  "pushed_at": "2026-08-22T20:03:02.711Z"
- },
- "libreoffice-draw@7.6.7.2-r0:x64": {
-  "name": "libreoffice-draw",
-  "version": "7.6.7",
-  "img": "libreoffice-draw-7.6.7-linux-x64.img",
-  "upload_path": "ply/libreoffice-draw/libreoffice-draw-7.6.7-linux-x64.img",
-  "bytes": 234541056,
-  "pushed_at": "2026-08-22T20:03:02.934Z"
- },
  "quickjs@0.20240113-r0:x64": {
   "name": "quickjs",
   "version": "0.20240113.0",
@@ -22558,22 +21990,6 @@
   "upload_path": "ply/quickjs/quickjs-0.20240113.0-linux-x64.img",
   "bytes": 897024,
   "pushed_at": "2026-08-22T20:03:03.638Z"
- },
- "libreoffice-impress@7.6.7.2-r0:x64": {
-  "name": "libreoffice-impress",
-  "version": "7.6.7",
-  "img": "libreoffice-impress-7.6.7-linux-x64.img",
-  "upload_path": "ply/libreoffice-impress/libreoffice-impress-7.6.7-linux-x64.img",
-  "bytes": 234319872,
-  "pushed_at": "2026-08-22T20:03:03.806Z"
- },
- "libreoffice-calc@7.6.7.2-r0:x64": {
-  "name": "libreoffice-calc",
-  "version": "7.6.7",
-  "img": "libreoffice-calc-7.6.7-linux-x64.img",
-  "upload_path": "ply/libreoffice-calc/libreoffice-calc-7.6.7-linux-x64.img",
-  "bytes": 243761152,
-  "pushed_at": "2026-08-22T20:03:04.010Z"
  },
  "py3-ytmusicapi@1.7.2-r0:x64": {
   "name": "py3-ytmusicapi",
@@ -22646,14 +22062,6 @@
   "upload_path": "ply/rebuilderd-tools/rebuilderd-tools-0.19.0-linux-x64.img",
   "bytes": 8073216,
   "pushed_at": "2026-08-22T20:03:13.425Z"
- },
- "libreoffice-math@7.6.7.2-r0:x64": {
-  "name": "libreoffice-math",
-  "version": "7.6.7",
-  "img": "libreoffice-math-7.6.7-linux-x64.img",
-  "upload_path": "ply/libreoffice-math/libreoffice-math-7.6.7-linux-x64.img",
-  "bytes": 233992192,
-  "pushed_at": "2026-08-22T20:03:13.827Z"
  },
  "runit@2.1.2-r7:x64": {
   "name": "runit",
@@ -23350,14 +22758,6 @@
   "upload_path": "ply/agetty/agetty-2.40.1-linux-x64.img",
   "bytes": 40960,
   "pushed_at": "2026-08-22T20:04:49.202Z"
- },
- "aaudit-server@0.7.2-r3:x64": {
-  "name": "aaudit-server",
-  "version": "0.7.2",
-  "img": "aaudit-server-0.7.2-linux-x64.img",
-  "upload_path": "ply/aaudit-server/aaudit-server-0.7.2-linux-x64.img",
-  "bytes": 7827456,
-  "pushed_at": "2026-08-22T20:04:50.175Z"
  },
  "alpine-make-rootfs@0.7.2-r0:x64": {
   "name": "alpine-make-rootfs",
@@ -24135,14 +23535,6 @@
   "bytes": 1667072,
   "pushed_at": "2026-08-22T20:07:36.352Z"
  },
- "wine@9.0-r0:x64": {
-  "name": "wine",
-  "version": "9.0.0",
-  "img": "wine-9.0.0-linux-x64.img",
-  "upload_path": "ply/wine/wine-9.0.0-linux-x64.img",
-  "bytes": 122544128,
-  "pushed_at": "2026-08-22T20:07:36.835Z"
- },
  "d-feet@0.3.16-r3:x64": {
   "name": "d-feet",
   "version": "0.3.16",
@@ -24318,14 +23710,6 @@
   "upload_path": "ply/fail2ban-tests/fail2ban-tests-1.1.0-linux-x64.img",
   "bytes": 12644352,
   "pushed_at": "2026-08-22T20:07:53.612Z"
- },
- "clang17-analyzer@17.0.6-r1:x64": {
-  "name": "clang17-analyzer",
-  "version": "17.0.6",
-  "img": "clang17-analyzer-17.0.6-linux-x64.img",
-  "upload_path": "ply/clang17-analyzer/clang17-analyzer-17.0.6-linux-x64.img",
-  "bytes": 152469504,
-  "pushed_at": "2026-08-22T20:08:20.012Z"
  },
  "dmesg@2.40.1-r1:arm64": {
   "name": "dmesg",
@@ -27615,14 +26999,6 @@
   "bytes": 3203072,
   "pushed_at": "2026-08-22T20:31:32.175Z"
  },
- "rust-clippy@1.78.0-r1:arm64": {
-  "name": "rust-clippy",
-  "version": "1.78.0",
-  "img": "rust-clippy-1.78.0-linux-arm64.img",
-  "upload_path": "ply/rust-clippy/rust-clippy-1.78.0-linux-arm64.img",
-  "bytes": 244088832,
-  "pushed_at": "2026-08-22T20:31:38.865Z"
- },
  "asciiquarium@1.1-r1:arm64": {
   "name": "asciiquarium",
   "version": "1.1.0",
@@ -27678,14 +27054,6 @@
   "upload_path": "ply/atools/atools-20.2.2-linux-arm64.img",
   "bytes": 843776,
   "pushed_at": "2026-08-22T20:31:55.595Z"
- },
- "rust-gdb@1.78.0-r1:arm64": {
-  "name": "rust-gdb",
-  "version": "1.78.0",
-  "img": "rust-gdb-1.78.0-linux-arm64.img",
-  "upload_path": "ply/rust-gdb/rust-gdb-1.78.0-linux-arm64.img",
-  "bytes": 259039232,
-  "pushed_at": "2026-08-22T20:31:58.003Z"
  },
  "atuin@15.0.0-r1:arm64": {
   "name": "atuin",
@@ -27758,14 +27126,6 @@
   "upload_path": "ply/avrdude/avrdude-7.3.0-linux-arm64.img",
   "bytes": 1372160,
   "pushed_at": "2026-08-22T20:32:11.593Z"
- },
- "rustfmt@1.78.0-r1:arm64": {
-  "name": "rustfmt",
-  "version": "1.78.0",
-  "img": "rustfmt-1.78.0-linux-arm64.img",
-  "upload_path": "ply/rustfmt/rustfmt-1.78.0-linux-arm64.img",
-  "bytes": 254988288,
-  "pushed_at": "2026-08-22T20:32:12.826Z"
  },
  "avro@1.11.3-r1:arm64": {
   "name": "avro",
@@ -27894,14 +27254,6 @@
   "upload_path": "ply/beanstalkd/beanstalkd-1.13.0-linux-arm64.img",
   "bytes": 28672,
   "pushed_at": "2026-08-22T20:32:37.972Z"
- },
- "rust-lldb@1.78.0-r1:arm64": {
-  "name": "rust-lldb",
-  "version": "1.78.0",
-  "img": "rust-lldb-1.78.0-linux-arm64.img",
-  "upload_path": "ply/rust-lldb/rust-lldb-1.78.0-linux-arm64.img",
-  "bytes": 289263616,
-  "pushed_at": "2026-08-22T20:32:46.858Z"
  },
  "avizo-scripts@1.3-r0:arm64": {
   "name": "avizo-scripts",
@@ -28086,14 +27438,6 @@
   "upload_path": "ply/blocky/blocky-0.23.0-linux-arm64.img",
   "bytes": 6983680,
   "pushed_at": "2026-08-22T20:34:01.481Z"
- },
- "afl++-tools@4.20c-r0:arm64": {
-  "name": "aflpp-tools",
-  "version": "4.20.0",
-  "img": "aflpp-tools-4.20.0-linux-arm64.img",
-  "upload_path": "ply/aflpp-tools/aflpp-tools-4.20.0-linux-arm64.img",
-  "bytes": 193069056,
-  "pushed_at": "2026-08-22T20:34:03.504Z"
  },
  "blinkstick@1.2.0-r4:arm64": {
   "name": "blinkstick",
@@ -28287,14 +27631,6 @@
   "bytes": 38023168,
   "pushed_at": "2026-08-22T20:35:34.315Z"
  },
- "biber@2.20-r1:arm64": {
-  "name": "biber",
-  "version": "2.20.0",
-  "img": "biber-2.20.0-linux-arm64.img",
-  "upload_path": "ply/biber/biber-2.20.0-linux-arm64.img",
-  "bytes": 117710848,
-  "pushed_at": "2026-08-22T20:36:10.415Z"
- },
  "blanket@0.7.0-r0:arm64": {
   "name": "blanket",
   "version": "0.7.0",
@@ -28302,22 +27638,6 @@
   "upload_path": "ply/blanket/blanket-0.7.0-linux-arm64.img",
   "bytes": 91783168,
   "pushed_at": "2026-08-22T20:36:17.319Z"
- },
- "blender-headless@4.1.1-r2:arm64": {
-  "name": "blender-headless",
-  "version": "4.1.1",
-  "img": "blender-headless-4.1.1-linux-arm64.img",
-  "upload_path": "ply/blender-headless/blender-headless-4.1.1-linux-arm64.img",
-  "bytes": 152231936,
-  "pushed_at": "2026-08-22T20:36:38.310Z"
- },
- "apply-refact@0.13.0.0-r1:arm64": {
-  "name": "apply-refact",
-  "version": "0.13.0",
-  "img": "apply-refact-0.13.0-linux-arm64.img",
-  "upload_path": "ply/apply-refact/apply-refact-0.13.0-linux-arm64.img",
-  "bytes": 306511872,
-  "pushed_at": "2026-08-22T20:36:54.359Z"
  },
  "fprobe-ulog@1.2-r9:x64": {
   "name": "fprobe-ulog",
@@ -31311,14 +30631,6 @@
   "bytes": 2822144,
   "pushed_at": "2026-08-22T21:09:19.218Z"
  },
- "rust-clippy@1.78.0-r1:x64": {
-  "name": "rust-clippy",
-  "version": "1.78.0",
-  "img": "rust-clippy-1.78.0-linux-x64.img",
-  "upload_path": "ply/rust-clippy/rust-clippy-1.78.0-linux-x64.img",
-  "bytes": 256643072,
-  "pushed_at": "2026-08-22T21:09:19.597Z"
- },
  "asciiquarium@1.1-r1:x64": {
   "name": "asciiquarium",
   "version": "1.1.0",
@@ -31471,14 +30783,6 @@
   "bytes": 11968512,
   "pushed_at": "2026-08-22T21:10:07.642Z"
  },
- "rustfmt@1.78.0-r1:x64": {
-  "name": "rustfmt",
-  "version": "1.78.0",
-  "img": "rustfmt-1.78.0-linux-x64.img",
-  "upload_path": "ply/rustfmt/rustfmt-1.78.0-linux-x64.img",
-  "bytes": 267583488,
-  "pushed_at": "2026-08-22T21:10:08.632Z"
- },
  "ax25-apps@0.0.8_rc5-r0:x64": {
   "name": "ax25-apps",
   "version": "0.0.8",
@@ -31494,14 +30798,6 @@
   "upload_path": "ply/ax25-tools/ax25-tools-0.0.10-linux-x64.img",
   "bytes": 192512,
   "pushed_at": "2026-08-22T21:10:11.550Z"
- },
- "rust-gdb@1.78.0-r1:x64": {
-  "name": "rust-gdb",
-  "version": "1.78.0",
-  "img": "rust-gdb-1.78.0-linux-x64.img",
-  "upload_path": "ply/rust-gdb/rust-gdb-1.78.0-linux-x64.img",
-  "bytes": 269979648,
-  "pushed_at": "2026-08-22T21:10:12.129Z"
  },
  "b3sum@1.5.1-r0:x64": {
   "name": "b3sum",
@@ -31622,14 +30918,6 @@
   "upload_path": "ply/below/below-0.7.1-linux-x64.img",
   "bytes": 2580480,
   "pushed_at": "2026-08-22T21:11:01.341Z"
- },
- "rust-lldb@1.78.0-r1:x64": {
-  "name": "rust-lldb",
-  "version": "1.78.0",
-  "img": "rust-lldb-1.78.0-linux-x64.img",
-  "upload_path": "ply/rust-lldb/rust-lldb-1.78.0-linux-x64.img",
-  "bytes": 303558656,
-  "pushed_at": "2026-08-22T21:11:02.698Z"
  },
  "berry@0.1.12-r2:x64": {
   "name": "berry",
@@ -31814,14 +31102,6 @@
   "upload_path": "ply/blinkstick/blinkstick-1.2.0-linux-x64.img",
   "bytes": 11894784,
   "pushed_at": "2026-08-22T21:12:08.120Z"
- },
- "afl++-tools@4.20c-r0:x64": {
-  "name": "aflpp-tools",
-  "version": "4.20.0",
-  "img": "aflpp-tools-4.20.0-linux-x64.img",
-  "upload_path": "ply/aflpp-tools/aflpp-tools-4.20.0-linux-x64.img",
-  "bytes": 206184448,
-  "pushed_at": "2026-08-22T21:12:13.027Z"
  },
  "bmon@4.0-r2:x64": {
   "name": "bmon",
@@ -32199,14 +31479,6 @@
   "bytes": 12091392,
   "pushed_at": "2026-08-22T21:15:04.139Z"
  },
- "biber@2.20-r1:x64": {
-  "name": "biber",
-  "version": "2.20.0",
-  "img": "biber-2.20.0-linux-x64.img",
-  "upload_path": "ply/biber/biber-2.20.0-linux-x64.img",
-  "bytes": 116961280,
-  "pushed_at": "2026-08-22T21:15:09.132Z"
- },
  "cargo-modules@0.16.0-r0:x64": {
   "name": "cargo-modules",
   "version": "0.16.0",
@@ -32270,46 +31542,6 @@
   "upload_path": "ply/bubblejail-config/bubblejail-config-0.8.3-linux-x64.img",
   "bytes": 69967872,
   "pushed_at": "2026-08-22T21:15:43.296Z"
- },
- "blender-headless@4.1.1-r2:x64": {
-  "name": "blender-headless",
-  "version": "4.1.1",
-  "img": "blender-headless-4.1.1-linux-x64.img",
-  "upload_path": "ply/blender-headless/blender-headless-4.1.1-linux-x64.img",
-  "bytes": 166342656,
-  "pushed_at": "2026-08-22T21:16:57.305Z"
- },
- "apply-refact@0.13.0.0-r1:x64": {
-  "name": "apply-refact",
-  "version": "0.13.0",
-  "img": "apply-refact-0.13.0-linux-x64.img",
-  "upload_path": "ply/apply-refact/apply-refact-0.13.0-linux-x64.img",
-  "bytes": 296673280,
-  "pushed_at": "2026-08-22T21:17:04.785Z"
- },
- "cargo-bloat@0.12.1-r0:x64": {
-  "name": "cargo-bloat",
-  "version": "0.12.1",
-  "img": "cargo-bloat-0.12.1-linux-x64.img",
-  "upload_path": "ply/cargo-bloat/cargo-bloat-0.12.1-linux-x64.img",
-  "bytes": 266145792,
-  "pushed_at": "2026-08-22T21:19:05.745Z"
- },
- "cargo-tarpaulin@0.27.3-r0:x64": {
-  "name": "cargo-tarpaulin",
-  "version": "0.27.3",
-  "img": "cargo-tarpaulin-0.27.3-linux-x64.img",
-  "upload_path": "ply/cargo-tarpaulin/cargo-tarpaulin-0.27.3-linux-x64.img",
-  "bytes": 267804672,
-  "pushed_at": "2026-08-22T21:19:11.655Z"
- },
- "cargo-nextest@0.9.70-r0:x64": {
-  "name": "cargo-nextest",
-  "version": "0.9.70",
-  "img": "cargo-nextest-0.9.70-linux-x64.img",
-  "upload_path": "ply/cargo-nextest/cargo-nextest-0.9.70-linux-x64.img",
-  "bytes": 267419648,
-  "pushed_at": "2026-08-22T21:19:16.689Z"
  },
  "btrfs-compsize@1.5-r2:arm64": {
   "name": "btrfs-compsize",
@@ -33207,14 +32439,6 @@
   "bytes": 20271104,
   "pushed_at": "2026-08-22T21:39:27.732Z"
  },
- "cargo-bloat@0.12.1-r0:arm64": {
-  "name": "cargo-bloat",
-  "version": "0.12.1",
-  "img": "cargo-bloat-0.12.1-linux-arm64.img",
-  "upload_path": "ply/cargo-bloat/cargo-bloat-0.12.1-linux-arm64.img",
-  "bytes": 253644800,
-  "pushed_at": "2026-08-22T21:39:27.843Z"
- },
  "cpulimit@0.2-r3:arm64": {
   "name": "cpulimit",
   "version": "0.2.0",
@@ -33327,22 +32551,6 @@
   "bytes": 4378624,
   "pushed_at": "2026-08-22T21:39:58.116Z"
  },
- "clojure@1.11.3-r0:arm64": {
-  "name": "clojure",
-  "version": "1.11.3",
-  "img": "clojure-1.11.3-linux-arm64.img",
-  "upload_path": "ply/clojure/clojure-1.11.3-linux-arm64.img",
-  "bytes": 135720960,
-  "pushed_at": "2026-08-22T21:39:59.546Z"
- },
- "cargo-nextest@0.9.70-r0:arm64": {
-  "name": "cargo-nextest",
-  "version": "0.9.70",
-  "img": "cargo-nextest-0.9.70-linux-arm64.img",
-  "upload_path": "ply/cargo-nextest/cargo-nextest-0.9.70-linux-arm64.img",
-  "bytes": 254914560,
-  "pushed_at": "2026-08-22T21:40:00.043Z"
- },
  "cwm@7.4-r1:arm64": {
   "name": "cwm",
   "version": "7.4.0",
@@ -33438,14 +32646,6 @@
   "upload_path": "ply/cyclone-stage0/cyclone-stage0-0.36.0-linux-arm64.img",
   "bytes": 14086144,
   "pushed_at": "2026-08-22T21:40:28.236Z"
- },
- "cargo-tarpaulin@0.27.3-r0:arm64": {
-  "name": "cargo-tarpaulin",
-  "version": "0.27.3",
-  "img": "cargo-tarpaulin-0.27.3-linux-arm64.img",
-  "upload_path": "ply/cargo-tarpaulin/cargo-tarpaulin-0.27.3-linux-arm64.img",
-  "bytes": 255217664,
-  "pushed_at": "2026-08-22T21:40:30.651Z"
  },
  "darkman@1.5.4-r12:arm64": {
   "name": "darkman",
@@ -33558,14 +32758,6 @@
   "upload_path": "ply/delve/delve-1.22.1-linux-arm64.img",
   "bytes": 4268032,
   "pushed_at": "2026-08-22T21:40:59.627Z"
- },
- "cloudi@2.0.7-r10:arm64": {
-  "name": "cloudi",
-  "version": "2.0.7",
-  "img": "cloudi-2.0.7-linux-arm64.img",
-  "upload_path": "ply/cloudi/cloudi-2.0.7-linux-arm64.img",
-  "bytes": 132186112,
-  "pushed_at": "2026-08-22T21:41:06.809Z"
  },
  "ddclient@3.11.2-r0:arm64": {
   "name": "ddclient",
@@ -33870,14 +33062,6 @@
   "upload_path": "ply/dnsdist/dnsdist-1.9.4-linux-arm64.img",
   "bytes": 9834496,
   "pushed_at": "2026-08-22T21:42:35.371Z"
- },
- "chromium-chromedriver@131.0.6778.108-r0:arm64": {
-  "name": "chromium-chromedriver",
-  "version": "131.0.6778",
-  "img": "chromium-chromedriver-131.0.6778-linux-arm64.img",
-  "upload_path": "ply/chromium-chromedriver/chromium-chromedriver-131.0.6778-linux-arm64.img",
-  "bytes": 219377664,
-  "pushed_at": "2026-08-22T21:42:35.415Z"
  },
  "docuum@0.24.0-r0:arm64": {
   "name": "docuum",
@@ -34222,14 +33406,6 @@
   "upload_path": "ply/ebusd/ebusd-23.2.0-linux-arm64.img",
   "bytes": 3670016,
   "pushed_at": "2026-08-22T21:43:59.228Z"
- },
- "coq@8.19.1-r3:arm64": {
-  "name": "coq",
-  "version": "8.19.1",
-  "img": "coq-8.19.1-linux-arm64.img",
-  "upload_path": "ply/coq/coq-8.19.1-linux-arm64.img",
-  "bytes": 186691584,
-  "pushed_at": "2026-08-22T21:44:03.506Z"
  },
  "editorconfig-checker@2.7.0-r10:arm64": {
   "name": "editorconfig-checker",
@@ -35479,14 +34655,6 @@
   "bytes": 241664,
   "pushed_at": "2026-08-22T21:49:41.477Z"
  },
- "foliate@3.1.1-r0:arm64": {
-  "name": "foliate",
-  "version": "3.1.1",
-  "img": "foliate-3.1.1-linux-arm64.img",
-  "upload_path": "ply/foliate/foliate-3.1.1-linux-arm64.img",
-  "bytes": 111570944,
-  "pushed_at": "2026-08-22T21:49:43.335Z"
- },
  "glances@3.4.0.5-r1:arm64": {
   "name": "glances",
   "version": "3.4.0",
@@ -36206,14 +35374,6 @@
   "upload_path": "ply/hlint/hlint-3.8.0-linux-arm64.img",
   "bytes": 11157504,
   "pushed_at": "2026-08-22T21:53:38.460Z"
- },
- "gnome-feeds@2.2.0-r3:arm64": {
-  "name": "gnome-feeds",
-  "version": "2.2.0",
-  "img": "gnome-feeds-2.2.0-linux-arm64.img",
-  "upload_path": "ply/gnome-feeds/gnome-feeds-2.2.0-linux-arm64.img",
-  "bytes": 114548736,
-  "pushed_at": "2026-08-22T21:53:39.081Z"
  },
  "httpry@0.1.8-r2:arm64": {
   "name": "httpry",
@@ -37263,14 +36423,6 @@
   "bytes": 5070848,
   "pushed_at": "2026-08-22T22:48:39.927Z"
  },
- "clojure@1.11.3-r0:x64": {
-  "name": "clojure",
-  "version": "1.11.3",
-  "img": "clojure-1.11.3-linux-x64.img",
-  "upload_path": "ply/clojure/clojure-1.11.3-linux-x64.img",
-  "bytes": 136232960,
-  "pushed_at": "2026-08-22T22:48:46.569Z"
- },
  "ddclient@3.11.2-r0:x64": {
   "name": "ddclient",
   "version": "3.11.2",
@@ -37486,14 +36638,6 @@
   "upload_path": "ply/dk/dk-2.2.0-linux-x64.img",
   "bytes": 356352,
   "pushed_at": "2026-08-22T22:49:54.493Z"
- },
- "cloudi@2.0.7-r10:x64": {
-  "name": "cloudi",
-  "version": "2.0.7",
-  "img": "cloudi-2.0.7-linux-x64.img",
-  "upload_path": "ply/cloudi/cloudi-2.0.7-linux-x64.img",
-  "bytes": 139395072,
-  "pushed_at": "2026-08-22T22:49:55.377Z"
  },
  "djvulibre@3.5.28-r4:x64": {
   "name": "djvulibre",
@@ -37735,14 +36879,6 @@
   "bytes": 16904192,
   "pushed_at": "2026-08-22T22:51:01.381Z"
  },
- "chromium-chromedriver@131.0.6778.108-r0:x64": {
-  "name": "chromium-chromedriver",
-  "version": "131.0.6778",
-  "img": "chromium-chromedriver-131.0.6778-linux-x64.img",
-  "upload_path": "ply/chromium-chromedriver/chromium-chromedriver-131.0.6778-linux-x64.img",
-  "bytes": 229576704,
-  "pushed_at": "2026-08-22T22:51:02.373Z"
- },
  "dua@2.29.0-r0:x64": {
   "name": "dua",
   "version": "2.29.0",
@@ -37934,14 +37070,6 @@
   "upload_path": "ply/earlyoom/earlyoom-1.8.1-linux-x64.img",
   "bytes": 16384,
   "pushed_at": "2026-08-22T22:51:39.592Z"
- },
- "coq@8.19.1-r3:x64": {
-  "name": "coq",
-  "version": "8.19.1",
-  "img": "coq-8.19.1-linux-x64.img",
-  "upload_path": "ply/coq/coq-8.19.1-linux-x64.img",
-  "bytes": 174592000,
-  "pushed_at": "2026-08-22T22:51:40.117Z"
  },
  "e2guardian@5.5.4r-r1:x64": {
   "name": "e2guardian",
@@ -39823,14 +38951,6 @@
   "bytes": 6299648,
   "pushed_at": "2026-08-22T23:03:04.681Z"
  },
- "gnome-feeds@2.2.0-r3:x64": {
-  "name": "gnome-feeds",
-  "version": "2.2.0",
-  "img": "gnome-feeds-2.2.0-linux-x64.img",
-  "upload_path": "ply/gnome-feeds/gnome-feeds-2.2.0-linux-x64.img",
-  "bytes": 117874688,
-  "pushed_at": "2026-08-22T23:03:06.486Z"
- },
  "hledger-ui@1.33-r0:x64": {
   "name": "hledger-ui",
   "version": "1.33.0",
@@ -41007,14 +40127,6 @@
   "bytes": 15192064,
   "pushed_at": "2026-08-22T23:21:13.324Z"
  },
- "jdtls@1.39.0-r0:arm64": {
-  "name": "jdtls",
-  "version": "1.39.0",
-  "img": "jdtls-1.39.0-linux-arm64.img",
-  "upload_path": "ply/jdtls/jdtls-1.39.0-linux-arm64.img",
-  "bytes": 107094016,
-  "pushed_at": "2026-08-22T23:21:21.680Z"
- },
  "keyd-application-mapper@2.4.3-r0:arm64": {
   "name": "keyd-application-mapper",
   "version": "2.4.3",
@@ -41510,14 +40622,6 @@
   "upload_path": "ply/kodi-gbm/kodi-gbm-21.0.0-linux-arm64.img",
   "bytes": 78401536,
   "pushed_at": "2026-08-22T23:25:49.537Z"
- },
- "irust@1.71.21-r0:arm64": {
-  "name": "irust",
-  "version": "1.71.21",
-  "img": "irust-1.71.21-linux-arm64.img",
-  "upload_path": "ply/irust/irust-1.71.21-linux-arm64.img",
-  "bytes": 253513728,
-  "pushed_at": "2026-08-22T23:25:49.798Z"
  },
  "libdisplay-info-tools@0.1.1-r0:arm64": {
   "name": "libdisplay-info-tools",
@@ -42054,14 +41158,6 @@
   "upload_path": "ply/lirc-python/lirc-python-0.10.2-linux-arm64.img",
   "bytes": 12791808,
   "pushed_at": "2026-08-22T23:27:23.742Z"
- },
- "keycloak@24.0.5-r1:arm64": {
-  "name": "keycloak",
-  "version": "24.0.5",
-  "img": "keycloak-24.0.5-linux-arm64.img",
-  "upload_path": "ply/keycloak/keycloak-24.0.5-linux-arm64.img",
-  "bytes": 209022976,
-  "pushed_at": "2026-08-22T23:27:23.785Z"
  },
  "lighthouse@5.1.3-r0:arm64": {
   "name": "lighthouse",
@@ -42615,14 +41711,6 @@
   "bytes": 12288,
   "pushed_at": "2026-08-22T23:29:01.956Z"
  },
- "leiningen@2.11.2-r0:arm64": {
-  "name": "leiningen",
-  "version": "2.11.2",
-  "img": "leiningen-2.11.2-linux-arm64.img",
-  "upload_path": "ply/leiningen/leiningen-2.11.2-linux-arm64.img",
-  "bytes": 145993728,
-  "pushed_at": "2026-08-22T23:29:05.484Z"
- },
  "minify@2.20.37-r0:arm64": {
   "name": "minify",
   "version": "2.20.37",
@@ -42942,14 +42030,6 @@
   "upload_path": "ply/mruby/mruby-3.3.0-linux-arm64.img",
   "bytes": 356352,
   "pushed_at": "2026-08-22T23:30:31.129Z"
- },
- "mongodb-tools@100.9.4-r5:arm64": {
-  "name": "mongodb-tools",
-  "version": "100.9.4",
-  "img": "mongodb-tools-100.9.4-linux-arm64.img",
-  "upload_path": "ply/mongodb-tools/mongodb-tools-100.9.4-linux-arm64.img",
-  "bytes": 27602944,
-  "pushed_at": "2026-08-22T23:30:33.213Z"
  },
  "monero@0.18.3.3-r1:arm64": {
   "name": "monero",
@@ -43703,14 +42783,6 @@
   "bytes": 38551552,
   "pushed_at": "2026-08-22T23:35:26.300Z"
  },
- "neo4j@4.4.32-r0:arm64": {
-  "name": "neo4j",
-  "version": "4.4.32",
-  "img": "neo4j-4.4.32-linux-arm64.img",
-  "upload_path": "ply/neo4j/neo4j-4.4.32-linux-arm64.img",
-  "bytes": 130416640,
-  "pushed_at": "2026-08-22T23:35:27.947Z"
- },
  "notus-scanner@22.6.3-r0:arm64": {
   "name": "notus-scanner",
   "version": "22.6.3",
@@ -43846,14 +42918,6 @@
   "upload_path": "ply/offlineimap/offlineimap-8.0.0-linux-arm64.img",
   "bytes": 12414976,
   "pushed_at": "2026-08-22T23:36:56.674Z"
- },
- "niaaml-gui@0.3.0-r0:arm64": {
-  "name": "niaaml-gui",
-  "version": "0.3.0",
-  "img": "niaaml-gui-0.3.0-linux-arm64.img",
-  "upload_path": "ply/niaaml-gui/niaaml-gui-0.3.0-linux-arm64.img",
-  "bytes": 134012928,
-  "pushed_at": "2026-08-22T23:37:21.818Z"
  },
  "oksh@7.5-r0:arm64": {
   "name": "oksh",
@@ -44023,14 +43087,6 @@
   "bytes": 51535872,
   "pushed_at": "2026-08-22T23:39:44.390Z"
  },
- "mtkclient@1.63-r2:arm64": {
-  "name": "mtkclient",
-  "version": "1.63.0",
-  "img": "mtkclient-1.63.0-linux-arm64.img",
-  "upload_path": "ply/mtkclient/mtkclient-1.63.0-linux-arm64.img",
-  "bytes": 300994560,
-  "pushed_at": "2026-08-22T23:39:44.900Z"
- },
  "openmpt123@0.7.7-r0:arm64": {
   "name": "openmpt123",
   "version": "0.7.7",
@@ -44126,14 +43182,6 @@
   "upload_path": "ply/openvi/openvi-7.5.28-linux-arm64.img",
   "bytes": 339968,
   "pushed_at": "2026-08-22T23:40:10.560Z"
- },
- "nyxt@3.11.6-r0:arm64": {
-  "name": "nyxt",
-  "version": "3.11.6",
-  "img": "nyxt-3.11.6-linux-arm64.img",
-  "upload_path": "ply/nyxt/nyxt-3.11.6-linux-arm64.img",
-  "bytes": 127430656,
-  "pushed_at": "2026-08-22T23:40:21.189Z"
  },
  "opentofu@1.7.2-r2:arm64": {
   "name": "opentofu",
@@ -44743,14 +43791,6 @@
   "bytes": 73728,
   "pushed_at": "2026-08-23T00:00:14.033Z"
  },
- "foliate@3.1.1-r0:x64": {
-  "name": "foliate",
-  "version": "3.1.1",
-  "img": "foliate-3.1.1-linux-x64.img",
-  "upload_path": "ply/foliate/foliate-3.1.1-linux-x64.img",
-  "bytes": 115634176,
-  "pushed_at": "2026-08-23T00:00:22.082Z"
- },
  "kbdd@0.7.1_git20210426-r0:x64": {
   "name": "kbdd",
   "version": "0.7.1",
@@ -44830,14 +43870,6 @@
   "upload_path": "ply/keepalived-snmp/keepalived-snmp-2.2.8-linux-x64.img",
   "bytes": 3682304,
   "pushed_at": "2026-08-23T00:00:57.230Z"
- },
- "jdtls@1.39.0-r0:x64": {
-  "name": "jdtls",
-  "version": "1.39.0",
-  "img": "jdtls-1.39.0-linux-x64.img",
-  "upload_path": "ply/jdtls/jdtls-1.39.0-linux-x64.img",
-  "bytes": 107016192,
-  "pushed_at": "2026-08-23T00:01:00.243Z"
  },
  "k9s@0.32.4-r4:x64": {
   "name": "k9s",
@@ -45006,14 +44038,6 @@
   "upload_path": "ply/ktistec/ktistec-2.1.0-linux-x64.img",
   "bytes": 9981952,
   "pushed_at": "2026-08-23T00:03:05.096Z"
- },
- "k3s@1.29.4.1-r3:x64": {
-  "name": "k3s",
-  "version": "1.29.4",
-  "img": "k3s-1.29.4-linux-x64.img",
-  "upload_path": "ply/k3s/k3s-1.29.4-linux-x64.img",
-  "bytes": 105164800,
-  "pushed_at": "2026-08-23T00:03:17.545Z"
  },
  "keycloak-config-cli@5.12.0-r0:x64": {
   "name": "keycloak-config-cli",
@@ -45246,14 +44270,6 @@
   "upload_path": "ply/lha/lha-1.14.0-linux-x64.img",
   "bytes": 36864,
   "pushed_at": "2026-08-23T00:05:13.755Z"
- },
- "irust@1.71.21-r0:x64": {
-  "name": "irust",
-  "version": "1.71.21",
-  "img": "irust-1.71.21-linux-x64.img",
-  "upload_path": "ply/irust/irust-1.71.21-linux-x64.img",
-  "bytes": 266006528,
-  "pushed_at": "2026-08-23T00:05:15.288Z"
  },
  "lcov@2.0-r2:x64": {
   "name": "lcov",
@@ -45815,14 +44831,6 @@
   "bytes": 8192,
   "pushed_at": "2026-08-23T00:06:50.965Z"
  },
- "keycloak@24.0.5-r1:x64": {
-  "name": "keycloak",
-  "version": "24.0.5",
-  "img": "keycloak-24.0.5-linux-x64.img",
-  "upload_path": "ply/keycloak/keycloak-24.0.5-linux-x64.img",
-  "bytes": 209031168,
-  "pushed_at": "2026-08-23T00:06:51.379Z"
- },
  "linux-tools-tmon@6.6.31-r0:x64": {
   "name": "linux-tools-tmon",
   "version": "6.6.31",
@@ -46270,14 +45278,6 @@
   "upload_path": "ply/mate-tweak/mate-tweak-22.10.0-linux-x64.img",
   "bytes": 11952128,
   "pushed_at": "2026-08-23T00:08:35.582Z"
- },
- "leiningen@2.11.2-r0:x64": {
-  "name": "leiningen",
-  "version": "2.11.2",
-  "img": "leiningen-2.11.2-linux-x64.img",
-  "upload_path": "ply/leiningen/leiningen-2.11.2-linux-x64.img",
-  "bytes": 146452480,
-  "pushed_at": "2026-08-23T00:08:35.701Z"
  },
  "md4c@0.5.2-r0:x64": {
   "name": "md4c",
@@ -46775,14 +45775,6 @@
   "bytes": 868352,
   "pushed_at": "2026-08-23T00:10:40.400Z"
  },
- "mongodb-tools@100.9.4-r5:x64": {
-  "name": "mongodb-tools",
-  "version": "100.9.4",
-  "img": "mongodb-tools-100.9.4-linux-x64.img",
-  "upload_path": "ply/mongodb-tools/mongodb-tools-100.9.4-linux-x64.img",
-  "bytes": 29773824,
-  "pushed_at": "2026-08-23T00:10:42.480Z"
- },
  "mpdscribble@0.25-r1:x64": {
   "name": "mpdscribble",
   "version": "0.25.0",
@@ -47014,14 +46006,6 @@
   "upload_path": "ply/mutt/mutt-2.2.13-linux-x64.img",
   "bytes": 9248768,
   "pushed_at": "2026-08-23T00:12:05.470Z"
- },
- "mingw-w64-gcc-base@13.2.0-r1:x64": {
-  "name": "mingw-w64-gcc-base",
-  "version": "13.2.0",
-  "img": "mingw-w64-gcc-base-13.2.0-linux-x64.img",
-  "upload_path": "ply/mingw-w64-gcc-base/mingw-w64-gcc-base-13.2.0-linux-x64.img",
-  "bytes": 109088768,
-  "pushed_at": "2026-08-23T00:12:11.993Z"
  },
  "n2n@3.1.1-r1:x64": {
   "name": "n2n",
@@ -47495,14 +46479,6 @@
   "bytes": 16347136,
   "pushed_at": "2026-08-23T00:15:13.520Z"
  },
- "neo4j@4.4.32-r0:x64": {
-  "name": "neo4j",
-  "version": "4.4.32",
-  "img": "neo4j-4.4.32-linux-x64.img",
-  "upload_path": "ply/neo4j/neo4j-4.4.32-linux-x64.img",
-  "bytes": 130437120,
-  "pushed_at": "2026-08-23T00:16:05.518Z"
- },
  "notmuch-emacs@0.38.3-r1:x64": {
   "name": "notmuch-emacs",
   "version": "0.38.3",
@@ -47735,14 +46711,6 @@
   "bytes": 270336,
   "pushed_at": "2026-08-23T00:18:49.245Z"
  },
- "niaaml-gui@0.3.0-r0:x64": {
-  "name": "niaaml-gui",
-  "version": "0.3.0",
-  "img": "niaaml-gui-0.3.0-linux-x64.img",
-  "upload_path": "ply/niaaml-gui/niaaml-gui-0.3.0-linux-x64.img",
-  "bytes": 143912960,
-  "pushed_at": "2026-08-23T00:18:58.885Z"
- },
  "onedrive@2.4.25-r2:x64": {
   "name": "onedrive",
   "version": "2.4.25",
@@ -47822,14 +46790,6 @@
   "upload_path": "ply/opam/opam-2.1.6-linux-x64.img",
   "bytes": 10113024,
   "pushed_at": "2026-08-23T00:19:31.802Z"
- },
- "mtkclient@1.63-r2:x64": {
-  "name": "mtkclient",
-  "version": "1.63.0",
-  "img": "mtkclient-1.63.0-linux-x64.img",
-  "upload_path": "ply/mtkclient/mtkclient-1.63.0-linux-x64.img",
-  "bytes": 312401920,
-  "pushed_at": "2026-08-23T00:19:43.650Z"
  },
  "opendkim-utils@2.11.0-r3:x64": {
   "name": "opendkim-utils",
@@ -48038,14 +46998,6 @@
   "upload_path": "ply/opustags/opustags-1.10.1-linux-x64.img",
   "bytes": 942080,
   "pushed_at": "2026-08-23T00:22:00.295Z"
- },
- "nyxt@3.11.6-r0:x64": {
-  "name": "nyxt",
-  "version": "3.11.6",
-  "img": "nyxt-3.11.6-linux-x64.img",
-  "upload_path": "ply/nyxt/nyxt-3.11.6-linux-x64.img",
-  "bytes": 131436544,
-  "pushed_at": "2026-08-23T00:22:01.117Z"
  },
  "opus-tools@0.2-r1:x64": {
   "name": "opus-tools",
@@ -51063,14 +50015,6 @@
   "bytes": 12288,
   "pushed_at": "2026-08-23T00:51:44.518Z"
  },
- "py3-pyppeteer@2.0.0-r1:arm64": {
-  "name": "py3-pyppeteer",
-  "version": "2.0.0",
-  "img": "py3-pyppeteer-2.0.0-linux-arm64.img",
-  "upload_path": "ply/py3-pyppeteer/py3-pyppeteer-2.0.0-linux-arm64.img",
-  "bytes": 225177600,
-  "pushed_at": "2026-08-23T00:51:44.724Z"
- },
  "qpage@3.3-r2:arm64": {
   "name": "qpage",
   "version": "3.3.0",
@@ -52126,38 +51070,6 @@
   "upload_path": "ply/shairport-sync/shairport-sync-4.3.2-linux-arm64.img",
   "bytes": 15757312,
   "pushed_at": "2026-08-23T00:57:05.425Z"
- },
- "qutebrowser@3.1.0-r1:arm64": {
-  "name": "qutebrowser",
-  "version": "3.1.0",
-  "img": "qutebrowser-3.1.0-linux-arm64.img",
-  "upload_path": "ply/qutebrowser/qutebrowser-3.1.0-linux-arm64.img",
-  "bytes": 179982336,
-  "pushed_at": "2026-08-23T00:57:05.567Z"
- },
- "rmlmapper@6.2.2-r0:arm64": {
-  "name": "rmlmapper",
-  "version": "6.2.2",
-  "img": "rmlmapper-6.2.2-linux-arm64.img",
-  "upload_path": "ply/rmlmapper/rmlmapper-6.2.2-linux-arm64.img",
-  "bytes": 206258176,
-  "pushed_at": "2026-08-23T00:57:37.808Z"
- },
- "shards@0.18.0-r0:arm64": {
-  "name": "shards",
-  "version": "0.18.0",
-  "img": "shards-0.18.0-linux-arm64.img",
-  "upload_path": "ply/shards/shards-0.18.0-linux-arm64.img",
-  "bytes": 121053184,
-  "pushed_at": "2026-08-23T00:58:12.905Z"
- },
- "rust-analyzer@2024.05.13-r0:arm64": {
-  "name": "rust-analyzer",
-  "version": "2024.5.13",
-  "img": "rust-analyzer-2024.5.13-linux-arm64.img",
-  "upload_path": "ply/rust-analyzer/rust-analyzer-2024.5.13-linux-arm64.img",
-  "bytes": 251318272,
-  "pushed_at": "2026-08-23T00:58:26.546Z"
  },
  "outils-ts@0.13-r1:x64": {
   "name": "outils-ts",
@@ -53999,14 +52911,6 @@
   "bytes": 11812864,
   "pushed_at": "2026-08-23T01:34:07.714Z"
  },
- "py3-fiona@1.9.6-r2:x64": {
-  "name": "py3-fiona",
-  "version": "1.9.6",
-  "img": "py3-fiona-1.9.6-linux-x64.img",
-  "upload_path": "ply/py3-fiona/py3-fiona-1.9.6-linux-x64.img",
-  "bytes": 113491968,
-  "pushed_at": "2026-08-23T01:34:13.047Z"
- },
  "py3-pontos@23.11.4-r1:x64": {
   "name": "py3-pontos",
   "version": "23.11.4",
@@ -55079,14 +53983,6 @@
   "bytes": 7417856,
   "pushed_at": "2026-08-23T01:40:39.289Z"
  },
- "py3-pyppeteer@2.0.0-r1:x64": {
-  "name": "py3-pyppeteer",
-  "version": "2.0.0",
-  "img": "py3-pyppeteer-2.0.0-linux-x64.img",
-  "upload_path": "ply/py3-pyppeteer/py3-pyppeteer-2.0.0-linux-x64.img",
-  "bytes": 234971136,
-  "pushed_at": "2026-08-23T01:40:40.427Z"
- },
  "ratpoison@1.4.9-r3:x64": {
   "name": "ratpoison",
   "version": "1.4.9",
@@ -56103,14 +54999,6 @@
   "bytes": 15167488,
   "pushed_at": "2026-08-23T01:45:50.988Z"
  },
- "qutebrowser@3.1.0-r1:x64": {
-  "name": "qutebrowser",
-  "version": "3.1.0",
-  "img": "qutebrowser-3.1.0-linux-x64.img",
-  "upload_path": "ply/qutebrowser/qutebrowser-3.1.0-linux-x64.img",
-  "bytes": 187125760,
-  "pushed_at": "2026-08-23T01:45:53.749Z"
- },
  "siglo@0.9.9-r0:x64": {
   "name": "siglo",
   "version": "0.9.9",
@@ -56118,30 +55006,6 @@
   "upload_path": "ply/siglo/siglo-0.9.9-linux-x64.img",
   "bytes": 29216768,
   "pushed_at": "2026-08-23T01:46:18.088Z"
- },
- "rmlmapper@6.2.2-r0:x64": {
-  "name": "rmlmapper",
-  "version": "6.2.2",
-  "img": "rmlmapper-6.2.2-linux-x64.img",
-  "upload_path": "ply/rmlmapper/rmlmapper-6.2.2-linux-x64.img",
-  "bytes": 206761984,
-  "pushed_at": "2026-08-23T01:46:31.353Z"
- },
- "shards@0.18.0-r0:x64": {
-  "name": "shards",
-  "version": "0.18.0",
-  "img": "shards-0.18.0-linux-x64.img",
-  "upload_path": "ply/shards/shards-0.18.0-linux-x64.img",
-  "bytes": 127565824,
-  "pushed_at": "2026-08-23T01:47:05.293Z"
- },
- "rust-analyzer@2024.05.13-r0:x64": {
-  "name": "rust-analyzer",
-  "version": "2024.5.13",
-  "img": "rust-analyzer-2024.5.13-linux-x64.img",
-  "upload_path": "ply/rust-analyzer/rust-analyzer-2024.5.13-linux-x64.img",
-  "bytes": 264036352,
-  "pushed_at": "2026-08-23T01:47:20.514Z"
  },
  "outils-ts@0.13-r1:arm64": {
   "name": "outils-ts",
@@ -57199,14 +56063,6 @@
   "bytes": 753664,
   "pushed_at": "2026-08-23T02:02:56.120Z"
  },
- "sport-activities-features-gui@0.3.0-r1:arm64": {
-  "name": "sport-activities-features-gui",
-  "version": "0.3.0",
-  "img": "sport-activities-features-gui-0.3.0-linux-arm64.img",
-  "upload_path": "ply/sport-activities-features-gui/sport-activities-features-gui-0.3.0-linux-arm64.img",
-  "bytes": 138358784,
-  "pushed_at": "2026-08-23T02:02:57.934Z"
- },
  "the_silver_searcher@2.2.0-r1:arm64": {
   "name": "the-silver-searcher",
   "version": "2.2.0",
@@ -57855,14 +56711,6 @@
   "bytes": 53248,
   "pushed_at": "2026-08-23T02:05:45.420Z"
  },
- "tangram@3.0-r1:arm64": {
-  "name": "tangram",
-  "version": "3.0.0",
-  "img": "tangram-3.0.0-linux-arm64.img",
-  "upload_path": "ply/tangram/tangram-3.0.0-linux-arm64.img",
-  "bytes": 110923776,
-  "pushed_at": "2026-08-23T02:05:46.841Z"
- },
  "unarj@2.65-r2:arm64": {
   "name": "unarj",
   "version": "2.65.0",
@@ -58510,14 +57358,6 @@
   "upload_path": "ply/virt-manager/virt-manager-4.1.0-linux-arm64.img",
   "bytes": 51011584,
   "pushed_at": "2026-08-23T02:09:05.371Z"
- },
- "syncplay@1.7.1-r1:arm64": {
-  "name": "syncplay",
-  "version": "1.7.1",
-  "img": "syncplay-1.7.1-linux-arm64.img",
-  "upload_path": "ply/syncplay/syncplay-1.7.1-linux-arm64.img",
-  "bytes": 275427328,
-  "pushed_at": "2026-08-23T02:09:06.566Z"
  },
  "vimiv-qt@0.9.0-r1:arm64": {
   "name": "vimiv-qt",
@@ -59223,14 +58063,6 @@
   "bytes": 638976,
   "pushed_at": "2026-08-23T02:13:20.336Z"
  },
- "wike@3.0.1-r0:arm64": {
-  "name": "wike",
-  "version": "3.0.1",
-  "img": "wike-3.0.1-linux-arm64.img",
-  "upload_path": "ply/wike/wike-3.0.1-linux-arm64.img",
-  "bytes": 110063616,
-  "pushed_at": "2026-08-23T02:13:22.628Z"
- },
  "xvinfo@1.1.5-r1:arm64": {
   "name": "xvinfo",
   "version": "1.1.5",
@@ -59455,14 +58287,6 @@
   "bytes": 9539584,
   "pushed_at": "2026-08-23T02:14:03.151Z"
  },
- "uusi@0.4.3-r0:arm64": {
-  "name": "uusi",
-  "version": "0.4.3",
-  "img": "uusi-0.4.3-linux-arm64.img",
-  "upload_path": "ply/uusi/uusi-0.4.3-linux-arm64.img",
-  "bytes": 284880896,
-  "pushed_at": "2026-08-23T02:14:06.568Z"
- },
  "zangband@2.7.5.1-r2:arm64": {
   "name": "zangband",
   "version": "2.7.5",
@@ -59638,14 +58462,6 @@
   "upload_path": "ply/you-get/you-get-0.4.1650-linux-arm64.img",
   "bytes": 51269632,
   "pushed_at": "2026-08-23T02:15:05.638Z"
- },
- "wasm-pack@0.12.1-r2:arm64": {
-  "name": "wasm-pack",
-  "version": "0.12.1",
-  "img": "wasm-pack-0.12.1-linux-arm64.img",
-  "upload_path": "ply/wasm-pack/wasm-pack-0.12.1-linux-arm64.img",
-  "bytes": 300605440,
-  "pushed_at": "2026-08-23T02:15:06.259Z"
  },
  "zim@0.75.2-r1:arm64": {
   "name": "zim",
@@ -60719,14 +59535,6 @@
   "bytes": 35827712,
   "pushed_at": "2026-08-23T02:56:51.052Z"
  },
- "sport-activities-features-gui@0.3.0-r1:x64": {
-  "name": "sport-activities-features-gui",
-  "version": "0.3.0",
-  "img": "sport-activities-features-gui-0.3.0-linux-x64.img",
-  "upload_path": "ply/sport-activities-features-gui/sport-activities-features-gui-0.3.0-linux-x64.img",
-  "bytes": 148295680,
-  "pushed_at": "2026-08-23T02:57:30.984Z"
- },
  "tigervnc@1.13.1-r5:x64": {
   "name": "tigervnc",
   "version": "1.13.1",
@@ -61318,14 +60126,6 @@
   "upload_path": "ply/ugm/ugm-1.5.0-linux-x64.img",
   "bytes": 1142784,
   "pushed_at": "2026-08-23T02:59:37.349Z"
- },
- "tangram@3.0-r1:x64": {
-  "name": "tangram",
-  "version": "3.0.0",
-  "img": "tangram-3.0.0-linux-x64.img",
-  "upload_path": "ply/tangram/tangram-3.0.0-linux-x64.img",
-  "bytes": 114991104,
-  "pushed_at": "2026-08-23T02:59:38.477Z"
  },
  "unarj@2.65-r2:x64": {
   "name": "unarj",
@@ -62031,14 +60831,6 @@
   "bytes": 6926336,
   "pushed_at": "2026-08-23T03:03:11.121Z"
  },
- "syncplay@1.7.1-r1:x64": {
-  "name": "syncplay",
-  "version": "1.7.1",
-  "img": "syncplay-1.7.1-linux-x64.img",
-  "upload_path": "ply/syncplay/syncplay-1.7.1-linux-x64.img",
-  "bytes": 286957568,
-  "pushed_at": "2026-08-23T03:03:11.469Z"
- },
  "weex@2.8.4.2-r1:x64": {
   "name": "weex",
   "version": "2.8.4",
@@ -62719,14 +61511,6 @@
   "bytes": 1089536,
   "pushed_at": "2026-08-23T03:07:09.874Z"
  },
- "wike@3.0.1-r0:x64": {
-  "name": "wike",
-  "version": "3.0.1",
-  "img": "wike-3.0.1-linux-x64.img",
-  "upload_path": "ply/wike/wike-3.0.1-linux-x64.img",
-  "bytes": 113381376,
-  "pushed_at": "2026-08-23T03:07:10.026Z"
- },
  "xorg-server-xnest@21.1.14-r0:x64": {
   "name": "xorg-server-xnest",
   "version": "21.1.14",
@@ -62854,14 +61638,6 @@
   "upload_path": "ply/yersinia/yersinia-0.8.2-linux-x64.img",
   "bytes": 434176,
   "pushed_at": "2026-08-23T03:07:32.280Z"
- },
- "uusi@0.4.3-r0:x64": {
-  "name": "uusi",
-  "version": "0.4.3",
-  "img": "uusi-0.4.3-linux-x64.img",
-  "upload_path": "ply/uusi/uusi-0.4.3-linux-x64.img",
-  "bytes": 276959232,
-  "pushed_at": "2026-08-23T03:07:32.567Z"
  },
  "yadm@3.2.2-r1:x64": {
   "name": "yadm",
@@ -63183,14 +61959,6 @@
   "bytes": 55713792,
   "pushed_at": "2026-08-23T03:09:17.302Z"
  },
- "wasm-pack@0.12.1-r2:x64": {
-  "name": "wasm-pack",
-  "version": "0.12.1",
-  "img": "wasm-pack-0.12.1-linux-x64.img",
-  "upload_path": "ply/wasm-pack/wasm-pack-0.12.1-linux-x64.img",
-  "bytes": 313315328,
-  "pushed_at": "2026-08-23T03:09:26.432Z"
- },
  "zoneminder@1.36.33-r5:x64": {
   "name": "zoneminder",
   "version": "1.36.33",
@@ -63199,12 +61967,1338 @@
   "bytes": 69455872,
   "pushed_at": "2026-08-23T03:09:46.512Z"
  },
+ "biber@2.20-r1:x64": {
+  "name": "biber",
+  "version": "2.20.0",
+  "img": "biber-2.20.0-linux-x64.img",
+  "bytes": 116961280,
+  "skipped": "image 112 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:42:08.436Z"
+ },
+ "biber2.19@2.19-r1:x64": {
+  "name": "biber2.19",
+  "version": "2.19.0",
+  "img": "biber2.19-2.19.0-linux-x64.img",
+  "bytes": 116789248,
+  "skipped": "image 111 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:42:09.753Z"
+ },
+ "folks@0.15.7-r0:x64": {
+  "name": "folks",
+  "version": "0.15.7",
+  "img": "folks-0.15.7-linux-x64.img",
+  "bytes": 154275840,
+  "skipped": "image 147 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:42:21.240Z"
+ },
+ "clojure@1.11.3-r0:x64": {
+  "name": "clojure",
+  "version": "1.11.3",
+  "img": "clojure-1.11.3-linux-x64.img",
+  "bytes": 136232960,
+  "skipped": "image 130 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:42:32.926Z"
+ },
+ "ocaml@4.14.2-r1:x64": {
+  "name": "ocaml",
+  "version": "4.14.2",
+  "img": "ocaml-4.14.2-linux-x64.img",
+  "upload_path": "ply/ocaml/ocaml-4.14.2-linux-x64.img",
+  "bytes": 92717056,
+  "pushed_at": "2026-08-23T04:42:35.840Z"
+ },
+ "llvm18@18.1.8-r1:x64": {
+  "name": "llvm18",
+  "version": "18.1.8",
+  "img": "llvm18-18.1.8-linux-x64.img",
+  "upload_path": "ply/llvm18/llvm18-18.1.8-linux-x64.img",
+  "bytes": 102211584,
+  "pushed_at": "2026-08-23T04:42:40.838Z"
+ },
+ "llvm17@17.0.6-r2:x64": {
+  "name": "llvm17",
+  "version": "17.0.6",
+  "img": "llvm17-17.0.6-linux-x64.img",
+  "upload_path": "ply/llvm17/llvm17-17.0.6-linux-x64.img",
+  "bytes": 97521664,
+  "pushed_at": "2026-08-23T04:42:41.312Z"
+ },
+ "rust@1.78.0-r1": {
+  "name": "rust",
+  "version": "1.78.0",
+  "img": "rust-1.78.0-linux-x64.img",
+  "bytes": 288002048,
+  "skipped": "image 275 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "cargo@1.78.0-r1": {
+  "name": "cargo",
+  "version": "1.78.0",
+  "img": "cargo-1.78.0-linux-x64.img",
+  "bytes": 301469696,
+  "skipped": "image 288 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "clang16@16.0.6-r5": {
+  "name": "clang16",
+  "version": "16.0.6",
+  "img": "clang16-16.0.6-linux-x64.img",
+  "bytes": 139460608,
+  "skipped": "image 133 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "clang17@17.0.6-r1": {
+  "name": "clang17",
+  "version": "17.0.6",
+  "img": "clang17-17.0.6-linux-x64.img",
+  "bytes": 154193920,
+  "skipped": "image 147 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "clang15@15.0.7-r19": {
+  "name": "clang15",
+  "version": "15.0.7",
+  "img": "clang15-15.0.7-linux-x64.img",
+  "bytes": 157466624,
+  "skipped": "image 150 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "clang18@18.1.6-r0": {
+  "name": "clang18",
+  "version": "18.1.6",
+  "img": "clang18-18.1.6-linux-x64.img",
+  "bytes": 156114944,
+  "skipped": "image 149 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "clang17-extra-tools@17.0.6-r1": {
+  "name": "clang17-extra-tools",
+  "version": "17.0.6",
+  "img": "clang17-extra-tools-17.0.6-linux-x64.img",
+  "bytes": 220803072,
+  "skipped": "image 211 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "rust@1.78.0-r1:arm64": {
+  "name": "rust",
+  "version": "1.78.0",
+  "img": "rust-1.78.0-linux-arm64.img",
+  "bytes": 275832832,
+  "skipped": "image 263 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "cargo@1.78.0-r1:arm64": {
+  "name": "cargo",
+  "version": "1.78.0",
+  "img": "cargo-1.78.0-linux-arm64.img",
+  "bytes": 289349632,
+  "skipped": "image 276 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "nextcloud28@28.0.14-r0:x64": {
+  "name": "nextcloud28",
+  "version": "28.0.14",
+  "img": "nextcloud28-28.0.14-linux-x64.img",
+  "bytes": 130125824,
+  "skipped": "image 124 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "nextcloud@29.0.16-r0:x64": {
+  "name": "nextcloud",
+  "version": "29.0.16",
+  "img": "nextcloud-29.0.16-linux-x64.img",
+  "bytes": 134295552,
+  "skipped": "image 128 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "gcc-riscv-none-elf@14.1.0-r0:x64": {
+  "name": "gcc-riscv-none-elf",
+  "version": "14.1.0",
+  "img": "gcc-riscv-none-elf-14.1.0-linux-x64.img",
+  "bytes": 105308160,
+  "skipped": "image 100 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "chromium@131.0.6778.108-r0:x64": {
+  "name": "chromium",
+  "version": "131.0.6778",
+  "img": "chromium-131.0.6778-linux-x64.img",
+  "bytes": 221941760,
+  "skipped": "image 212 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "barkery-browser@0.6.1-r0:x64": {
+  "name": "barkery-browser",
+  "version": "0.6.1",
+  "img": "barkery-browser-0.6.1-linux-x64.img",
+  "bytes": 107634688,
+  "skipped": "image 103 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "gr-osmosdr@0.2.5-r5:x64": {
+  "name": "gr-osmosdr",
+  "version": "0.2.5",
+  "img": "gr-osmosdr-0.2.5-linux-x64.img",
+  "bytes": 116539392,
+  "skipped": "image 111 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "nextcloud28@28.0.14-r0:arm64": {
+  "name": "nextcloud28",
+  "version": "28.0.14",
+  "img": "nextcloud28-28.0.14-linux-arm64.img",
+  "bytes": 119349248,
+  "skipped": "image 114 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "nextcloud@29.0.16-r0:arm64": {
+  "name": "nextcloud",
+  "version": "29.0.16",
+  "img": "nextcloud-29.0.16-linux-arm64.img",
+  "bytes": 122875904,
+  "skipped": "image 117 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "ghc@9.8.2-r1:arm64": {
+  "name": "ghc",
+  "version": "9.8.2",
+  "img": "ghc-9.8.2-linux-arm64.img",
+  "bytes": 284811264,
+  "skipped": "image 272 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "folks@0.15.7-r0:arm64": {
+  "name": "folks",
+  "version": "0.15.7",
+  "img": "folks-0.15.7-linux-arm64.img",
+  "bytes": 147345408,
+  "skipped": "image 141 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "clang16@16.0.6-r5:arm64": {
+  "name": "clang16",
+  "version": "16.0.6",
+  "img": "clang16-16.0.6-linux-arm64.img",
+  "bytes": 114241536,
+  "skipped": "image 109 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "clang17@17.0.6-r1:arm64": {
+  "name": "clang17",
+  "version": "17.0.6",
+  "img": "clang17-17.0.6-linux-arm64.img",
+  "bytes": 124719104,
+  "skipped": "image 119 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "chromium@131.0.6778.108-r0:arm64": {
+  "name": "chromium",
+  "version": "131.0.6778",
+  "img": "chromium-131.0.6778-linux-arm64.img",
+  "bytes": 212041728,
+  "skipped": "image 202 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "clang15@15.0.7-r19:arm64": {
+  "name": "clang15",
+  "version": "15.0.7",
+  "img": "clang15-15.0.7-linux-arm64.img",
+  "bytes": 129937408,
+  "skipped": "image 124 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "gr-osmosdr@0.2.5-r5:arm64": {
+  "name": "gr-osmosdr",
+  "version": "0.2.5",
+  "img": "gr-osmosdr-0.2.5-linux-arm64.img",
+  "bytes": 107397120,
+  "skipped": "image 102 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "grass-gis@8.3.2-r3:arm64": {
+  "name": "grass-gis",
+  "version": "8.3.2",
+  "img": "grass-gis-8.3.2-linux-arm64.img",
+  "bytes": 112500736,
+  "skipped": "image 107 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "libreoffice-base@7.6.7.2-r0:arm64": {
+  "name": "libreoffice-base",
+  "version": "7.6.7",
+  "img": "libreoffice-base-7.6.7-linux-arm64.img",
+  "bytes": 236896256,
+  "skipped": "image 226 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "texlive-context@20240210.69778-r4:arm64": {
+  "name": "texlive-context",
+  "version": "20240210.69778.0",
+  "img": "texlive-context-20240210.69778.0-linux-arm64.img",
+  "bytes": 106618880,
+  "skipped": "image 102 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "clang18@18.1.6-r0:arm64": {
+  "name": "clang18",
+  "version": "18.1.6",
+  "img": "clang18-18.1.6-linux-arm64.img",
+  "bytes": 126652416,
+  "skipped": "image 121 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "clang17-extra-tools@17.0.6-r1:arm64": {
+  "name": "clang17-extra-tools",
+  "version": "17.0.6",
+  "img": "clang17-extra-tools-17.0.6-linux-arm64.img",
+  "bytes": 179077120,
+  "skipped": "image 171 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "afl++@4.20c-r0:arm64": {
+  "name": "aflpp",
+  "version": "4.20.0",
+  "img": "aflpp-4.20.0-linux-arm64.img",
+  "bytes": 192024576,
+  "skipped": "image 183 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "biber2.19@2.19-r1:arm64": {
+  "name": "biber2.19",
+  "version": "2.19.0",
+  "img": "biber2.19-2.19.0-linux-arm64.img",
+  "bytes": 117534720,
+  "skipped": "image 112 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "cabal@3.10.3.0-r0:arm64": {
+  "name": "cabal",
+  "version": "3.10.3",
+  "img": "cabal-3.10.3-linux-arm64.img",
+  "bytes": 291438592,
+  "skipped": "image 278 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "crystal@1.12.2-r0:arm64": {
+  "name": "crystal",
+  "version": "1.12.2",
+  "img": "crystal-1.12.2-linux-arm64.img",
+  "bytes": 115228672,
+  "skipped": "image 110 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "g++-msp430-elf@14.1.0-r0:arm64": {
+  "name": "gpp-msp430-elf",
+  "version": "14.1.0",
+  "img": "gpp-msp430-elf-14.1.0-linux-arm64.img",
+  "bytes": 105607168,
+  "skipped": "image 101 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "g++-aarch64-none-elf@14.1.0-r0:arm64": {
+  "name": "gpp-aarch64-none-elf",
+  "version": "14.1.0",
+  "img": "gpp-aarch64-none-elf-14.1.0-linux-arm64.img",
+  "bytes": 107536384,
+  "skipped": "image 103 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "g++-or1k-elf@14.1.0-r0:arm64": {
+  "name": "gpp-or1k-elf",
+  "version": "14.1.0",
+  "img": "gpp-or1k-elf-14.1.0-linux-arm64.img",
+  "bytes": 110981120,
+  "skipped": "image 106 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "g++-arm-none-eabi@14.1.0-r0:arm64": {
+  "name": "gpp-arm-none-eabi",
+  "version": "14.1.0",
+  "img": "gpp-arm-none-eabi-14.1.0-linux-arm64.img",
+  "bytes": 171200512,
+  "skipped": "image 163 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "g++-riscv-none-elf@14.1.0-r0:arm64": {
+  "name": "gpp-riscv-none-elf",
+  "version": "14.1.0",
+  "img": "gpp-riscv-none-elf-14.1.0-linux-arm64.img",
+  "bytes": 236482560,
+  "skipped": "image 226 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "gnome-extensions-app@46.1-r0:arm64": {
+  "name": "gnome-extensions-app",
+  "version": "46.1.0",
+  "img": "gnome-extensions-app-46.1.0-linux-arm64.img",
+  "bytes": 212717568,
+  "skipped": "image 203 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "jellyfin@10.9.9-r0:arm64": {
+  "name": "jellyfin",
+  "version": "10.9.9",
+  "img": "jellyfin-10.9.9-linux-arm64.img",
+  "bytes": 139665408,
+  "skipped": "image 133 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "libreoffice-impress@7.6.7.2-r0:arm64": {
+  "name": "libreoffice-impress",
+  "version": "7.6.7",
+  "img": "libreoffice-impress-7.6.7-linux-arm64.img",
+  "bytes": 233365504,
+  "skipped": "image 223 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "libreoffice-draw@7.6.7.2-r0:arm64": {
+  "name": "libreoffice-draw",
+  "version": "7.6.7",
+  "img": "libreoffice-draw-7.6.7-linux-arm64.img",
+  "bytes": 233607168,
+  "skipped": "image 223 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "libreoffice-calc@7.6.7.2-r0:arm64": {
+  "name": "libreoffice-calc",
+  "version": "7.6.7",
+  "img": "libreoffice-calc-7.6.7-linux-arm64.img",
+  "bytes": 242397184,
+  "skipped": "image 231 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "libreoffice-math@7.6.7.2-r0:arm64": {
+  "name": "libreoffice-math",
+  "version": "7.6.7",
+  "img": "libreoffice-math-7.6.7-linux-arm64.img",
+  "bytes": 233033728,
+  "skipped": "image 222 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "libreoffice-writer@7.6.7.2-r0:arm64": {
+  "name": "libreoffice-writer",
+  "version": "7.6.7",
+  "img": "libreoffice-writer-7.6.7-linux-arm64.img",
+  "bytes": 238080000,
+  "skipped": "image 227 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "grass-gis@8.3.2-r3:x64": {
+  "name": "grass-gis",
+  "version": "8.3.2",
+  "img": "grass-gis-8.3.2-linux-x64.img",
+  "bytes": 123404288,
+  "skipped": "image 118 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "libreoffice-base@7.6.7.2-r0:x64": {
+  "name": "libreoffice-base",
+  "version": "7.6.7",
+  "img": "libreoffice-base-7.6.7-linux-x64.img",
+  "bytes": 237953024,
+  "skipped": "image 227 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "ghc@9.8.2-r1:x64": {
+  "name": "ghc",
+  "version": "9.8.2",
+  "img": "ghc-9.8.2-linux-x64.img",
+  "bytes": 276889600,
+  "skipped": "image 264 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "texlive-context@20240210.69778-r4:x64": {
+  "name": "texlive-context",
+  "version": "20240210.69778.0",
+  "img": "texlive-context-20240210.69778.0-linux-x64.img",
+  "bytes": 106196992,
+  "skipped": "image 101 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "clang17-analyzer@17.0.6-r1:arm64": {
+  "name": "clang17-analyzer",
+  "version": "17.0.6",
+  "img": "clang17-analyzer-17.0.6-linux-arm64.img",
+  "bytes": 144068608,
+  "skipped": "image 137 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "afl++@4.20c-r0:x64": {
+  "name": "aflpp",
+  "version": "4.20.0",
+  "img": "aflpp-4.20.0-linux-x64.img",
+  "bytes": 205164544,
+  "skipped": "image 196 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "crystal@1.12.2-r0:x64": {
+  "name": "crystal",
+  "version": "1.12.2",
+  "img": "crystal-1.12.2-linux-x64.img",
+  "bytes": 121720832,
+  "skipped": "image 116 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "g++-aarch64-none-elf@14.1.0-r0:x64": {
+  "name": "gpp-aarch64-none-elf",
+  "version": "14.1.0",
+  "img": "gpp-aarch64-none-elf-14.1.0-linux-x64.img",
+  "bytes": 110686208,
+  "skipped": "image 106 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "g++-msp430-elf@14.1.0-r0:x64": {
+  "name": "gpp-msp430-elf",
+  "version": "14.1.0",
+  "img": "gpp-msp430-elf-14.1.0-linux-x64.img",
+  "bytes": 109625344,
+  "skipped": "image 105 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "g++-or1k-elf@14.1.0-r0:x64": {
+  "name": "gpp-or1k-elf",
+  "version": "14.1.0",
+  "img": "gpp-or1k-elf-14.1.0-linux-x64.img",
+  "bytes": 113786880,
+  "skipped": "image 109 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "cabal@3.10.3.0-r0:x64": {
+  "name": "cabal",
+  "version": "3.10.3",
+  "img": "cabal-3.10.3-linux-x64.img",
+  "bytes": 283082752,
+  "skipped": "image 270 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "g++-arm-none-eabi@14.1.0-r0:x64": {
+  "name": "gpp-arm-none-eabi",
+  "version": "14.1.0",
+  "img": "gpp-arm-none-eabi-14.1.0-linux-x64.img",
+  "bytes": 174170112,
+  "skipped": "image 166 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "go@1.22.10-r0:x64": {
+  "name": "go",
+  "version": "1.22.10",
+  "img": "go-1.22.10-linux-x64.img",
+  "bytes": 105058304,
+  "skipped": "image 100 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "g++-riscv-none-elf@14.1.0-r0:x64": {
+  "name": "gpp-riscv-none-elf",
+  "version": "14.1.0",
+  "img": "gpp-riscv-none-elf-14.1.0-linux-x64.img",
+  "bytes": 241405952,
+  "skipped": "image 230 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "gnome-extensions-app@46.1-r0:x64": {
+  "name": "gnome-extensions-app",
+  "version": "46.1.0",
+  "img": "gnome-extensions-app-46.1.0-linux-x64.img",
+  "bytes": 219250688,
+  "skipped": "image 209 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "jellyfin@10.9.9-r0:x64": {
+  "name": "jellyfin",
+  "version": "10.9.9",
+  "img": "jellyfin-10.9.9-linux-x64.img",
+  "bytes": 144650240,
+  "skipped": "image 138 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "libreoffice-writer@7.6.7.2-r0:x64": {
+  "name": "libreoffice-writer",
+  "version": "7.6.7",
+  "img": "libreoffice-writer-7.6.7-linux-x64.img",
+  "bytes": 239144960,
+  "skipped": "image 228 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "libreoffice-draw@7.6.7.2-r0:x64": {
+  "name": "libreoffice-draw",
+  "version": "7.6.7",
+  "img": "libreoffice-draw-7.6.7-linux-x64.img",
+  "bytes": 234541056,
+  "skipped": "image 224 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "libreoffice-impress@7.6.7.2-r0:x64": {
+  "name": "libreoffice-impress",
+  "version": "7.6.7",
+  "img": "libreoffice-impress-7.6.7-linux-x64.img",
+  "bytes": 234319872,
+  "skipped": "image 223 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "libreoffice-calc@7.6.7.2-r0:x64": {
+  "name": "libreoffice-calc",
+  "version": "7.6.7",
+  "img": "libreoffice-calc-7.6.7-linux-x64.img",
+  "bytes": 243761152,
+  "skipped": "image 232 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "libreoffice-math@7.6.7.2-r0:x64": {
+  "name": "libreoffice-math",
+  "version": "7.6.7",
+  "img": "libreoffice-math-7.6.7-linux-x64.img",
+  "bytes": 233992192,
+  "skipped": "image 223 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "wine@9.0-r0:x64": {
+  "name": "wine",
+  "version": "9.0.0",
+  "img": "wine-9.0.0-linux-x64.img",
+  "bytes": 122544128,
+  "skipped": "image 117 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "clang17-analyzer@17.0.6-r1:x64": {
+  "name": "clang17-analyzer",
+  "version": "17.0.6",
+  "img": "clang17-analyzer-17.0.6-linux-x64.img",
+  "bytes": 152469504,
+  "skipped": "image 145 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "rust-clippy@1.78.0-r1:arm64": {
+  "name": "rust-clippy",
+  "version": "1.78.0",
+  "img": "rust-clippy-1.78.0-linux-arm64.img",
+  "bytes": 244088832,
+  "skipped": "image 233 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "rust-gdb@1.78.0-r1:arm64": {
+  "name": "rust-gdb",
+  "version": "1.78.0",
+  "img": "rust-gdb-1.78.0-linux-arm64.img",
+  "bytes": 259039232,
+  "skipped": "image 247 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "rustfmt@1.78.0-r1:arm64": {
+  "name": "rustfmt",
+  "version": "1.78.0",
+  "img": "rustfmt-1.78.0-linux-arm64.img",
+  "bytes": 254988288,
+  "skipped": "image 243 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "rust-lldb@1.78.0-r1:arm64": {
+  "name": "rust-lldb",
+  "version": "1.78.0",
+  "img": "rust-lldb-1.78.0-linux-arm64.img",
+  "bytes": 289263616,
+  "skipped": "image 276 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "afl++-tools@4.20c-r0:arm64": {
+  "name": "aflpp-tools",
+  "version": "4.20.0",
+  "img": "aflpp-tools-4.20.0-linux-arm64.img",
+  "bytes": 193069056,
+  "skipped": "image 184 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "biber@2.20-r1:arm64": {
+  "name": "biber",
+  "version": "2.20.0",
+  "img": "biber-2.20.0-linux-arm64.img",
+  "bytes": 117710848,
+  "skipped": "image 112 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "blender-headless@4.1.1-r2:arm64": {
+  "name": "blender-headless",
+  "version": "4.1.1",
+  "img": "blender-headless-4.1.1-linux-arm64.img",
+  "bytes": 152231936,
+  "skipped": "image 145 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "apply-refact@0.13.0.0-r1:arm64": {
+  "name": "apply-refact",
+  "version": "0.13.0",
+  "img": "apply-refact-0.13.0-linux-arm64.img",
+  "bytes": 306511872,
+  "skipped": "image 292 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "rust-clippy@1.78.0-r1:x64": {
+  "name": "rust-clippy",
+  "version": "1.78.0",
+  "img": "rust-clippy-1.78.0-linux-x64.img",
+  "bytes": 256643072,
+  "skipped": "image 245 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "rustfmt@1.78.0-r1:x64": {
+  "name": "rustfmt",
+  "version": "1.78.0",
+  "img": "rustfmt-1.78.0-linux-x64.img",
+  "bytes": 267583488,
+  "skipped": "image 255 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "rust-gdb@1.78.0-r1:x64": {
+  "name": "rust-gdb",
+  "version": "1.78.0",
+  "img": "rust-gdb-1.78.0-linux-x64.img",
+  "bytes": 269979648,
+  "skipped": "image 257 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "rust-lldb@1.78.0-r1:x64": {
+  "name": "rust-lldb",
+  "version": "1.78.0",
+  "img": "rust-lldb-1.78.0-linux-x64.img",
+  "bytes": 303558656,
+  "skipped": "image 289 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "afl++-tools@4.20c-r0:x64": {
+  "name": "aflpp-tools",
+  "version": "4.20.0",
+  "img": "aflpp-tools-4.20.0-linux-x64.img",
+  "bytes": 206184448,
+  "skipped": "image 197 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "blender-headless@4.1.1-r2:x64": {
+  "name": "blender-headless",
+  "version": "4.1.1",
+  "img": "blender-headless-4.1.1-linux-x64.img",
+  "bytes": 166342656,
+  "skipped": "image 159 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "apply-refact@0.13.0.0-r1:x64": {
+  "name": "apply-refact",
+  "version": "0.13.0",
+  "img": "apply-refact-0.13.0-linux-x64.img",
+  "bytes": 296673280,
+  "skipped": "image 283 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "cargo-bloat@0.12.1-r0:x64": {
+  "name": "cargo-bloat",
+  "version": "0.12.1",
+  "img": "cargo-bloat-0.12.1-linux-x64.img",
+  "bytes": 266145792,
+  "skipped": "image 254 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "cargo-tarpaulin@0.27.3-r0:x64": {
+  "name": "cargo-tarpaulin",
+  "version": "0.27.3",
+  "img": "cargo-tarpaulin-0.27.3-linux-x64.img",
+  "bytes": 267804672,
+  "skipped": "image 255 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "cargo-nextest@0.9.70-r0:x64": {
+  "name": "cargo-nextest",
+  "version": "0.9.70",
+  "img": "cargo-nextest-0.9.70-linux-x64.img",
+  "bytes": 267419648,
+  "skipped": "image 255 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "cargo-bloat@0.12.1-r0:arm64": {
+  "name": "cargo-bloat",
+  "version": "0.12.1",
+  "img": "cargo-bloat-0.12.1-linux-arm64.img",
+  "bytes": 253644800,
+  "skipped": "image 242 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "clojure@1.11.3-r0:arm64": {
+  "name": "clojure",
+  "version": "1.11.3",
+  "img": "clojure-1.11.3-linux-arm64.img",
+  "bytes": 135720960,
+  "skipped": "image 129 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "cargo-nextest@0.9.70-r0:arm64": {
+  "name": "cargo-nextest",
+  "version": "0.9.70",
+  "img": "cargo-nextest-0.9.70-linux-arm64.img",
+  "bytes": 254914560,
+  "skipped": "image 243 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "cargo-tarpaulin@0.27.3-r0:arm64": {
+  "name": "cargo-tarpaulin",
+  "version": "0.27.3",
+  "img": "cargo-tarpaulin-0.27.3-linux-arm64.img",
+  "bytes": 255217664,
+  "skipped": "image 243 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "cloudi@2.0.7-r10:arm64": {
+  "name": "cloudi",
+  "version": "2.0.7",
+  "img": "cloudi-2.0.7-linux-arm64.img",
+  "bytes": 132186112,
+  "skipped": "image 126 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "chromium-chromedriver@131.0.6778.108-r0:arm64": {
+  "name": "chromium-chromedriver",
+  "version": "131.0.6778",
+  "img": "chromium-chromedriver-131.0.6778-linux-arm64.img",
+  "bytes": 219377664,
+  "skipped": "image 209 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "coq@8.19.1-r3:arm64": {
+  "name": "coq",
+  "version": "8.19.1",
+  "img": "coq-8.19.1-linux-arm64.img",
+  "bytes": 186691584,
+  "skipped": "image 178 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "foliate@3.1.1-r0:arm64": {
+  "name": "foliate",
+  "version": "3.1.1",
+  "img": "foliate-3.1.1-linux-arm64.img",
+  "bytes": 111570944,
+  "skipped": "image 106 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "gnome-feeds@2.2.0-r3:arm64": {
+  "name": "gnome-feeds",
+  "version": "2.2.0",
+  "img": "gnome-feeds-2.2.0-linux-arm64.img",
+  "bytes": 114548736,
+  "skipped": "image 109 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "cloudi@2.0.7-r10:x64": {
+  "name": "cloudi",
+  "version": "2.0.7",
+  "img": "cloudi-2.0.7-linux-x64.img",
+  "bytes": 139395072,
+  "skipped": "image 133 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "chromium-chromedriver@131.0.6778.108-r0:x64": {
+  "name": "chromium-chromedriver",
+  "version": "131.0.6778",
+  "img": "chromium-chromedriver-131.0.6778-linux-x64.img",
+  "bytes": 229576704,
+  "skipped": "image 219 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "coq@8.19.1-r3:x64": {
+  "name": "coq",
+  "version": "8.19.1",
+  "img": "coq-8.19.1-linux-x64.img",
+  "bytes": 174592000,
+  "skipped": "image 167 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "gnome-feeds@2.2.0-r3:x64": {
+  "name": "gnome-feeds",
+  "version": "2.2.0",
+  "img": "gnome-feeds-2.2.0-linux-x64.img",
+  "bytes": 117874688,
+  "skipped": "image 112 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "jdtls@1.39.0-r0:arm64": {
+  "name": "jdtls",
+  "version": "1.39.0",
+  "img": "jdtls-1.39.0-linux-arm64.img",
+  "bytes": 107094016,
+  "skipped": "image 102 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "irust@1.71.21-r0:arm64": {
+  "name": "irust",
+  "version": "1.71.21",
+  "img": "irust-1.71.21-linux-arm64.img",
+  "bytes": 253513728,
+  "skipped": "image 242 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "keycloak@24.0.5-r1:arm64": {
+  "name": "keycloak",
+  "version": "24.0.5",
+  "img": "keycloak-24.0.5-linux-arm64.img",
+  "bytes": 209022976,
+  "skipped": "image 199 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "leiningen@2.11.2-r0:arm64": {
+  "name": "leiningen",
+  "version": "2.11.2",
+  "img": "leiningen-2.11.2-linux-arm64.img",
+  "bytes": 145993728,
+  "skipped": "image 139 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "neo4j@4.4.32-r0:arm64": {
+  "name": "neo4j",
+  "version": "4.4.32",
+  "img": "neo4j-4.4.32-linux-arm64.img",
+  "bytes": 130416640,
+  "skipped": "image 124 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "niaaml-gui@0.3.0-r0:arm64": {
+  "name": "niaaml-gui",
+  "version": "0.3.0",
+  "img": "niaaml-gui-0.3.0-linux-arm64.img",
+  "bytes": 134012928,
+  "skipped": "image 128 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "mtkclient@1.63-r2:arm64": {
+  "name": "mtkclient",
+  "version": "1.63.0",
+  "img": "mtkclient-1.63.0-linux-arm64.img",
+  "bytes": 300994560,
+  "skipped": "image 287 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "nyxt@3.11.6-r0:arm64": {
+  "name": "nyxt",
+  "version": "3.11.6",
+  "img": "nyxt-3.11.6-linux-arm64.img",
+  "bytes": 127430656,
+  "skipped": "image 122 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "foliate@3.1.1-r0:x64": {
+  "name": "foliate",
+  "version": "3.1.1",
+  "img": "foliate-3.1.1-linux-x64.img",
+  "bytes": 115634176,
+  "skipped": "image 110 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "jdtls@1.39.0-r0:x64": {
+  "name": "jdtls",
+  "version": "1.39.0",
+  "img": "jdtls-1.39.0-linux-x64.img",
+  "bytes": 107016192,
+  "skipped": "image 102 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "k3s@1.29.4.1-r3:x64": {
+  "name": "k3s",
+  "version": "1.29.4",
+  "img": "k3s-1.29.4-linux-x64.img",
+  "bytes": 105164800,
+  "skipped": "image 100 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "irust@1.71.21-r0:x64": {
+  "name": "irust",
+  "version": "1.71.21",
+  "img": "irust-1.71.21-linux-x64.img",
+  "bytes": 266006528,
+  "skipped": "image 254 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "keycloak@24.0.5-r1:x64": {
+  "name": "keycloak",
+  "version": "24.0.5",
+  "img": "keycloak-24.0.5-linux-x64.img",
+  "bytes": 209031168,
+  "skipped": "image 199 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "leiningen@2.11.2-r0:x64": {
+  "name": "leiningen",
+  "version": "2.11.2",
+  "img": "leiningen-2.11.2-linux-x64.img",
+  "bytes": 146452480,
+  "skipped": "image 140 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "mingw-w64-gcc-base@13.2.0-r1:x64": {
+  "name": "mingw-w64-gcc-base",
+  "version": "13.2.0",
+  "img": "mingw-w64-gcc-base-13.2.0-linux-x64.img",
+  "bytes": 109088768,
+  "skipped": "image 104 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "neo4j@4.4.32-r0:x64": {
+  "name": "neo4j",
+  "version": "4.4.32",
+  "img": "neo4j-4.4.32-linux-x64.img",
+  "bytes": 130437120,
+  "skipped": "image 124 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "niaaml-gui@0.3.0-r0:x64": {
+  "name": "niaaml-gui",
+  "version": "0.3.0",
+  "img": "niaaml-gui-0.3.0-linux-x64.img",
+  "bytes": 143912960,
+  "skipped": "image 137 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "mtkclient@1.63-r2:x64": {
+  "name": "mtkclient",
+  "version": "1.63.0",
+  "img": "mtkclient-1.63.0-linux-x64.img",
+  "bytes": 312401920,
+  "skipped": "image 298 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "nyxt@3.11.6-r0:x64": {
+  "name": "nyxt",
+  "version": "3.11.6",
+  "img": "nyxt-3.11.6-linux-x64.img",
+  "bytes": 131436544,
+  "skipped": "image 125 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "py3-pyppeteer@2.0.0-r1:arm64": {
+  "name": "py3-pyppeteer",
+  "version": "2.0.0",
+  "img": "py3-pyppeteer-2.0.0-linux-arm64.img",
+  "bytes": 225177600,
+  "skipped": "image 215 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "qutebrowser@3.1.0-r1:arm64": {
+  "name": "qutebrowser",
+  "version": "3.1.0",
+  "img": "qutebrowser-3.1.0-linux-arm64.img",
+  "bytes": 179982336,
+  "skipped": "image 172 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "rmlmapper@6.2.2-r0:arm64": {
+  "name": "rmlmapper",
+  "version": "6.2.2",
+  "img": "rmlmapper-6.2.2-linux-arm64.img",
+  "bytes": 206258176,
+  "skipped": "image 197 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "shards@0.18.0-r0:arm64": {
+  "name": "shards",
+  "version": "0.18.0",
+  "img": "shards-0.18.0-linux-arm64.img",
+  "bytes": 121053184,
+  "skipped": "image 115 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "rust-analyzer@2024.05.13-r0:arm64": {
+  "name": "rust-analyzer",
+  "version": "2024.5.13",
+  "img": "rust-analyzer-2024.5.13-linux-arm64.img",
+  "bytes": 251318272,
+  "skipped": "image 240 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "py3-fiona@1.9.6-r2:x64": {
+  "name": "py3-fiona",
+  "version": "1.9.6",
+  "img": "py3-fiona-1.9.6-linux-x64.img",
+  "bytes": 113491968,
+  "skipped": "image 108 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "py3-pyppeteer@2.0.0-r1:x64": {
+  "name": "py3-pyppeteer",
+  "version": "2.0.0",
+  "img": "py3-pyppeteer-2.0.0-linux-x64.img",
+  "bytes": 234971136,
+  "skipped": "image 224 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "qutebrowser@3.1.0-r1:x64": {
+  "name": "qutebrowser",
+  "version": "3.1.0",
+  "img": "qutebrowser-3.1.0-linux-x64.img",
+  "bytes": 187125760,
+  "skipped": "image 178 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "rmlmapper@6.2.2-r0:x64": {
+  "name": "rmlmapper",
+  "version": "6.2.2",
+  "img": "rmlmapper-6.2.2-linux-x64.img",
+  "bytes": 206761984,
+  "skipped": "image 197 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "shards@0.18.0-r0:x64": {
+  "name": "shards",
+  "version": "0.18.0",
+  "img": "shards-0.18.0-linux-x64.img",
+  "bytes": 127565824,
+  "skipped": "image 122 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "rust-analyzer@2024.05.13-r0:x64": {
+  "name": "rust-analyzer",
+  "version": "2024.5.13",
+  "img": "rust-analyzer-2024.5.13-linux-x64.img",
+  "bytes": 264036352,
+  "skipped": "image 252 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "sport-activities-features-gui@0.3.0-r1:arm64": {
+  "name": "sport-activities-features-gui",
+  "version": "0.3.0",
+  "img": "sport-activities-features-gui-0.3.0-linux-arm64.img",
+  "bytes": 138358784,
+  "skipped": "image 132 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "tangram@3.0-r1:arm64": {
+  "name": "tangram",
+  "version": "3.0.0",
+  "img": "tangram-3.0.0-linux-arm64.img",
+  "bytes": 110923776,
+  "skipped": "image 106 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "syncplay@1.7.1-r1:arm64": {
+  "name": "syncplay",
+  "version": "1.7.1",
+  "img": "syncplay-1.7.1-linux-arm64.img",
+  "bytes": 275427328,
+  "skipped": "image 263 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "wike@3.0.1-r0:arm64": {
+  "name": "wike",
+  "version": "3.0.1",
+  "img": "wike-3.0.1-linux-arm64.img",
+  "bytes": 110063616,
+  "skipped": "image 105 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "uusi@0.4.3-r0:arm64": {
+  "name": "uusi",
+  "version": "0.4.3",
+  "img": "uusi-0.4.3-linux-arm64.img",
+  "bytes": 284880896,
+  "skipped": "image 272 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "wasm-pack@0.12.1-r2:arm64": {
+  "name": "wasm-pack",
+  "version": "0.12.1",
+  "img": "wasm-pack-0.12.1-linux-arm64.img",
+  "bytes": 300605440,
+  "skipped": "image 287 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "sport-activities-features-gui@0.3.0-r1:x64": {
+  "name": "sport-activities-features-gui",
+  "version": "0.3.0",
+  "img": "sport-activities-features-gui-0.3.0-linux-x64.img",
+  "bytes": 148295680,
+  "skipped": "image 141 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "tangram@3.0-r1:x64": {
+  "name": "tangram",
+  "version": "3.0.0",
+  "img": "tangram-3.0.0-linux-x64.img",
+  "bytes": 114991104,
+  "skipped": "image 110 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "syncplay@1.7.1-r1:x64": {
+  "name": "syncplay",
+  "version": "1.7.1",
+  "img": "syncplay-1.7.1-linux-x64.img",
+  "bytes": 286957568,
+  "skipped": "image 274 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "wike@3.0.1-r0:x64": {
+  "name": "wike",
+  "version": "3.0.1",
+  "img": "wike-3.0.1-linux-x64.img",
+  "bytes": 113381376,
+  "skipped": "image 108 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "uusi@0.4.3-r0:x64": {
+  "name": "uusi",
+  "version": "0.4.3",
+  "img": "uusi-0.4.3-linux-x64.img",
+  "bytes": 276959232,
+  "skipped": "image 264 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
+ "wasm-pack@0.12.1-r2:x64": {
+  "name": "wasm-pack",
+  "version": "0.12.1",
+  "img": "wasm-pack-0.12.1-linux-x64.img",
+  "bytes": 313315328,
+  "skipped": "image 299 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
+ },
  "zig@0.12.0-r0:x64": {
   "name": "zig",
   "version": "0.12.0",
   "img": "zig-0.12.0-linux-x64.img",
-  "upload_path": "ply/zig/zig-0.12.0-linux-x64.img",
   "bytes": 105492480,
-  "pushed_at": "2026-08-23T03:09:51.337Z"
+  "skipped": "image 101 MiB > 100 MiB cap",
+  "skipped_at": "2026-08-23T04:40:00Z",
+  "note": "pruned from the CDN 2026-08-23; kept so the catalog and push never retry it"
  }
 }
