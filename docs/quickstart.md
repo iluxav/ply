@@ -19,7 +19,9 @@ user it installs to `~/.local/bin/ply` and tells you if a one-time
 
 ## Write a manifest
 
-A ply app is a directory with a `ply.toml`:
+A ply app is a directory with a `ply.toml`. `ply init` writes it for you
+(it detects Python/Node projects and asks a few questions); `ply add python3`
+adds a dependency at its latest version. By hand, it is:
 
 ```toml
 [package]

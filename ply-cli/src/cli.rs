@@ -17,11 +17,29 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Write a starter ply.toml (npm init for containers)
+    ///
+    /// Detects Node/Python projects for defaults, asks a few questions
+    /// (Enter accepts the default), and writes the manifest the quickstart shows.
+    Init(InitArgs),
+
     /// Build an image from a directory containing ply.toml
     ///
     /// Resolves dependencies (writing ply.lock) and produces a deterministic
     /// squashfs image named <name>-<version>-<os>-<arch>.img.
     Build(BuildArgs),
+
+    /// Search a source's package catalog (cargo search for containers)
+    ///
+    /// Reads `state.json` at the source prefix: --source, else the
+    /// `[sources] default` of ./ply.toml, else the official registry.
+    Search(SearchArgs),
+
+    /// Add a dependency to ./ply.toml (cargo add for containers)
+    ///
+    /// `ply add ffmpeg` takes the latest major.minor from the source's
+    /// catalog; `ply add ffmpeg@6.0` writes that range without a lookup.
+    Add(AddArgs),
 
     /// Run an image (foreground; SIGTERM works; exit code propagates)
     Run(RunArgs),
@@ -116,6 +134,46 @@ pub struct BuildArgs {
     /// Allow plain-http sources on public hosts (hash still verifies content)
     #[arg(long)]
     pub insecure_source: bool,
+}
+
+#[derive(Args)]
+pub struct InitArgs {
+    /// Directory to initialise (defaults to the current one)
+    #[arg(default_value = ".")]
+    pub dir: PathBuf,
+    /// Accept every default without asking
+    #[arg(short = 'y', long)]
+    pub yes: bool,
+    /// Overwrite an existing ply.toml
+    #[arg(long)]
+    pub force: bool,
+}
+
+#[derive(Args)]
+pub struct SearchArgs {
+    /// Substring to match against package names and descriptions
+    pub query: String,
+    /// List every published version and arch instead of one line per package
+    #[arg(long)]
+    pub versions: bool,
+    /// Maximum packages to show (0 = all)
+    #[arg(long, default_value_t = 20)]
+    pub limit: usize,
+    /// Search this source instead of the manifest's default (any `[sources]` spec)
+    #[arg(long)]
+    pub source: Option<String>,
+    /// Machine-readable output
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args)]
+pub struct AddArgs {
+    /// Package name, optionally with a range: `ffmpeg` or `ffmpeg@6.1`
+    pub spec: String,
+    /// Take the package from this `[sources]` entry instead of `default`
+    #[arg(long)]
+    pub source: Option<String>,
 }
 
 #[derive(Args)]

@@ -14,5 +14,10 @@ path = "src/main.rs"
 ply-core.workspace = true
 anyhow.workspace = true
 clap.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 semver.workspace = true
+toml_edit.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

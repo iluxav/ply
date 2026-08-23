@@ -206,7 +206,7 @@ fn is_private_host(host: &str) -> bool {
     }
 }
 
-fn http_get_string(url: &str) -> std::result::Result<String, String> {
+pub(crate) fn http_get_string(url: &str) -> std::result::Result<String, String> {
     let mut response = ureq::get(url).call().map_err(|e| e.to_string())?;
     response
         .body_mut()

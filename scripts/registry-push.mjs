@@ -304,24 +304,33 @@ async function publishState() {
   for (const p of packages)
     p.versions.sort((a, b) => a.version.localeCompare(b.version, undefined, { numeric: true }));
 
-  const out = {
+  const snapshot = (pkgs) => ({
     updated: new Date().toISOString().replace(/\.\d+Z$/, "Z"),
-    package_count: packages.length,
-    image_count: seenImg.size,
-    total_bytes: packages.reduce((n, p) => n + p.versions.reduce((m, v) => m + v.bytes, 0), 0),
-    packages,
-  };
+    package_count: pkgs.length,
+    image_count: pkgs.reduce((n, p) => n + p.versions.length, 0),
+    total_bytes: pkgs.reduce((n, p) => n + p.versions.reduce((m, v) => m + v.bytes, 0), 0),
+    packages: pkgs,
+  });
 
   const dir = join(ROOT, "scripts/.push-work");
   mkdirSync(dir, { recursive: true });
-  const file = join(dir, "state.json");
-  writeFileSync(file, JSON.stringify(out, null, 1));
-  execFileSync("npx", ["wrangler", "r2", "object", "put",
-    `${args.bucket}/state.json`, "--file", file, "--remote",
-    "--cache-control", "public, max-age=300", "--content-type", "application/json"],
-    { stdio: ["ignore", "ignore", "pipe"] });
-  rmSync(file, { force: true });
-  console.log(`state.json published (${out.package_count} packages, ${out.image_count} images)`);
+  const publish = (key, obj) => {
+    const file = join(dir, key.replace(/\//g, "__"));
+    writeFileSync(file, JSON.stringify(obj, null, 1));
+    execFileSync("npx", ["wrangler", "r2", "object", "put",
+      `${args.bucket}/${key}`, "--file", file, "--remote",
+      "--cache-control", "public, max-age=300", "--content-type", "application/json"],
+      { stdio: ["ignore", "ignore", "pipe"] });
+    rmSync(file, { force: true });
+    console.log(`${key} published (${obj.package_count} packages, ${obj.image_count} images)`);
+  };
+
+  // Root: the website's view of everything.
+  publish("state.json", snapshot(packages));
+  // Per namespace: the catalog `ply search` / `ply add` read at the source
+  // prefix (https://registry.plybox.sh/<ns>/state.json).
+  for (const ns of new Set(packages.map((p) => p.namespace)))
+    publish(`${ns}/state.json`, snapshot(packages.filter((p) => p.namespace === ns)));
 
   // The browse UI lives at plybox.sh/registry now — the bucket's root page
   // is a permanent redirect so old links keep working.

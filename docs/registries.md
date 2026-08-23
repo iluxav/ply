@@ -87,6 +87,31 @@ filenames:
 Directory sources list files directly, no index needed. Forge sources
 (GitHub/GitLab) can't list versions yet — pin exact versions for them.
 
+## Catalog (state.json)
+
+`ply search` and `ply add` read an optional catalog at the source's
+**prefix** — the template with `/{package}` removed:
+
+| source | catalog |
+|---|---|
+| `https://registry.plybox.sh/ply/{package}` | `https://registry.plybox.sh/ply/state.json` |
+| `https://artifacts.corp.net/ply` | `https://artifacts.corp.net/ply/state.json` |
+| `file:///srv/ply-packages/{package}` | `/srv/ply-packages/state.json` |
+
+The official registry publishes it; for your own host, a minimal one is:
+
+```json
+{ "packages": [
+  { "name": "ffmpeg", "description": "Multimedia framework", "license": "LGPL-2.1",
+    "versions": [
+      { "version": "6.1.1", "img": "ffmpeg-6.1.1-linux-x64.img" },
+      { "version": "6.1.1", "img": "ffmpeg-6.1.1-linux-arm64.img" } ] } ] }
+```
+
+Only `name`, `version` and `img` are required; `arch` is derived from the
+filename when absent. Forge sources have no catalog. Neither `index.json`
+nor `state.json` is needed to fetch a pinned version.
+
 ## Private packages
 
 For a private artifact host, anything your network can GET works (VPN,

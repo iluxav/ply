@@ -12,6 +12,28 @@ order: 21
 ## Build & validate
 
 ```sh
+ply init [DIR] [-y] [--force]
+```
+Write a starter `ply.toml`. Detects Node/Python projects for defaults and
+asks a few questions (Enter accepts the default; `-y` accepts all). Never
+touches anything but `ply.toml`.
+
+```sh
+ply search QUERY [--versions] [--limit N] [--source SPEC] [--json]
+```
+Search a source's catalog. One line per package, paste-ready:
+`ffmpeg = "6.1"   # Multimedia framework   x64 arm64`. `--versions` lists
+every published version and arch. The source is `--source`, else the
+`[sources] default` of `./ply.toml`, else the official registry.
+
+```sh
+ply add NAME[@RANGE] [--source NAME]
+```
+Add a dependency to `./ply.toml`. Without a range, takes the latest
+`major.minor` from the catalog. Comments and formatting are preserved.
+Then `ply build` to resolve and lock.
+
+```sh
 ply build [DIR] [-o FILE] [--insecure-source]
 ```
 Resolve dependencies (writing `ply.lock`), produce a deterministic image

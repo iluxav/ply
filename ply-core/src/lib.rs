@@ -5,6 +5,7 @@
 pub mod apps;
 pub mod build;
 pub mod bundle;
+pub mod catalog;
 pub mod craft;
 pub mod digest;
 pub mod env;

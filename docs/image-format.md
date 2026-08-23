@@ -73,6 +73,7 @@ A registry is a file host. The full protocol:
 ```
 <base-url>/<name>-<version>-<os>-<arch>.img    # GET an image
 <base-url>/index.json                          # optional: list for range resolution
+<prefix>/state.json                            # optional: catalog for ply search / ply add
 ```
 
 `index.json` is a JSON array of image filenames present at that prefix:
@@ -81,8 +82,8 @@ A registry is a file host. The full protocol:
 ["node-22.5.0-linux-x64.img", "node-22.6.0-linux-x64.img"]
 ```
 
-The official registry additionally publishes `state.json` at the bucket
-root — a machine-readable snapshot (packages, versions, sizes, timestamps)
-that powers [registry.plybox.sh](https://registry.plybox.sh). Neither file
+The official registry publishes `state.json` at the bucket root (for
+[plybox.sh/registry](https://plybox.sh/registry/)) and at each namespace
+prefix (for `ply search`); see [Registries](/docs/registries/). Neither file
 is needed to fetch pinned versions; fetching is always just a GET plus a
 hash check.

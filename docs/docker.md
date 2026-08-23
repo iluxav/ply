@@ -59,6 +59,8 @@ decision, not a gap — the third column says why.
 | Docker | ply | Why it's different |
 |---|---|---|
 | `docker build .` | `ply build .` | manifest + lockfile, not a Dockerfile script; output is a deterministic file |
+| `docker search` | `ply search` | same idea; the catalog is a static file next to the images, no API |
+| `docker init` | `ply init` | writes a manifest, not a Dockerfile |
 | `docker run -d IMG` | `ply systemd IMG \| sudo tee …` | no daemon to detach into — supervision is systemd's job |
 | `docker run -p 8080:80` | `ply run --publish 8080:80` | not a port *mapping*: the run parent load-balances the whole pool |
 | `docker run -v` / `volume` | `[volumes]` in ply.toml | volumes are declared per app; plain host directories underneath |
