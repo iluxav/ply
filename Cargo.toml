@@ -3,7 +3,7 @@ resolver = "2"
 members = ["ply-core", "ply-cli", "apk2pkg"]
 
 [workspace.package]
-version = "0.1.7"
+version = "0.1.8"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/iluxa/ply"
