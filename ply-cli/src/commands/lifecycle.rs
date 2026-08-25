@@ -90,7 +90,7 @@ pub fn systemd(args: SystemdArgs) -> Result<()> {
     }
     print!(
         "{}",
-        lifecycle::systemd_unit(&args.image, &flags, &args.after)?
+        lifecycle::systemd_unit(&args.image, &flags, &args.after, args.user)?
     );
     Ok(())
 }

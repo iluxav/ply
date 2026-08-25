@@ -117,8 +117,10 @@ inert package. See [Making packages](/docs/packages/).
 ## Host integration
 
 ```sh
-ply systemd IMAGE [--scale N] [--publish P[:IP]] [-e K=V] [--env-file F]
-                                  # emit a unit file (supervision = systemd)
+ply systemd IMAGE [--scale N] [--publish [ADDR:]P[:IP]] [-e K=V] [--env-file F]
+                  [--after APP]… [--user]
+                                  # emit a unit file (supervision = systemd);
+                                  # --user = ~/.config/systemd/user, for rootless
 ply proxy [--backend caddy]       # emit reverse-proxy config for all apps
 ply lb APP [--format nginx]       # emit one app's LB backend pool
 ply setup [--unprivileged-ports [PORT]]

@@ -429,7 +429,7 @@ pub struct SystemdArgs {
     pub scale: Option<u32>,
 
     /// Publish the pool on a host port (baked into ExecStart)
-    #[arg(long, value_name = "PORT[:INSTANCE_PORT]")]
+    #[arg(long, value_name = "[ADDR:]PORT[:INSTANCE_PORT]")]
     pub publish: Option<String>,
 
     /// Environment variables for the app (repeatable, KEY=VALUE)
@@ -444,6 +444,13 @@ pub struct SystemdArgs {
     /// gated by `--after` in ExecStart
     #[arg(long, value_name = "APP")]
     pub after: Vec<String>,
+
+    /// Emit a systemd **user** unit (~/.config/systemd/user) instead of a
+    /// system one. Rootless apps must be supervised by the user that owns
+    /// their store, subuid range and AppArmor profile — a system unit runs
+    /// them as root, which is a different mode entirely.
+    #[arg(long)]
+    pub user: bool,
 }
 
 #[derive(Args)]

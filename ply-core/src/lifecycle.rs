@@ -285,7 +285,12 @@ fn quote_unit_arg(arg: &str) -> String {
 
 /// `ply systemd <image> [run flags]` — supervision is systemd's job; emit a
 /// unit whose ExecStart carries the run flags (scale, publish, env).
-pub fn systemd_unit(image: &Path, run_flags: &[String], after: &[String]) -> Result<String> {
+pub fn systemd_unit(
+    image: &Path,
+    run_flags: &[String],
+    after: &[String],
+    user_unit: bool,
+) -> Result<String> {
     let manifest = read_manifest(image)?;
     let image_abs = std::path::absolute(image).map_err(|source| Error::Io {
         path: image.to_path_buf(),
@@ -301,6 +306,7 @@ pub fn systemd_unit(image: &Path, run_flags: &[String], after: &[String]) -> Res
         &image_abs.display().to_string(),
         run_flags,
         after,
+        user_unit,
     ))
 }
 
@@ -313,16 +319,35 @@ pub fn render_unit(
     image_path: &str,
     run_flags: &[String],
     after: &[String],
+    user_unit: bool,
 ) -> String {
-    let mut unit = format!(
-        "# ply-{app}.service — install with:\n\
-         #   ply systemd {image} | sudo tee /etc/systemd/system/ply-{app}.service\n\
-         #   sudo systemctl enable --now ply-{app}\n\
-         [Unit]\n\
-         Description=ply app {app}\n\
-         After=network-online.target\n\
-         Wants=network-online.target\n"
-    );
+    // A rootless app cannot be supervised by a system unit — it must run as
+    // the user whose store, subuid range and AppArmor profile it depends on.
+    // `enable-linger` is the part everyone misses: without it the unit dies
+    // at logout and never starts at boot.
+    let mut unit = if user_unit {
+        format!(
+            "# ply-{app}.service (rootless / user unit) — install with:\n\
+             #   mkdir -p ~/.config/systemd/user\n\
+             #   ply systemd --user {image} > ~/.config/systemd/user/ply-{app}.service\n\
+             #   systemctl --user enable --now ply-{app}\n\
+             #   sudo loginctl enable-linger $USER   # survive logout, start at boot\n\
+             [Unit]\n\
+             Description=ply app {app} (rootless)\n\
+             After=network-online.target\n\
+             Wants=network-online.target\n"
+        )
+    } else {
+        format!(
+            "# ply-{app}.service — install with:\n\
+             #   ply systemd {image} | sudo tee /etc/systemd/system/ply-{app}.service\n\
+             #   sudo systemctl enable --now ply-{app}\n\
+             [Unit]\n\
+             Description=ply app {app}\n\
+             After=network-online.target\n\
+             Wants=network-online.target\n"
+        )
+    };
     for dep in after {
         unit.push_str(&format!(
             "After=ply-{dep}.service\nWants=ply-{dep}.service\n"
@@ -339,11 +364,17 @@ pub fn render_unit(
          TimeoutStopSec=15\n\
          \n\
          [Install]\n\
-         WantedBy=multi-user.target\n",
+         WantedBy={target}\n",
         flags = run_flags
             .iter()
             .map(|f| format!(" {}", quote_unit_arg(f)))
             .collect::<String>(),
+        // a user manager has no multi-user.target
+        target = if user_unit {
+            "default.target"
+        } else {
+            "multi-user.target"
+        },
     ));
     unit
 }
@@ -501,6 +532,7 @@ mod tests {
             "/srv/pgapp.img",
             &flags,
             &["pgdb".into()],
+            false,
         );
         assert!(unit.contains("After=network-online.target\nWants=network-online.target\nAfter=ply-pgdb.service\nWants=ply-pgdb.service\n"), "{unit}");
         assert!(
@@ -516,10 +548,53 @@ mod tests {
             "/srv/pgdb.img",
             &[],
             &[],
+            false,
         );
         assert!(
             !plain.contains("After=ply-"),
             "no dependency lines without --after:\n{plain}"
         );
+    }
+
+    #[test]
+    fn a_user_unit_targets_the_user_manager_and_says_how_to_survive_logout() {
+        let unit = render_unit(
+            "edge",
+            "/usr/local/bin/ply",
+            "edge.img",
+            "/srv/edge.img",
+            &[],
+            &[],
+            true,
+        );
+        // a user manager has no multi-user.target; enabling against it fails
+        assert!(unit.contains("WantedBy=default.target"), "{unit}");
+        assert!(!unit.contains("multi-user.target"), "{unit}");
+        // the step everyone misses: without linger the unit dies at logout
+        assert!(unit.contains("loginctl enable-linger"), "{unit}");
+        assert!(unit.contains("systemctl --user enable"), "{unit}");
+        assert!(
+            !unit.contains("sudo tee"),
+            "user units are not installed with sudo:\n{unit}"
+        );
+    }
+
+    #[test]
+    fn a_system_unit_is_unchanged_by_the_new_flag() {
+        let unit = render_unit(
+            "api",
+            "/usr/local/bin/ply",
+            "api.img",
+            "/srv/api.img",
+            &[],
+            &[],
+            false,
+        );
+        assert!(unit.contains("WantedBy=multi-user.target"), "{unit}");
+        assert!(
+            unit.contains("sudo tee /etc/systemd/system/ply-api.service"),
+            "{unit}"
+        );
+        assert!(!unit.contains("--user"), "{unit}");
     }
 }

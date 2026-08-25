@@ -64,6 +64,64 @@ ply lb myapp --format nginx      # one app's backend pool
 
 Instances of the same app round-robin automatically in the emitted config.
 
+## TLS and the edge
+
+ply terminates no TLS, issues no certificates and binds no `:443`. ACME,
+SNI routing, h2/h3 and websocket upgrades are a decade of someone else's
+work — the edge is Caddy (or nginx), and ply's job is to say what the
+upstreams are.
+
+The upstream worth pointing at is the app's **published address**, not its
+instance IPs:
+
+```caddyfile
+api.example.com {
+	reverse_proxy 127.0.0.1:3000     # the ply parent, not an instance
+}
+```
+
+The parent already balances across the pool, skips unhealthy backends and
+drains on deploy — so this line never changes when you scale, roll, crash
+or restart. Point Caddy at instance IPs instead and its config has to be
+regenerated on every one of those events.
+
+### Where Caddy itself runs
+
+Either as an ordinary system service, or as a ply app —
+[`demos/edge`](https://github.com/iluxav/ply/tree/main/demos/edge) is the
+second, with the Caddyfile in a volume so `caddy --watch` hot-reloads it
+without a rebuild. Two things it needs before it can do TLS:
+
+**Certificates must live on a volume.** Caddy keeps them under
+`$XDG_DATA_HOME/caddy`. Point that at the instance's tmpfs and every restart
+re-issues, until Let's Encrypt's duplicate-certificate limit (5 per week, no
+appeal) locks the domain out.
+
+```toml
+[env]
+XDG_DATA_HOME = "/data"
+[volumes]
+data = { path = "/data" }
+```
+
+**Something has to bind :80 and :443.** The tidiest topology is a **rootless
+edge over rootful pools**: rootless shares the host network, so Caddy binds
+those ports directly with no splice in front, while the pools get
+per-instance IPs on the bridge and Caddy reaches them via the gateway.
+
+```sh
+sudo ply setup --unprivileged-ports        # once: lets rootless bind :80/:443
+ply run edge.img                           # rootless edge
+sudo ply run api.img --scale 4 --publish internal:3000
+```
+
+Rootful edge works too, but the instance lives in its own netns, so the host
+ports reach it via `--publish 443:443 --publish 80:80` — one extra hop.
+
+A system-service Caddy is the choice when TLS should keep working while ply
+is stopped entirely: separate supervision, certs in `/var/lib/caddy`, and
+nothing to configure beyond the emitted Caddyfile.
+
 ## Publishing a pool
 
 ```sh
@@ -196,6 +254,25 @@ ply systemd myapp.img --scale 4 --publish 80:3000 --env-file /etc/myapp/secrets.
   | sudo tee /etc/systemd/system/ply-myapp.service
 sudo systemctl enable --now ply-myapp
 ```
+
+### Rootless supervision
+
+A rootless app cannot be supervised by a system unit — that would run it as
+root, which is a different mode with a different store, network and
+security posture. It needs a **user** unit:
+
+```sh
+mkdir -p ~/.config/systemd/user
+ply systemd --user myapp.img --scale 4 --publish internal:3000 \
+  > ~/.config/systemd/user/ply-myapp.service
+systemctl --user enable --now ply-myapp
+sudo loginctl enable-linger $USER    # survive logout, start at boot
+```
+
+`enable-linger` is the step that is easy to miss and hard to diagnose:
+without it the user manager stops at logout, taking every app with it, and
+nothing starts at boot. `ply systemd --user` prints all four commands in the
+unit's header comment.
 
 For in-process restarts (crash loops with backoff) see
 [`[restart]`](/docs/deploy/) — the run parent can respawn failed instances
