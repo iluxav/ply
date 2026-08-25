@@ -211,11 +211,18 @@ pub fn deploy(image: &Path, timeout_secs: u64) -> Result<DeployReport> {
 
     // Watch the roll: done when every slot that was live at the start runs
     // the new image (a mid-roll slot is briefly absent from state — counting
-    // only visible instances would declare victory early).
+    // only visible instances would declare victory early). "Runs the new
+    // image" must mean the slot RESTARTED after this deploy began: deploys
+    // ship to a stable path (current.img), so the path alone matches before
+    // anything happened — comparing it was a false-success generator.
     let expected: usize = state::list()?
         .iter()
         .filter(|s| s.app == app && s.alive())
         .count();
+    let deploy_started = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
     let want = image_abs.display().to_string();
     let mut rolled: BTreeSet<String> = BTreeSet::new();
@@ -226,7 +233,7 @@ pub fn deploy(image: &Path, timeout_secs: u64) -> Result<DeployReport> {
                 continue;
             }
             let name = format!("{}.{}", instance.app, instance.n);
-            if instance.image == want {
+            if slot_rolled(&instance.image, &want, instance.started, deploy_started) {
                 rolled.insert(name);
             } else {
                 all = false;
@@ -250,6 +257,14 @@ pub fn deploy(image: &Path, timeout_secs: u64) -> Result<DeployReport> {
         }
         std::thread::sleep(std::time::Duration::from_millis(300));
     }
+}
+
+/// A slot counts as rolled when it runs the target image AND (re)started
+/// after the deploy began — the path matching alone is meaningless when
+/// every deploy ships to the same stable path. 1s slack covers second
+/// granularity of the state's `started` stamp.
+fn slot_rolled(instance_image: &str, want: &str, started: u64, deploy_started: u64) -> bool {
+    instance_image == want && started + 1 >= deploy_started
 }
 
 /// Parent pid from /proc/<pid>/stat (field 4, after the comm parens).
@@ -502,6 +517,39 @@ pub fn outdated(allow_insecure: bool) -> Result<Vec<String>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn slot_rolled_requires_a_restart_not_just_the_path() {
+        // stable-path deploy: path matches BEFORE anything happened — the
+        // old instance (started long before the deploy) must not count
+        assert!(!super::slot_rolled(
+            "/srv/app/current.img",
+            "/srv/app/current.img",
+            1000,
+            8000
+        ));
+        // restarted after the deploy began → rolled
+        assert!(super::slot_rolled(
+            "/srv/app/current.img",
+            "/srv/app/current.img",
+            8003,
+            8000
+        ));
+        // second-granularity slack
+        assert!(super::slot_rolled(
+            "/srv/app/current.img",
+            "/srv/app/current.img",
+            7999,
+            8000
+        ));
+        // different path never counts, however fresh
+        assert!(!super::slot_rolled(
+            "/srv/app/other.img",
+            "/srv/app/current.img",
+            9000,
+            8000
+        ));
+    }
+
     use super::*;
 
     #[test]

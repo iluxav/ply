@@ -3,7 +3,7 @@
 TARGET := x86_64-unknown-linux-musl
 BIN    := target/$(TARGET)/release/ply
 
-.PHONY: check fmt build test static release install uninstall registry-catalog registry-push registry-state registry registry-all
+.PHONY: check fmt build test static release release-cli release-web install uninstall registry-catalog registry-push registry-state registry registry-all
 
 # fast feedback: fmt + clippy + tests
 check:
@@ -25,12 +25,22 @@ static:
 	cargo build --release --target $(TARGET) -p ply-cli
 	@ls -lh $(BIN)
 
-# cut a release: bump version, gate (fmt+clippy+tests), commit, push,
-# GitHub release (tag creation triggers .github/workflows/release.yml,
-# whose guard re-checks tag == Cargo.toml version).
-#   make release            # patch bump (0.1.3 -> 0.1.4)
-#   make release V=0.2.0    # explicit version
-release:
+# cut releases:
+#   make release-cli            # CLI: version bump, gate, tag (release.yml builds binaries)
+#   make release-cli V=0.2.0    # explicit version
+#   make release-web            # site: dispatch deploy-web.yml for current main
+#   make release                # both, CLI first
+release: release-cli release-web
+
+release-web:
+	@set -eu; \
+	test "$$(git rev-parse --abbrev-ref HEAD)" = main || { echo "release-web: not on main"; exit 1; }; \
+	test -z "$$(git status --porcelain)" || { echo "release-web: working tree not clean"; exit 1; }; \
+	git pull --ff-only; git push; \
+	gh workflow run deploy-web.yml; \
+	echo "release-web: deploy-web dispatched for $$(git rev-parse --short HEAD) — follow with: gh run watch"
+
+release-cli:
 	@set -eu; \
 	test "$$(git rev-parse --abbrev-ref HEAD)" = main || { echo "release: not on main"; exit 1; }; \
 	test -z "$$(git status --porcelain)" || { echo "release: working tree not clean"; exit 1; }; \
@@ -48,9 +58,9 @@ release:
 	git push; \
 	git tag "v$$V"; \
 	git push origin "v$$V"; \
-	echo "release: v$$V tagged — release.yml builds both binaries, then creates the"; \
-	echo "release: release with them attached (nothing is 'latest' until it is complete)"; \
-	echo "release: follow with: gh run watch"
+	echo "release-cli: v$$V tagged — release.yml builds both binaries, then creates the"; \
+	echo "release-cli: release with them attached (nothing is 'latest' until it is complete)"; \
+	echo "release-cli: follow with: gh run watch"
 
 # build the static binary and install it as `ply` (exactly one file lands on the host)
 install: static

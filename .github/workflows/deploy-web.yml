@@ -10,12 +10,20 @@ on:
   push:
     branches: [main]
     paths: ["app/**", "docs/**", "install.sh"]
+  workflow_dispatch:      # make release-web
+
+# a push-trigger and a dispatched run must never roll the droplet
+# concurrently — queue them instead
+concurrency:
+  group: deploy-web
+  cancel-in-progress: false
 
 jobs:
   deploy:
-    # arm64: the droplet is arm64, and `ply build` builds for the host arch —
-    # this runner makes npm's native modules and the image both linux-arm64.
-    runs-on: ubuntu-24.04-arm
+    # x64: must match the droplet's arch — `ply build` builds for the host,
+    # and npm's native modules follow the runner too. (The droplet is x64;
+    # if it ever moves to arm64, change only this line.)
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
