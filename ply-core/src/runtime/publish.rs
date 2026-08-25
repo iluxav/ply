@@ -59,6 +59,12 @@ pub struct Publish {
     /// Port instances serve on (rootful: on their bridge IP; rootless: the
     /// parent allocates a distinct loopback port per instance instead).
     pub instance_port: u16,
+    /// The spec named the instance port outright (`5434:5432`) rather than it
+    /// defaulting to the host port. Rootless that is a promise about where the
+    /// app listens, and ply keeps it instead of injecting `PORT` — an imported
+    /// Docker image binds a fixed port and ignores `PORT` entirely, so
+    /// injecting would aim the pool at a socket nobody ever opened.
+    pub instance_port_explicit: bool,
     /// Who may reach `host_port`. Defaults to Public for backwards
     /// compatibility — `--publish internal:5432` is how a database opts out
     /// of being on the internet.
@@ -100,12 +106,14 @@ pub fn parse_publish(s: &str) -> Result<Publish> {
                 host_port: port,
                 instance_port: port,
                 scope,
+                instance_port_explicit: false,
             })
         }
         [host, instance] => Ok(Publish {
             host_port: parse_port(host)?,
             instance_port: parse_port(instance)?,
             scope,
+            instance_port_explicit: true,
         }),
         _ => Err(bad()),
     }
@@ -268,7 +276,8 @@ mod tests {
             Publish {
                 host_port: 3100,
                 instance_port: 3100,
-                scope: BindScope::Public
+                scope: BindScope::Public,
+                instance_port_explicit: false,
             }
         );
         assert_eq!(
@@ -276,7 +285,8 @@ mod tests {
             Publish {
                 host_port: 80,
                 instance_port: 3100,
-                scope: BindScope::Public
+                scope: BindScope::Public,
+                instance_port_explicit: true,
             }
         );
     }
@@ -289,7 +299,8 @@ mod tests {
             Publish {
                 host_port: 5432,
                 instance_port: 5432,
-                scope: BindScope::Internal
+                scope: BindScope::Internal,
+                instance_port_explicit: false,
             }
         );
         assert_eq!(
@@ -297,7 +308,8 @@ mod tests {
             Publish {
                 host_port: 5432,
                 instance_port: 5432,
-                scope: BindScope::Internal
+                scope: BindScope::Internal,
+                instance_port_explicit: true,
             }
         );
     }
@@ -326,6 +338,25 @@ mod tests {
             BindScope::Public.connect_addr(false),
             crate::runtime::network::GATEWAY
         );
+    }
+
+    #[test]
+    fn naming_the_instance_port_is_a_promise_ply_keeps() {
+        // `--publish internal:5434` leaves ply free to inject PORT and move
+        // the app; `internal:5434:5432` says postgres is on 5432 and always
+        // will be, because an imported image ignores PORT entirely.
+        assert!(
+            !parse_publish("internal:5434")
+                .unwrap()
+                .instance_port_explicit
+        );
+        assert!(
+            parse_publish("internal:5434:5432")
+                .unwrap()
+                .instance_port_explicit
+        );
+        assert!(parse_publish("80:3000").unwrap().instance_port_explicit);
+        assert!(!parse_publish("3100").unwrap().instance_port_explicit);
     }
 
     #[test]

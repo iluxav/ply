@@ -43,8 +43,12 @@ pub fn exec(args: RunArgs) -> Result<()> {
         }
     }
 
+    // `docker://…` becomes a local image before anything else looks at it, so
+    // every downstream path (manifest read, lockfile, deploy) sees a plain file.
+    let image = ply_core::oci::ensure_local(&args.image, args.pull)?;
+
     let code = run(&RunOptions {
-        image: args.image,
+        image,
         cli_env,
         allow_insecure: true, // lockfile digests pin content; run never resolves
         scale: args.scale,

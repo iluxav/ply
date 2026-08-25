@@ -259,6 +259,7 @@ pub fn shell(name: &str, cmd: &[String]) -> Result<i32> {
         ],
         argv,
         binds: vec![],
+        volume_targets: vec![],
         sync_rx,
         keep_caps: vec![],
         privileged: true, // authoring needs real root; host netns for apk/apt

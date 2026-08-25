@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["ply-core", "ply-cli", "apk2pkg"]
+members = ["ply-core", "ply-cli", "apk2pkg", "deb2pkg"]
 
 [workspace.package]
 version = "0.1.17"
@@ -29,6 +29,8 @@ walkdir = "2"
 tempfile = "3"
 tar = "0.4"
 flate2 = "1"
+lzma-rs = "0.3"
+zstd = "0.13"
 
 # backhand 0.25.1 writes zero-length files with a dangling fragment ref that
 # the kernel rejects (EINVAL on stat). Until the fix lands upstream

@@ -16,7 +16,7 @@
 name = "plybox-edge"
 version = "0.1.0"
 entrypoint = ["/bin/sh", "-c", "[ -f /etc/caddy/Caddyfile ] || cp /opt/plybox-edge/Caddyfile /etc/caddy/Caddyfile; exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile --watch"]
-base = "alpine@3.20"
+base = "debian@13"
 
 [dependencies]
 caddy = "2"

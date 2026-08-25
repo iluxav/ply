@@ -10,7 +10,7 @@ name = "plybox-web"
 version = "0.1.0"
 entrypoint = ["node", ".next/standalone/server.js"]
 include = [".next/standalone/"]
-base = "alpine@3.20"
+base = "debian@13"
 
 [dependencies]
 node = "24"

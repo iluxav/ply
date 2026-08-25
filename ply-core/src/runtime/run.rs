@@ -735,6 +735,9 @@ fn launch_instance(
     // Named volumes: per-instance by default (scaling can never silently
     // corrupt single-writer state); `scope = "shared"` is the explicit opt-in.
     let mut binds: Vec<(PathBuf, String)> = Vec::new();
+    // Declared volumes only — never --link, whose source is the user's own
+    // working tree and must not have its ownership rewritten.
+    let mut volume_targets: Vec<String> = Vec::new();
     for (name, volume) in &manifest.volumes {
         let suffix = if volume.scope == "shared" {
             "shared".to_string()
@@ -748,10 +751,16 @@ fn launch_instance(
             path: host_dir.clone(),
             source,
         })?;
-        // The app's user must be able to write its own volumes.
+        // The app's user must be able to write its own volumes. Rootful this
+        // succeeds here; rootless it cannot — an unprivileged parent may not
+        // chown to another uid, that needs CAP_CHOWN in the INITIAL namespace.
+        // The child repeats it after entering the user namespace, where it is
+        // namespace-root over the mapped range, so a failure here is expected
+        // and not worth reporting.
         if let Some(user) = &run_user {
             let _ = std::os::unix::fs::chown(&host_dir, Some(user.uid), Some(user.gid));
         }
+        volume_targets.push(volume.path.clone());
         binds.push((host_dir, volume.path.clone()));
     }
     for (host, container) in &opts.links {
@@ -832,8 +841,10 @@ fn launch_instance(
     // gets its own loopback port, injected as PORT (the parent LBs across
     // them). Overrides any manifest/CLI PORT — with --publish the parent
     // owns the externally visible port.
+    // Skipped when the spec named the instance port: that is the author saying
+    // where the app listens, and an imported image cannot be talked out of it.
     let injected_port = match (publish.first(), rootless) {
-        (Some(_), true) => {
+        (Some(w), true) if !w.spec.instance_port_explicit => {
             let port = crate::runtime::publish::allocate_loopback_port()?;
             match spec_env.iter_mut().find(|(k, _)| k == "PORT") {
                 Some(pair) => pair.1 = port.to_string(),
@@ -857,6 +868,7 @@ fn launch_instance(
         argv: entrypoint.to_vec(),
         binds,
         sync_rx,
+        volume_targets,
         keep_caps,
         privileged: opts.privileged,
         rootless,

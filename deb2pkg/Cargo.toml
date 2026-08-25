@@ -1,0 +1,22 @@
+[package]
+name = "deb2pkg"
+description = "Convert Debian packages (.deb) into ply package images — the glibc lane"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "deb2pkg"
+path = "src/main.rs"
+
+[dependencies]
+ply-core.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+ureq.workspace = true
+tar.workspace = true
+flate2.workspace = true
+semver.workspace = true
+lzma-rs.workspace = true
+zstd.workspace = true

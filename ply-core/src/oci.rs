@@ -247,6 +247,41 @@ fn user_from_config(config: &OciConfig, rootfs: &Path) -> Option<String> {
     Some(format!("{name}:{uid}:{gid}"))
 }
 
+/// `ply run docker://postgres:16` — import on demand, cached by reference.
+///
+/// A path is returned unchanged; a `docker://` reference is imported once into
+/// the data dir and reused after that, so the second run starts instantly and
+/// offline. This exists because authoring a manifest is the right amount of
+/// work for *your* service and far too much for a database you need for an
+/// afternoon — the two cases deserve different front doors.
+///
+/// The cache is keyed by the reference as written, so a moving tag (`:16`)
+/// keeps resolving to the image first pulled. That is deliberate: a local dev
+/// database should not change under you because upstream moved a tag. Pass
+/// `pull` to refresh it.
+pub fn ensure_local(spec: &str, pull: bool) -> Result<PathBuf> {
+    let Some(reference) = spec.strip_prefix("docker://") else {
+        return Ok(PathBuf::from(spec));
+    };
+    let slug: String = reference
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let dir = crate::paths::data_dir().join("imports");
+    let path = dir.join(format!("{slug}.img"));
+
+    if path.exists() && !pull {
+        return Ok(path);
+    }
+    std::fs::create_dir_all(&dir).map_err(|source| Error::Io {
+        path: dir.clone(),
+        source,
+    })?;
+    eprintln!("ply: importing {spec} (cached as {})", path.display());
+    import(spec, &path)?;
+    Ok(path)
+}
+
 pub fn import(spec: &str, output: &Path) -> Result<ImportOutcome> {
     let image_ref = parse_ref(spec)?;
     let mut client = Client {
@@ -567,6 +602,58 @@ mod tests {
         );
         assert_eq!(cfg.cmd.as_deref(), Some(&["redis-server".to_string()][..]));
         assert!(cfg.exposed_ports.expect("ports").contains_key("6379/tcp"));
+    }
+}
+
+#[cfg(test)]
+mod ensure_local_tests {
+    use super::*;
+
+    #[test]
+    fn a_plain_path_is_returned_untouched() {
+        // no network, no cache, no surprise — the common case must stay inert
+        assert_eq!(
+            ensure_local("./myapp-1.0.0-linux-x64.img", false).unwrap(),
+            PathBuf::from("./myapp-1.0.0-linux-x64.img")
+        );
+        assert_eq!(
+            ensure_local("/srv/app/current.img", true).unwrap(),
+            PathBuf::from("/srv/app/current.img")
+        );
+    }
+
+    #[test]
+    fn a_cached_reference_is_reused_without_touching_the_network() {
+        // the point of the cache: the second `ply run docker://…` is instant
+        // and works offline. If this ever hits the network the test hangs
+        // rather than passing, which is the failure we want to notice.
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("HOME", tmp.path());
+        let dir = crate::paths::data_dir().join("imports");
+        std::fs::create_dir_all(&dir).unwrap();
+        let cached = dir.join("postgres-16.img");
+        std::fs::write(&cached, b"not really an image").unwrap();
+
+        assert_eq!(ensure_local("docker://postgres:16", false).unwrap(), cached);
+    }
+
+    #[test]
+    fn references_map_to_distinct_cache_entries() {
+        // a tag, a registry host and a path must not collide in the cache
+        let slug = |r: &str| -> String {
+            r.strip_prefix("docker://")
+                .unwrap()
+                .chars()
+                .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+                .collect()
+        };
+        let all = [
+            slug("docker://postgres:16"),
+            slug("docker://postgres:17"),
+            slug("docker://ghcr.io/org/postgres:16"),
+        ];
+        let unique: std::collections::BTreeSet<_> = all.iter().collect();
+        assert_eq!(unique.len(), all.len(), "cache keys collide: {all:?}");
     }
 }
 

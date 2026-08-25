@@ -1,0 +1,7 @@
+{
+  "tier": "deb-manual",
+  "branch": "trixie",
+  "arch": "x86_64",
+  "package_count": 0,
+  "packages": []
+}

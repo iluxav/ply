@@ -25,6 +25,9 @@ pub struct ContainerSpec {
     /// Bind mounts: (host dir, absolute path inside the container).
     /// Volumes and --link both come through here.
     pub binds: Vec<(PathBuf, String)>,
+    /// Declared volume paths, to hand to `run_user` from inside the user
+    /// namespace. Not --link: that is the caller's own working tree.
+    pub volume_targets: Vec<String>,
     /// Read end of the parent's sync pipe: proceed on 1 byte (parent placed
     /// us in the cgroup), abort on EOF (parent failed).
     pub sync_rx: std::os::fd::OwnedFd,
@@ -147,6 +150,23 @@ fn setup_and_exec(spec: &ContainerSpec) -> Result<isize> {
                 host_dir.display()
             ))
         })?;
+    }
+
+    // Volumes must belong to the app's user, and rootless that can only
+    // happen here: the parent outside is unprivileged and may not chown to
+    // another uid, while in this namespace we are root over the mapped range.
+    // Without it a `[package] user` app cannot write its own data directory —
+    // postgres fails at initdb with EPERM on a directory it appears not to own.
+    if let Some(user) = &spec.run_user {
+        for target in &spec.volume_targets {
+            let path = root.join(target.trim_start_matches('/'));
+            if let Err(e) = std::os::unix::fs::chown(&path, Some(user.uid), Some(user.gid)) {
+                eprintln!(
+                    "ply: warning: cannot give {target} to {} ({e}) — the app may not be able to write it",
+                    user.name
+                );
+            }
+        }
     }
 
     // /dev nodes before pivot: the bind-mount fallback needs host paths.

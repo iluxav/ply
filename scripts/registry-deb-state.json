@@ -1,0 +1,74 @@
+{
+ "manual:debian-13.6.0-linux-x64.img": {
+  "name": "debian",
+  "version": "13.6.0",
+  "img": "debian-13.6.0-linux-x64.img",
+  "upload_path": "ply/debian/debian-13.6.0-linux-x64.img",
+  "bytes": 26898432,
+  "pushed_at": "2026-08-25T16:05:07.419Z"
+ },
+ "manual:redis-8.0.2-linux-x64.img": {
+  "name": "redis",
+  "version": "8.0.2",
+  "img": "redis-8.0.2-linux-x64.img",
+  "upload_path": "ply/redis/redis-8.0.2-linux-x64.img",
+  "bytes": 1982464,
+  "pushed_at": "2026-08-25T16:05:09.507Z"
+ },
+ "manual:postgresql17-17.10.0-linux-x64.img": {
+  "name": "postgresql17",
+  "version": "17.10.0",
+  "img": "postgresql17-17.10.0-linux-x64.img",
+  "upload_path": "ply/postgresql17/postgresql17-17.10.0-linux-x64.img",
+  "bytes": 42856448,
+  "pushed_at": "2026-08-25T16:05:21.874Z"
+ },
+ "manual:node-24.6.0-linux-x64.img": {
+  "name": "node",
+  "version": "24.6.0",
+  "img": "node-24.6.0-linux-x64.img",
+  "upload_path": "ply/node/node-24.6.0-linux-x64.img",
+  "bytes": 51740672,
+  "pushed_at": "2026-08-25T16:05:36.801Z"
+ },
+ "manual:caddy-2.11.4-linux-x64.img": {
+  "name": "caddy",
+  "version": "2.11.4",
+  "img": "caddy-2.11.4-linux-x64.img",
+  "upload_path": "ply/caddy/caddy-2.11.4-linux-x64.img",
+  "bytes": 15335424,
+  "pushed_at": "2026-08-25T19:43:16.313Z"
+ },
+ "manual:ffmpeg-8.1.0-linux-x64.img": {
+  "name": "ffmpeg",
+  "version": "8.1.0",
+  "img": "ffmpeg-8.1.0-linux-x64.img",
+  "upload_path": "ply/ffmpeg/ffmpeg-8.1.0-linux-x64.img",
+  "bytes": 103870464,
+  "pushed_at": "2026-08-25T19:43:51.801Z"
+ },
+ "manual:imagemagick-7.1.1-linux-x64.img": {
+  "name": "imagemagick",
+  "version": "7.1.1",
+  "img": "imagemagick-7.1.1-linux-x64.img",
+  "upload_path": "ply/imagemagick/imagemagick-7.1.1-linux-x64.img",
+  "bytes": 13635584,
+  "pushed_at": "2026-08-25T19:43:57.295Z"
+ },
+ "manual:python3-3.13.5-linux-x64.img": {
+  "name": "python3",
+  "version": "3.13.5",
+  "img": "python3-3.13.5-linux-x64.img",
+  "upload_path": "ply/python3/python3-3.13.5-linux-x64.img",
+  "bytes": 6287360,
+  "pushed_at": "2026-08-25T19:44:00.272Z"
+ },
+ "manual:jq-1.7.1-linux-x64.img": {
+  "name": "jq",
+  "version": "1.7.1",
+  "img": "jq-1.7.1-linux-x64.img",
+  "upload_path": "ply/jq/jq-1.7.1-linux-x64.img",
+  "bytes": 454656,
+  "pushed_at": "2026-08-25T19:44:01.831Z"
+ }
+}

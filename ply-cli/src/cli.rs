@@ -176,9 +176,14 @@ pub struct AddArgs {
 
 #[derive(Args)]
 pub struct RunArgs {
-    /// Image file to run
+    /// Image to run: a .img path, or `docker://name:tag` to import an OCI
+    /// image on demand (cached after the first run)
     #[arg(value_name = "IMAGE")]
-    pub image: PathBuf,
+    pub image: String,
+
+    /// Re-import a `docker://` reference even if it is already cached
+    #[arg(long)]
+    pub pull: bool,
 
     /// Number of identical instances to start
     #[arg(long, value_name = "N", default_value_t = 1)]

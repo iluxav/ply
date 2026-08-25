@@ -12,6 +12,75 @@
 
 ---
 
+## Part 0 — Urgent: the glibc lane
+
+> **Status 2026-08-25:** decided — **Debian (trixie) becomes the default
+> lane**, Alpine freezes (append-only). Wolfi rejected (vendor-curated free
+> repo). `deb2pkg` implemented (ELF-closure walk, not Depends) + debian base
+> minted + proof kegs verified rootless: redis 8.0.2 → PONG, postgres 17.10
+> → `select version()`, node 24.6.0 loads a host-built glibc `.node` addon.
+> Spec + amendments: `docs/superpowers/specs/2026-08-25-deb2pkg-design.md`.
+
+Everything ply can run today is musl, because `alpine` is the only base
+package and every other package is `apk2pkg`-derived from it. For most
+ecosystems that is invisible. For **Node it is a wall**: npm's prebuilt
+binaries target glibc first, musl is the afterthought, and some packages ship
+no musl build at all.
+
+The failure is worse than a wall, because it is silent. A `node_modules`
+built on a GitHub Actions runner (glibc) copied onto an alpine base loads
+fine right up until something actually `require`s a native addon — then
+`Error: … .so: not found`, with nothing pointing at libc.
+
+**plybox.sh is living this right now**: `.next/standalone` ships
+`@img/sharp-linux-x64` (glibc) onto an alpine base. It has not broken only
+because Next lazily requires sharp when it optimizes an image at runtime, and
+ours are prerendered. The first runtime optimization throws.
+
+This is an adoption tax paid before anyone has formed an opinion about ply —
+"my CI output doesn't run" is where they stop reading.
+
+### 0.1 A glibc base package
+
+`scripts/build-base.sh` already has the shape: download a verified rootfs
+tarball, write a `base = true` manifest, `ply build`. The Debian variant is
+that script with a different URL, a different checksum source, and
+`provides_abi = "linux-x64-gnu"`.
+
+- [x] `scripts/build-base-debian.sh` — trixie-slim debuerreotype rootfs, sha256-verified against its OCI manifest; x64 built (25.7 MiB), arm64 is the same command
+- [ ] Push `debian` as a base package alongside `alpine`
+- [ ] Confirm the resolver's ABI guard (`resolve.rs:287`) gives a clear message on a mixed graph — it already refuses; check the wording names libc, not just the ABI string
+
+### 0.2 A glibc `node` package
+
+Easier than the Alpine path: nodejs.org publishes official `linux-x64` /
+`linux-arm64` tarballs, which are glibc and bundle what they need. No
+`apk2pkg`, no dependency-closure walk — tarball → `/opt/node-<version>/` →
+`[layer] path`.
+
+- [x] Node keg from the official nodejs.org tarball, `provides_abi = "linux-x64-gnu"` — verified loading a glibc lightningcss addon on the debian base. (Debian's own `nodejs` deb is relocation-hostile: externalized builtins at compiled-in absolute paths — don't convert it, mint from the tarball.)
+- [ ] Publish the current LTS and current lines for both arches
+- [ ] `ply search node` should make the two lanes legible — musl vs glibc — rather than looking like duplicate versions
+
+### 0.3 Stop shipping the wrong libc silently
+
+Independent of the lane, and worth doing first because it is an afternoon:
+
+- [ ] `ply build` warns when it packs `*-linux-x64-gnu` or a glibc `.node` onto a musl base (and the reverse). Cheap check over the packed tree; turns a runtime `.so not found` into one sentence at build time
+- [ ] Same check in the `--watch`/dev path once that exists, where it will fire far more often
+- [ ] Fix plybox.sh's own sharp: `npm ci --os=linux --libc=musl --cpu=x64` in `deploy-web.yml`, or move to the glibc base once 0.1/0.2 land
+
+**Gate:** a Node app with native dependencies, built on an ordinary glibc CI
+runner with an unmodified `npm ci`, runs on ply without flags or ceremony.
+
+**Today's workaround, until then:** `npm ci --os=linux --libc=musl --cpu=x64`.
+npm resolves platform-specific optional deps against those values instead of
+the host's. Works for the modern prebuilt pattern (sharp, swc, lightningcss,
+tailwind-oxide all publish musl twins); does nothing for packages that
+compile at install time via node-gyp with no prebuilds.
+
+---
+
 ## Part 1 — Entry ticket
 
 Not differentiating. You cannot compete without them, and nobody will notice
