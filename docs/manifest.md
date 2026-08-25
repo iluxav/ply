@@ -15,6 +15,9 @@ name = "myapp"                    # required; may not contain "-<digit>"
 version = "1.2.0"                 # semver; part of the image filename
 entrypoint = ["node", "server.js"]
 user = "appuser:1000:1000"        # optional: run as name:uid:gid
+workdir = "/opt/myapp"            # optional: cwd before exec (default: the app prefix)
+stop_signal = "SIGTERM"           # optional: how to ask it to shut down
+capabilities = []                 # optional: keep nothing (the default) — see below
 base = "alpine@3.20"              # exactly one base per app; or
                                   # { name = "alpine", version = "3.20", source = "alias" }
 
@@ -67,6 +70,34 @@ package that owns `/` (FHS, libc, `/bin/sh`) — `"name@range"`, or
 fetches exactly like a dependency. In a base package's own manifest,
 `base = true` marks it as one instead.
 
+**`workdir`** — absolute path to `chdir` into before exec. Omit it and ply
+uses the app's own prefix (`/opt/<name>`), which is right for anything ply
+built. It exists mostly for [imported images](/docs/docker/), which carry a
+`WORKDIR` their entrypoints depend on: start redis anywhere but `/data` and
+its `find . -exec chown redis {} +` walks the entire filesystem.
+
+**`stop_signal`** — the signal that means "shut down", default `SIGTERM`.
+Not every daemon agrees: nginx drains on `SIGQUIT` and httpd on `SIGWINCH`,
+and both would otherwise be killed mid-request when ply's patience runs
+out. Case-insensitive, `SIG` optional — `quit`, `SIGQUIT` and `sigquit` are
+the same request.
+
+**`capabilities`** — what the app keeps after rights stripping. Omitting it
+means **nothing**, which is the right answer for every package ply builds:
+a native keg never chowns or setuids, because `user` does that from the
+parent before stripping. Two other forms exist for the cases that need
+them:
+
+```toml
+capabilities = "oci"                          # Docker's default fourteen
+capabilities = ["chown", "net_bind_service"]  # exactly these
+```
+
+`"oci"` is what `ply import` writes, because official images assume
+Docker's posture. Names are case-insensitive and the `CAP_` prefix is
+optional; a typo fails at `ply build`, not at 3am. See
+[Security & rootless](/docs/security/).
+
 **`[dependencies]`** — the key IS the package name. String values are
 version ranges against the `default` source; table values pick a source
 alias. Version syntax: `"22"` = any 22.x.y, `"6.1"` = any 6.1.x,
@@ -80,7 +111,8 @@ nested table in TOML.
 
 **`[ports]`** — documentation the tooling reads: `ply lb`/`ply proxy` emit
 backends for these ports, and `[health]` checks them. Never a host port
-binding — every instance has its own IP.
+binding — that is `--publish`, deliberately a run-time decision rather than
+a manifest one.
 
 **`[volumes]`** — see [Volumes & data](/docs/volumes/). Per-instance by
 default; `scope = "shared"` and `ephemeral = true` are the two modifiers.

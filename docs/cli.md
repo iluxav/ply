@@ -49,10 +49,40 @@ Pure function — wire it into CI.
 
 ```sh
 ply run IMAGE [--scale N] [-e K=V]… [--env-file F] [--link HOST:CONTAINER]
-             [--publish PORT[:INSTANCE_PORT]]   # parent binds the host port, L4-balances the pool
-             [--after APP]… [--after-timeout 60s]   # start once APP passes its [health] gate
+             [--publish [ADDR:]PORT[:INSTANCE_PORT]]  # parent binds it, L4-balances the pool
+             [--after APP]… [--after-timeout 60s]     # wait for APP, and learn its address
+             [--privileged]                           # keep everything; debugging only
 ```
 Foreground, signals work, exit code propagates.
+
+**`--publish`** — `ADDR` is `internal`, `public` (the default) or an IPv4
+address:
+
+```sh
+ply run api.img --scale 4 --publish 8080          # 0.0.0.0:8080
+ply run db.img  --publish internal:5432           # only other ply apps on this host
+ply run api.img --publish 127.0.0.1:8080:3000     # exactly that address
+```
+
+Reach for `internal` for databases and internal APIs — a bare
+`--publish 5432` puts postgres on every interface.
+
+**`--after`** — waits for `APP`'s `[health]` gate, then injects where to
+reach it:
+
+```sh
+ply run web.img --after api --after db
+#   API_ADDR=10.77.0.1:8080   API_HOST=…   API_PORT=…
+#   DB_ADDR=…                 DB_HOST=…    DB_PORT=…
+```
+
+ply computes the address, so it is right rootless (loopback) and rootful
+(bridge gateway) without the author guessing. An explicit `[env]` or `-e`
+wins; an unpublished dependency injects nothing.
+
+**`--privileged`** — skips rights stripping entirely: capabilities kept,
+`no_new_privs` off, seccomp off. For debugging and triaging imports. Use
+`[package] capabilities` for anything you intend to keep running.
 
 ```sh
 ply ps [--json]
@@ -91,7 +121,9 @@ ply systemd IMAGE [--scale N] [--publish P[:IP]] [-e K=V] [--env-file F]
                                   # emit a unit file (supervision = systemd)
 ply proxy [--backend caddy]       # emit reverse-proxy config for all apps
 ply lb APP [--format nginx]       # emit one app's LB backend pool
-ply setup                         # one-time host prep (idempotent, sudo)
+ply setup [--unprivileged-ports [PORT]]
+                                  # one-time host prep (idempotent, sudo);
+                                  # also reports subuid/newuidmap readiness
 ply sync                          # pre-fetch the host policy's packages
 ```
 

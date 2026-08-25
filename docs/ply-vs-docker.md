@@ -33,7 +33,7 @@ An honest comparison. Short version: **Docker is a universal container platform;
 
 **Shared dependencies, smaller apps.** A Next.js app image is ~15 MiB because node and alpine are *references*, not copies; ten Node apps on one host share one node keg in the store. Docker layer sharing achieves some of this but only when images happen to share base-layer history.
 
-**Security posture by default.** All capabilities dropped (Docker keeps ~14 by default, including SETUID/CHOWN/NET_RAW history), `no_new_privs`, seccomp, `pids.max` always set (fork bombs contained with zero config), noexec scratch. Weakening would be an explicit, manifest-visible act.
+**Security posture by default.** All capabilities dropped (Docker keeps ~14 by default, including SETUID/CHOWN/NET_RAW), `no_new_privs`, seccomp, `pids.max` always set (fork bombs contained with zero config), noexec scratch. Weakening is an explicit, manifest-visible act — `[package] capabilities`, which is exactly how an imported Docker image gets Docker's fourteen while your own packages keep none.
 
 **Cheap substitution → cheap rollouts.** Because assembly happens at run and parts are content-addressed, swapping a runtime under 50 apps is 50 metadata edits and one new store file — not 50 image rebuilds. Canary deploys fall out free: run old and new images side by side (each instance has its own IP), `ply lb` emits the mixed backend set. Strict blue-green (atomic traffic flip) works today via bring-up-verify-switch but has no first-class primitive yet.
 
@@ -43,7 +43,7 @@ An honest comparison. Short version: **Docker is a universal container platform;
 
 ## Where Docker wins
 
-**The ecosystem — and it's not close.** Millions of prebuilt images; virtually every README on earth says `docker run`. ply's answer is bridges (`ply import docker://`, `apk2pkg`, `ply craft`), which are good but one-way and younger. If your workflow is "grab postgres, redis, grafana off the shelf," Docker is simply where those shelves are.
+**The ecosystem — and it's not close.** Millions of prebuilt images; virtually every README on earth says `docker run`. ply's answer is bridges (`ply import docker://`, `apk2pkg`, `ply craft`) — one-way, and younger. The gap is narrower than it was: `ply import` runs [21/21 of the mainstream images](/docs/docker/) tested — postgres, mysql, mariadb, mongo, redis, memcached, rabbitmq, nginx, httpd, caddy, traefik and six language runtimes — with their entrypoints, users and stop signals intact. But an import is a fat snapshot rather than a composition, and "every image" is a far bigger set than "the twenty-one anyone benchmarks".
 
 **Maturity and battle-testing.** Fifteen years of production hardening, CVE response process, an enormous body of operational knowledge, answers on every search page. ply is pre-1.0 with one design team's test coverage.
 
@@ -68,4 +68,4 @@ An honest comparison. Short version: **Docker is a universal container platform;
 
 **Choose ply when:** you have 1–5 Linux hosts and resent the weight; deploys should be `scp` + run; you want deterministic, auditable artifacts with a lockfile; CI needs hermetic sandboxes that start in tens of milliseconds; you're an appliance/edge vendor where a daemon is unacceptable; you're sandboxing thousands of cheap throwaway executions.
 
-**Use both:** `ply import docker://` exists precisely so Docker's ecosystem feeds ply's runtime. Build with the world's images; run with a single static binary.
+**Use both:** `ply import docker://` exists precisely so Docker's ecosystem feeds ply's runtime — off-the-shelf infrastructure imported, your own apps on the native path. Run the world's images with a single static binary and no daemon.

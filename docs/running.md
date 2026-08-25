@@ -33,8 +33,16 @@ ply maintains `<app>.ply` names in the host's `/etc/hosts`, mapping to
 instance IPs:
 
 ```sh
-curl http://myapp.ply:3000        # round-robins across instances via DNS
+curl http://myapp.ply:3000        # rootful only
 ```
+
+`.ply` names have two limits worth knowing before building on them: they
+are **rootful only** (rootless instances share the host network and get no
+entries), and each instance copies `/etc/hosts` at launch, so a rolling
+deploy of one app leaves its callers holding the old IPs. For app-to-app
+traffic prefer `--publish` + `--after` below — the publishing parent owns
+one stable address and swaps the pool behind it, so nothing downstream goes
+stale.
 
 Instances reach the internet through the host: each rootful run enables
 IPv4 forwarding and a source-NAT rule for `10.77.0.0/16` (nft, or iptables
@@ -80,6 +88,23 @@ The two modes differ in who picks the instance-side port:
   (`--publish 80:3000` for an app serving :3000), or align the app with
   `-e PORT=` to match a bare `--publish`.
 
+### Who can reach it
+
+`--publish 5432` binds `0.0.0.0` — on a public host that is your database
+on the internet. An address prefix says otherwise:
+
+| spec | binds |
+|---|---|
+| `--publish 5432` | `0.0.0.0` (default) |
+| `--publish public:5432` | `0.0.0.0`, said out loud |
+| `--publish internal:5432` | loopback rootless / bridge gateway rootful |
+| `--publish 127.0.0.1:8080:3000` | exactly that address |
+
+`internal` is the one to reach for whenever the consumer is another app on
+the same host — a database, a queue, an internal API. It resolves to
+whatever that mode can actually reach, so the same command is correct
+rootless and rootful.
+
 The line it never crosses: TCP only. Hostnames, TLS, HTTP — that's the
 edge's job (`ply proxy`); publishing is port exposure, not a proxy.
 
@@ -101,6 +126,31 @@ after `--after-timeout` (default `60s`) it gives up with a non-zero exit.
 The same flag goes into a unit: `ply systemd --after pgdb pgapp.img` emits
 `After=`/`Wants=ply-pgdb.service` so systemd orders the start and ply gates
 on readiness.
+
+### …and where to find it
+
+`--after` already knows the edge, so it also answers the next question. If
+the dependency is published, its address arrives as environment:
+
+```sh
+ply run pgdb.img --publish internal:5432 &
+ply run api.img --scale 4 --publish internal:3000 --after pgdb &
+ply run web.img --scale 2 --publish 8080 --after api
+#   web sees:  API_ADDR=127.0.0.1:3000   API_HOST=127.0.0.1   API_PORT=3000
+#   api sees:  PGDB_ADDR=…               PGDB_HOST=…          PGDB_PORT=…
+```
+
+That is the whole multi-service story: three apps, no stack file, no DNS,
+no service registry. Each address points at the dependency's **parent**,
+which balances across its instances and drains them on deploy — so `web`
+keeps working while `api` rolls, and never learns an instance IP that can
+go stale.
+
+The variable name is the app name upcased, with anything non-alphanumeric
+becoming `_` (`api-server` → `API_SERVER_ADDR`). ply computes the host part
+per mode, so you never hardcode loopback-vs-bridge. An explicit `[env]` or
+`-e` wins over the injected value, and an unpublished dependency injects
+nothing rather than inventing an address that fails further away.
 
 ## Environment
 

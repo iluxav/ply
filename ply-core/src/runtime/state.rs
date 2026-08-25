@@ -26,6 +26,14 @@ pub struct InstanceState {
     /// probes. Absent in state written by older parents (alive is the bar).
     #[serde(default)]
     pub health_port: Option<u16>,
+    /// `--publish`: the host port this app's run parent listens on, and the
+    /// address a depending app should dial. Every instance of an app records
+    /// the same pair — it belongs to the parent, not the instance, and this
+    /// is the only place a *reader* can find it. None = not published.
+    #[serde(default)]
+    pub published_port: Option<u16>,
+    #[serde(default)]
+    pub published_addr: Option<String>,
 }
 
 fn state_dir() -> PathBuf {

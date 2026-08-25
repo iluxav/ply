@@ -49,9 +49,10 @@ pub struct RunOptions {
 /// Live wiring for a published pool, threaded through instance launches.
 struct PublishWiring {
     pool: crate::runtime::publish::Pool,
-    /// Rootful backend port (instances serve it on their bridge IPs).
-    /// Rootless instances get an allocated loopback port instead.
-    instance_port: u16,
+    /// The parsed spec: the host port and bind scope the parent claimed, plus
+    /// the port instances serve on (rootful: on their bridge IPs; rootless:
+    /// an allocated loopback port per instance instead).
+    spec: crate::runtime::publish::Publish,
 }
 
 pub fn run(opts: &RunOptions) -> Result<i32> {
@@ -119,12 +120,13 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
     // pool map follows the instance lifecycle via launch/Drop.
     let publishing = match opts.publish {
         Some(spec) => {
-            let listener = crate::runtime::publish::bind(spec.host_port)?;
+            let listener = crate::runtime::publish::bind(spec, rootless)?;
             let pool = crate::runtime::publish::Pool::new();
             let serve_pool = pool.clone();
             std::thread::spawn(move || crate::runtime::publish::serve(listener, serve_pool));
             eprintln!(
-                "ply: publishing 0.0.0.0:{} → {} pool{}",
+                "ply: publishing {}:{} → {} pool{}",
+                spec.scope.bind_addr(rootless),
                 spec.host_port,
                 ctx.manifest.package.name,
                 if rootless {
@@ -133,10 +135,7 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                     ""
                 }
             );
-            Some(PublishWiring {
-                pool,
-                instance_port: spec.instance_port,
-            })
+            Some(PublishWiring { pool, spec })
         }
         None => None,
     };
@@ -153,6 +152,17 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
         }
         let _waiting = crate::runtime::after::WaitingMarker::write(me, &opts.after)?;
         crate::runtime::after::wait_for(&opts.after, opts.after_timeout)?;
+
+        // Resolved only now: the dependency is up, so its parent has recorded
+        // where to reach it. Never overrides a value the author set — an
+        // explicit [env] or -e wins, so this can only add.
+        for (key, value) in discovery_env(&opts.after) {
+            if ctx.env.iter().any(|(k, _)| *k == key) {
+                continue;
+            }
+            eprintln!("ply: {key}={value}");
+            ctx.env.push((key, value));
+        }
         eprintln!("ply: starting {me}");
     }
 
@@ -908,6 +918,14 @@ fn launch_instance(
         started,
         restarts,
         health_port: manifest.health.as_ref().and_then(|h| h.port),
+        published_port: publish.map(|w| w.spec.host_port),
+        published_addr: publish.map(|w| {
+            format!(
+                "{}:{}",
+                w.spec.scope.connect_addr(rootless),
+                w.spec.host_port
+            )
+        }),
     };
     state.save()?;
     if !rootless {
@@ -923,7 +941,7 @@ fn launch_instance(
     let pool = publish.map(|wiring| {
         let backend = match injected_port {
             Some(port) => std::net::SocketAddr::from(([127, 0, 0, 1], port)),
-            None => std::net::SocketAddr::from((ip, wiring.instance_port)),
+            None => std::net::SocketAddr::from((ip, wiring.spec.instance_port)),
         };
         wiring.pool.insert(n, backend);
         wiring.pool.clone()
@@ -937,6 +955,51 @@ fn launch_instance(
         guard,
         pool,
     })
+}
+
+/// `api-server` -> `API_SERVER`: the env-var stem for a dependency's address.
+pub fn env_stem(app: &str) -> String {
+    app.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_uppercase()
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+/// Where a depending app should dial each of its `--after` apps.
+///
+/// `--after` already declares the edge and gates on health, so it is also the
+/// honest place to answer "and where is it?". The address comes from the
+/// dependency's own run parent (recorded in its instance state), so it is
+/// correct per mode — loopback rootless, bridge gateway rootful — instead of
+/// being guessed by the author and wrong in the other mode.
+///
+/// Nothing is injected for an unpublished dependency: it has no address to
+/// give, and inventing one would fail later and further away.
+pub fn discovery_env(after: &[String]) -> Vec<(String, String)> {
+    let states = state::list().unwrap_or_default();
+    let mut out = Vec::new();
+    for dep in after {
+        let Some(found) = states
+            .iter()
+            .find(|s| &s.app == dep && s.alive() && s.published_addr.is_some())
+        else {
+            continue;
+        };
+        let addr = found.published_addr.clone().expect("filtered above");
+        let stem = env_stem(dep);
+        let host = addr.rsplit_once(':').map(|(h, _)| h.to_string());
+        out.push((format!("{stem}_ADDR"), addr));
+        if let (Some(host), Some(port)) = (host, found.published_port) {
+            out.push((format!("{stem}_HOST"), host));
+            out.push((format!("{stem}_PORT"), port.to_string()));
+        }
+    }
+    out
 }
 
 /// A `/etc/subuid` or `/etc/subgid` delegation: `<name>:<start>:<count>`.
@@ -1097,6 +1160,18 @@ pub fn subid_gap() -> Option<&'static str> {
         );
     }
     None
+}
+
+#[cfg(test)]
+mod discovery_tests {
+    use super::*;
+
+    #[test]
+    fn env_stems_are_shell_safe() {
+        assert_eq!(env_stem("api-server"), "API_SERVER");
+        assert_eq!(env_stem("postgres"), "POSTGRES");
+        assert_eq!(env_stem("my.app_1"), "MY_APP_1");
+    }
 }
 
 #[cfg(test)]

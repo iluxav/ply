@@ -8,42 +8,106 @@
 //! this is port *exposure*, not a proxy).
 
 use std::collections::BTreeMap;
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::error::{Error, Result};
 
+/// Who can reach a published port.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BindScope {
+    /// `0.0.0.0` — anyone who can reach this host. What a public web port
+    /// wants, and what a database never does.
+    Public,
+    /// Other ply apps on this host only: loopback rootless (instances share
+    /// the host netns), the bridge gateway rootful (instances reach the host
+    /// there). Same address the depending app is told to use.
+    Internal,
+    /// An explicit address, for anything the two presets do not cover.
+    Addr(Ipv4Addr),
+}
+
+impl BindScope {
+    /// The address to bind, once rootless-vs-rootful is known.
+    pub fn bind_addr(&self, rootless: bool) -> Ipv4Addr {
+        match self {
+            BindScope::Public => Ipv4Addr::UNSPECIFIED,
+            BindScope::Internal if rootless => Ipv4Addr::LOCALHOST,
+            BindScope::Internal => crate::runtime::network::GATEWAY,
+            BindScope::Addr(a) => *a,
+        }
+    }
+
+    /// The address a *depending* app should connect to. Identical to the bind
+    /// address except for Public, which binds the wildcard but is reached at a
+    /// concrete one.
+    pub fn connect_addr(&self, rootless: bool) -> Ipv4Addr {
+        match self {
+            BindScope::Public if rootless => Ipv4Addr::LOCALHOST,
+            BindScope::Public => crate::runtime::network::GATEWAY,
+            other => other.bind_addr(rootless),
+        }
+    }
+}
+
 /// Parsed `--publish` spec.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Publish {
-    /// Port the parent binds on the host (0.0.0.0).
+    /// Port the parent binds on the host.
     pub host_port: u16,
     /// Port instances serve on (rootful: on their bridge IP; rootless: the
     /// parent allocates a distinct loopback port per instance instead).
     pub instance_port: u16,
+    /// Who may reach `host_port`. Defaults to Public for backwards
+    /// compatibility — `--publish internal:5432` is how a database opts out
+    /// of being on the internet.
+    pub scope: BindScope,
 }
 
-/// `"3100"` = same port both sides; `"80:3100"` = host:instance.
+/// `PORT` | `HOST_PORT:INSTANCE_PORT` | `ADDR:PORT` | `ADDR:HOST_PORT:INSTANCE_PORT`
+/// where ADDR is `internal`, `public`, or an IPv4 address. A leading segment
+/// that parses as a port number is a port, never an address — so the existing
+/// `80:3100` grammar is untouched.
 pub fn parse_publish(s: &str) -> Result<Publish> {
     let bad = || {
         Error::Runtime(format!(
-            "--publish `{s}`: expected PORT or HOST_PORT:INSTANCE_PORT, e.g. 3100 or 80:3100"
+            "--publish `{s}`: expected PORT, HOST_PORT:INSTANCE_PORT, or ADDR:PORT[:INSTANCE_PORT] \
+             where ADDR is `internal`, `public` or an IPv4 address \
+             (e.g. 3100, 80:3100, internal:5432, 127.0.0.1:8080:3000)"
         ))
     };
     let parse_port = |p: &str| p.parse::<u16>().ok().filter(|p| *p != 0).ok_or_else(bad);
-    match s.split_once(':') {
-        None => {
-            let port = parse_port(s)?;
+    let parse_scope = |a: &str| match a {
+        "internal" => Some(BindScope::Internal),
+        "public" => Some(BindScope::Public),
+        other => other.parse::<Ipv4Addr>().ok().map(BindScope::Addr),
+    };
+
+    let parts: Vec<&str> = s.split(':').collect();
+    // An address may only lead, and only when it is not itself a port.
+    let (scope, ports): (BindScope, &[&str]) = match parts.first() {
+        Some(first) if first.parse::<u16>().is_err() => {
+            (parse_scope(first).ok_or_else(bad)?, &parts[1..])
+        }
+        _ => (BindScope::Public, &parts[..]),
+    };
+
+    match ports {
+        [port] => {
+            let port = parse_port(port)?;
             Ok(Publish {
                 host_port: port,
                 instance_port: port,
+                scope,
             })
         }
-        Some((host, instance)) => Ok(Publish {
+        [host, instance] => Ok(Publish {
             host_port: parse_port(host)?,
             instance_port: parse_port(instance)?,
+            scope,
         }),
+        _ => Err(bad()),
     }
 }
 
@@ -98,10 +162,12 @@ pub fn allocate_loopback_port() -> Result<u16> {
 
 /// Bind the published host port. Separate from `serve` so the claim fails
 /// fast (before any instance starts) with a clear message.
-pub fn bind(host_port: u16) -> Result<TcpListener> {
-    TcpListener::bind(("0.0.0.0", host_port)).map_err(|e| {
+pub fn bind(spec: Publish, rootless: bool) -> Result<TcpListener> {
+    let addr = spec.scope.bind_addr(rootless);
+    let port = spec.host_port;
+    TcpListener::bind((addr, port)).map_err(|e| {
         Error::Runtime(format!(
-            "--publish {host_port}: cannot bind 0.0.0.0:{host_port}: {e} — published ports are real host ports (one owner per port)"
+            "--publish {port}: cannot bind {addr}:{port}: {e} — published ports are real host ports (one owner per port)"
         ))
     })
 }
@@ -152,27 +218,6 @@ mod tests {
     use std::io::{Read, Write};
 
     #[test]
-    fn parses_publish_specs() {
-        assert_eq!(
-            parse_publish("3100").unwrap(),
-            Publish {
-                host_port: 3100,
-                instance_port: 3100
-            }
-        );
-        assert_eq!(
-            parse_publish("80:3100").unwrap(),
-            Publish {
-                host_port: 80,
-                instance_port: 3100
-            }
-        );
-        assert!(parse_publish("0").is_err());
-        assert!(parse_publish("nope").is_err());
-        assert!(parse_publish("80:").is_err());
-    }
-
-    #[test]
     fn rotation_starts_one_later_each_call() {
         let pool = Pool::new();
         let a: SocketAddr = "10.0.0.1:1".parse().unwrap();
@@ -214,6 +259,91 @@ mod tests {
         let mut out = Vec::new();
         c.read_to_end(&mut out).unwrap();
         out
+    }
+
+    #[test]
+    fn the_existing_port_grammar_is_untouched() {
+        assert_eq!(
+            parse_publish("3100").unwrap(),
+            Publish {
+                host_port: 3100,
+                instance_port: 3100,
+                scope: BindScope::Public
+            }
+        );
+        assert_eq!(
+            parse_publish("80:3100").unwrap(),
+            Publish {
+                host_port: 80,
+                instance_port: 3100,
+                scope: BindScope::Public
+            }
+        );
+    }
+
+    #[test]
+    fn a_database_can_opt_out_of_the_internet() {
+        // `--publish 5432` puts postgres on 0.0.0.0. This is the way out.
+        assert_eq!(
+            parse_publish("internal:5432").unwrap(),
+            Publish {
+                host_port: 5432,
+                instance_port: 5432,
+                scope: BindScope::Internal
+            }
+        );
+        assert_eq!(
+            parse_publish("internal:5432:5432").unwrap(),
+            Publish {
+                host_port: 5432,
+                instance_port: 5432,
+                scope: BindScope::Internal
+            }
+        );
+    }
+
+    #[test]
+    fn an_explicit_address_binds_exactly_it() {
+        let p = parse_publish("127.0.0.1:8080:3000").unwrap();
+        assert_eq!(p.scope, BindScope::Addr(Ipv4Addr::LOCALHOST));
+        assert_eq!((p.host_port, p.instance_port), (8080, 3000));
+        assert_eq!(parse_publish("public:80").unwrap().scope, BindScope::Public);
+    }
+
+    #[test]
+    fn internal_resolves_to_whatever_the_mode_can_reach() {
+        // rootless shares the host netns; rootful instances reach the host
+        // at the bridge gateway. Binding the wrong one silently isolates.
+        assert_eq!(BindScope::Internal.bind_addr(true), Ipv4Addr::LOCALHOST);
+        assert_eq!(
+            BindScope::Internal.bind_addr(false),
+            crate::runtime::network::GATEWAY
+        );
+        // Public binds the wildcard but is *reached* at a concrete address
+        assert_eq!(BindScope::Public.bind_addr(true), Ipv4Addr::UNSPECIFIED);
+        assert_eq!(BindScope::Public.connect_addr(true), Ipv4Addr::LOCALHOST);
+        assert_eq!(
+            BindScope::Public.connect_addr(false),
+            crate::runtime::network::GATEWAY
+        );
+    }
+
+    #[test]
+    fn nonsense_specs_are_refused_with_the_grammar() {
+        for bad in [
+            "0",
+            "nope",
+            "80:",
+            "internal:",
+            "internal:0",
+            "1.2.3",
+            "a:b:c",
+            "80:90:100",
+        ] {
+            assert!(parse_publish(bad).is_err(), "`{bad}` should not parse");
+        }
+        let err = parse_publish("nope").unwrap_err().to_string();
+        assert!(err.contains("internal"), "error names the new forms: {err}");
     }
 
     #[test]

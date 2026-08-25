@@ -201,12 +201,23 @@ pub struct RunArgs {
 
     /// Expose the pool on a real host port: the run parent binds it and
     /// L4-balances connections across instances (TCP only — hostnames and
-    /// TLS are the edge's job). PORT, or HOST_PORT:INSTANCE_PORT.
-    #[arg(long, value_name = "PORT[:INSTANCE_PORT]")]
+    /// TLS are the edge's job).
+    ///
+    /// PORT | HOST_PORT:INSTANCE_PORT | ADDR:PORT[:INSTANCE_PORT], where ADDR
+    /// is `internal` (reachable only by ply apps on this host), `public`
+    /// (0.0.0.0, the default) or an IPv4 address. Use `internal` for
+    /// databases and internal APIs: `--publish 5432` puts postgres on every
+    /// interface, `--publish internal:5432` does not.
+    #[arg(long, value_name = "[ADDR:]PORT[:INSTANCE_PORT]")]
     pub publish: Option<String>,
 
     /// Start only after APP is healthy (repeatable): waits for an instance
-    /// of APP to pass its [health] gate — or just to be running if it has none
+    /// of APP to pass its [health] gate — or just to be running if it has none.
+    ///
+    /// Also service discovery: if APP is published, <APP>_ADDR, <APP>_HOST and
+    /// <APP>_PORT are injected into this app's environment, pointing at APP's
+    /// load-balanced endpoint (correct for rootless and rootful alike). An
+    /// explicit [env] entry or -e always wins.
     #[arg(long, value_name = "APP")]
     pub after: Vec<String>,
 
