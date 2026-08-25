@@ -1,0 +1,44 @@
+# redis — first-class runnable image for `ply run redis@8`.
+#
+#   ply run redis@8                      # dev: no auth, port 6379
+#   ply run redis@8 -e REDIS_PASSWORD=s3cret -e REDIS_PORT=6380
+#
+#   REDIS_PASSWORD   set → requirepass
+#   REDIS_PORT       listen port (default: 6379)
+#   REDIS_BIND       bind address (default: * -::*; use 127.0.0.1 to keep a
+#                    rootless instance off the LAN)
+#   REDIS_ARGS       extra redis-server arguments, word-split
+#
+# Data persists in the `data` volume (RDB snapshots in /data).
+
+[package]
+name = "redis"
+version = "8.0.2"
+user = "redis:100:100"
+entrypoint = ["/bin/sh", "-c", """
+set -e
+AUTH=
+[ -n "$REDIS_PASSWORD" ] && AUTH="--requirepass $REDIS_PASSWORD"
+exec redis-server --port "${REDIS_PORT:-6379}" --bind ${REDIS_BIND:-* -::*} \
+  --protected-mode no --dir /data $AUTH $REDIS_ARGS
+"""]
+base = "debian@13"
+
+[dependencies]
+redis = "8"
+
+[volumes]
+data = { path = "/data" }
+
+[ports]
+db = 6379
+
+[health]
+port = 6379
+grace = "15s"
+
+[restart]
+policy = "on-failure"
+
+[sources]
+default = "https://registry.plybox.sh/ply/{package}"

@@ -20,6 +20,13 @@
 > minted + proof kegs verified rootless: redis 8.0.2 → PONG, postgres 17.10
 > → `select version()`, node 24.6.0 loads a host-built glibc `.node` addon.
 > Spec + amendments: `docs/superpowers/specs/2026-08-25-deb2pkg-design.md`.
+>
+> **Consumer DX (2026-08-25 pm):** `ply run <name[@ver]>` resolves runnable
+> apps from the registry's `apps/` namespace (kegs stay in `ply/`) — newest
+> matching version, fetched + cached; `docker://` demoted to escape hatch.
+> First-class `postgres` + `redis` live in `services/`, speaking the
+> docker-library env contract (POSTGRES_PASSWORD/USER/DB, REDIS_PASSWORD/…).
+> `ply build --arch x64|arm64` cross-builds with per-arch dep resolution.
 
 Everything ply can run today is musl, because `alpine` is the only base
 package and every other package is `apk2pkg`-derived from it. For most

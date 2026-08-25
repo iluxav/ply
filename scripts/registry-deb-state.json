@@ -158,5 +158,37 @@
   "upload_path": "iluxav/mytools/mytools-8.14.1-linux-arm64.img",
   "bytes": 5980160,
   "pushed_at": "2026-08-25T20:11:52.751Z"
+ },
+ "manual:apps/postgres/postgres-17.10.0-linux-x64.img": {
+  "name": "postgres",
+  "version": "17.10.0",
+  "img": "postgres-17.10.0-linux-x64.img",
+  "upload_path": "apps/postgres/postgres-17.10.0-linux-x64.img",
+  "bytes": 4096,
+  "pushed_at": "2026-08-25T20:43:55.367Z"
+ },
+ "manual:apps/postgres/postgres-17.10.0-linux-arm64.img": {
+  "name": "postgres",
+  "version": "17.10.0",
+  "img": "postgres-17.10.0-linux-arm64.img",
+  "upload_path": "apps/postgres/postgres-17.10.0-linux-arm64.img",
+  "bytes": 4096,
+  "pushed_at": "2026-08-25T20:43:56.728Z"
+ },
+ "manual:apps/redis/redis-8.0.2-linux-x64.img": {
+  "name": "redis",
+  "version": "8.0.2",
+  "img": "redis-8.0.2-linux-x64.img",
+  "upload_path": "apps/redis/redis-8.0.2-linux-x64.img",
+  "bytes": 4096,
+  "pushed_at": "2026-08-25T20:43:58.101Z"
+ },
+ "manual:apps/redis/redis-8.0.2-linux-arm64.img": {
+  "name": "redis",
+  "version": "8.0.2",
+  "img": "redis-8.0.2-linux-arm64.img",
+  "upload_path": "apps/redis/redis-8.0.2-linux-arm64.img",
+  "bytes": 4096,
+  "pushed_at": "2026-08-25T20:43:59.589Z"
  }
 }

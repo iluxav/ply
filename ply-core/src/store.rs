@@ -104,6 +104,18 @@ impl Store {
             Err(_) if dest.exists() => {
                 let _ = std::fs::remove_dir_all(&staging);
             }
+            Err(_) if dir.is_dir() => {
+                // The entry exists but holds no pkg.img — extraction-only,
+                // left by extracted_rootfs() when the same bytes first
+                // arrived as a plain file path. Claim just the image file.
+                let moved = std::fs::rename(&staged, &dest);
+                let _ = std::fs::remove_dir_all(&staging);
+                match moved {
+                    Ok(()) => {}
+                    Err(_) if dest.exists() => {} // concurrent winner
+                    Err(source) => return Err(Error::Io { path: dest, source }),
+                }
+            }
             Err(source) => {
                 let _ = std::fs::remove_dir_all(&staging);
                 return Err(Error::Io { path: dir, source });
@@ -176,5 +188,29 @@ mod tests {
             .filter(|n| n.starts_with(".tmp-"))
             .collect();
         assert!(litter.is_empty(), "staging litter: {litter:?}");
+    }
+
+    /// A digest dir can pre-exist WITHOUT pkg.img: extracted_rootfs() creates
+    /// `<digest>/rootfs` when the same bytes first arrived via a plain file
+    /// path (never inserted). insert() must claim the image file into that
+    /// entry instead of failing ENOTEMPTY on the dir rename.
+    #[test]
+    fn insert_into_extraction_only_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("store");
+        let digest = "sha256:test-digest";
+        let entry = root.join(digest);
+        std::fs::create_dir_all(entry.join("rootfs/usr/bin")).unwrap();
+        std::fs::write(entry.join(".rootfs-ok"), b"").unwrap();
+
+        let src = tmp.path().join("src");
+        std::fs::write(&src, b"image bytes").unwrap();
+        let store = Store::at(root);
+        let path = store.insert(&src, digest).expect("claim the file slot");
+        assert_eq!(std::fs::read(&path).unwrap(), b"image bytes");
+        // the extraction survives alongside the image
+        assert!(entry.join(".rootfs-ok").exists());
+        assert!(entry.join("rootfs/usr/bin").is_dir());
+        assert_eq!(store.image_path(digest), Some(path));
     }
 }

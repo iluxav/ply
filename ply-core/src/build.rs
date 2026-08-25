@@ -25,6 +25,10 @@ pub struct BuildOptions {
     pub output: Option<PathBuf>,
     /// Allow plain-http sources on public hosts.
     pub allow_insecure: bool,
+    /// Target architecture (None = the host's). Cross-building resolves the
+    /// dependency graph for the target arch and names the image accordingly;
+    /// packing is arch-independent, so any host can build for any arch.
+    pub arch: Option<Arch>,
 }
 
 #[derive(Debug)]
@@ -47,13 +51,15 @@ pub fn build(opts: &BuildOptions) -> Result<BuildOutcome> {
     }
     let manifest = Manifest::load(&manifest_path)?;
 
+    let arch = opts.arch.unwrap_or_else(Arch::host);
+
     // Only apps resolve at build time. A dep package's [dependencies] are
     // metadata consumed when an app's graph is resolved.
     let lockfile = if !manifest.is_app() || manifest.dep_specs().is_empty() {
         None
     } else {
         let store = Store::open_default()?;
-        let mut resolver = Resolver::new(&manifest, &store, Arch::host(), opts.allow_insecure);
+        let mut resolver = Resolver::new(&manifest, &store, arch, opts.allow_insecure);
         let resolution = resolver.resolve()?;
         let lockfile = Lockfile {
             packages: resolution
@@ -75,7 +81,7 @@ pub fn build(opts: &BuildOptions) -> Result<BuildOutcome> {
         &manifest.package.name,
         manifest.package.version.clone(),
         Os::Linux,
-        Arch::host(),
+        arch,
     )?;
     let image_path = match &opts.output {
         Some(path) => path.clone(),
@@ -226,6 +232,7 @@ mod tests {
             dir: dir.path().to_path_buf(),
             output: None,
             allow_insecure: false,
+            arch: None,
         };
         let one = build(&opts).unwrap();
         assert!(one
@@ -258,6 +265,7 @@ mod tests {
             dir: dir.path().to_path_buf(),
             output: None,
             allow_insecure: false,
+            arch: None,
         };
         let outcome = build(&opts).unwrap();
         let listing: Vec<String> = {
@@ -307,6 +315,7 @@ mod tests {
             dir: dir.path().to_path_buf(),
             output: None,
             allow_insecure: false,
+            arch: None,
         })
         .unwrap();
         let layer = crate::image::read::read_embedded(&outcome.image_path, "/.layer.toml")

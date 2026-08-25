@@ -241,6 +241,10 @@ fn main() -> Result<()> {
                 .join(format!("{ply_name}-{ply_version}-linux-{ply_arch}.img")),
         ),
         allow_insecure: false,
+        arch: match ply_arch {
+            "arm64" => Some(ply_core::image::name::Arch::Arm64),
+            _ => Some(ply_core::image::name::Arch::X64),
+        },
     })?;
     println!(
         "built {} ({:.1} MiB)",

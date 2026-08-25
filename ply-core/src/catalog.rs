@@ -11,6 +11,10 @@ use crate::{Error, Result};
 /// The official registry, as a `[sources]` template.
 pub const OFFICIAL_SOURCE: &str = "https://registry.plybox.sh/ply/{package}";
 
+/// Where `ply run <name>` resolves names: the runnable-apps namespace.
+/// Kegs (libraries) live under `ply/`; prebuilt runnable apps under `apps/`.
+pub const OFFICIAL_RUN_SOURCE: &str = "https://registry.plybox.sh/apps/{package}";
+
 /// The file a source publishes at its prefix. Same shape the website reads.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Catalog {
@@ -262,6 +266,95 @@ impl Catalog {
     }
 }
 
+/// `postgres` / `myapp@1.2` — the reference grammar `ply run` accepts for
+/// registry lookups. Returns (name, version prefix). Anything with a path
+/// separator or an `.img` suffix is not a reference (it's a file path).
+pub fn parse_run_ref(spec: &str) -> Option<(String, Option<String>)> {
+    if spec.contains('/') || spec.ends_with(".img") {
+        return None;
+    }
+    let (name, version) = match spec.split_once('@') {
+        Some((n, v)) => (n, Some(v)),
+        None => (spec, None),
+    };
+    let name_ok = !name.is_empty()
+        && name
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+    if !name_ok {
+        return None;
+    }
+    if let Some(v) = version {
+        let parts: Vec<&str> = v.split('.').collect();
+        let v_ok = !parts.is_empty()
+            && parts.len() <= 3
+            && parts
+                .iter()
+                .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
+        if !v_ok {
+            return None;
+        }
+        return Some((name.to_string(), Some(v.to_string())));
+    }
+    Some((name.to_string(), None))
+}
+
+/// `17` matches 17.x.y, `17.10` matches 17.10.x, `17.10.0` exactly.
+fn version_matches(version: &semver::Version, want: &str) -> bool {
+    let parts: Vec<u64> = want.split('.').filter_map(|p| p.parse().ok()).collect();
+    let actual = [version.major, version.minor, version.patch];
+    parts.iter().zip(actual.iter()).all(|(w, a)| w == a)
+}
+
+/// Resolve a name reference against a source, fetch the newest matching app
+/// image into the store, and return its path.
+///
+/// Interactive semantics, deliberately not MVS: `ply run postgres` means
+/// "the latest published postgres" — locked, repeatable resolution is what
+/// `ply build` + a lockfile are for.
+pub fn fetch_app_image(
+    name: &str,
+    want: Option<&str>,
+    source_spec: &str,
+) -> Result<(PathBuf, crate::image::name::ImageName)> {
+    use crate::image::name::{Arch, ImageName, Os};
+
+    let source = Source::parse(source_spec, false)?;
+    let store = crate::store::Store::open_default()?;
+    let (os, arch) = (Os::Linux, Arch::host());
+    let mut versions = source.list_versions(name, os, arch)?;
+    if let Some(want) = want {
+        versions.retain(|v| version_matches(v, want));
+    }
+    let Some(version) = versions.into_iter().max() else {
+        return Err(Error::Source(match want {
+            Some(w) => format!(
+                "no published `{name}@{w}` for {}-{} — `ply search {name}` lists what exists",
+                os.as_str(),
+                arch.as_str()
+            ),
+            None => format!(
+                "no published `{name}` for {}-{} — `ply search {name}` lists what exists",
+                os.as_str(),
+                arch.as_str()
+            ),
+        }));
+    };
+    let image = ImageName::new(name, version, os, arch)?;
+    let (_digest, path) = source.fetch(&image, None, &store)?;
+    let manifest = crate::image::read::read_manifest(&path)?;
+    if !manifest.is_app() {
+        return Err(Error::Source(format!(
+            "`{image}` is a library package (keg), not a runnable app — add it to a ply.toml [dependencies] instead"
+        )));
+    }
+    Ok((path, image))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -474,6 +567,39 @@ mod tests {
         assert_eq!(rows[0].arches, vec!["x64", "arm64"]);
         assert_eq!(rows[0].bytes, 700);
         assert_eq!(rows[1].version, "1.6.0");
+    }
+
+    #[test]
+    fn run_ref_grammar() {
+        assert_eq!(parse_run_ref("postgres"), Some(("postgres".into(), None)));
+        assert_eq!(
+            parse_run_ref("postgres@17"),
+            Some(("postgres".into(), Some("17".into())))
+        );
+        assert_eq!(
+            parse_run_ref("myapp@1.2.3"),
+            Some(("myapp".into(), Some("1.2.3".into())))
+        );
+        // paths and image files are not references
+        assert_eq!(parse_run_ref("db/labs-db-0.1.0-linux-x64.img"), None);
+        assert_eq!(parse_run_ref("labs-db-0.1.0-linux-x64.img"), None);
+        assert_eq!(parse_run_ref("./postgres"), None);
+        // bad shapes
+        assert_eq!(parse_run_ref("Postgres"), None);
+        assert_eq!(parse_run_ref("postgres@"), None);
+        assert_eq!(parse_run_ref("postgres@17.x"), None);
+        assert_eq!(parse_run_ref("postgres@1.2.3.4"), None);
+        assert_eq!(parse_run_ref(""), None);
+    }
+
+    #[test]
+    fn version_prefix_matching() {
+        let v = semver::Version::new(17, 10, 0);
+        assert!(version_matches(&v, "17"));
+        assert!(version_matches(&v, "17.10"));
+        assert!(version_matches(&v, "17.10.0"));
+        assert!(!version_matches(&v, "17.9"));
+        assert!(!version_matches(&v, "16"));
     }
 
     #[test]

@@ -43,9 +43,27 @@ pub fn exec(args: RunArgs) -> Result<()> {
         }
     }
 
+    // A bare name (`postgres`, `myapp@1.2`) resolves against the registry:
+    // newest matching version, fetched into the store. Only when nothing by
+    // that name exists locally — an existing file always wins.
+    let image_arg =
+        if !args.image.starts_with("docker://") && !std::path::Path::new(&args.image).exists() {
+            match ply_core::catalog::parse_run_ref(&args.image) {
+                Some((name, want)) => {
+                    let (path, resolved) =
+                        ply_core::catalog::fetch_app_image(&name, want.as_deref(), &args.source)?;
+                    eprintln!("ply: resolved {} -> {resolved}", args.image);
+                    path.to_string_lossy().into_owned()
+                }
+                None => args.image.clone(),
+            }
+        } else {
+            args.image.clone()
+        };
+
     // `docker://…` becomes a local image before anything else looks at it, so
     // every downstream path (manifest read, lockfile, deploy) sees a plain file.
-    let image = ply_core::oci::ensure_local(&args.image, args.pull)?;
+    let image = ply_core::oci::ensure_local(&image_arg, args.pull)?;
 
     let code = run(&RunOptions {
         image,

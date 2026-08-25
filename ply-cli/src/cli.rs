@@ -129,6 +129,11 @@ pub struct BuildArgs {
     #[arg(short, long, value_name = "FILE")]
     pub output: Option<PathBuf>,
 
+    /// Target architecture: x64 or arm64 (default: the host's). Packing is
+    /// arch-independent; dependencies resolve for the target arch.
+    #[arg(long, value_name = "ARCH")]
+    pub arch: Option<String>,
+
     /// Allow plain-http sources on public hosts (hash still verifies content)
     #[arg(long)]
     pub insecure_source: bool,
@@ -176,10 +181,15 @@ pub struct AddArgs {
 
 #[derive(Args)]
 pub struct RunArgs {
-    /// Image to run: a .img path, or `docker://name:tag` to import an OCI
-    /// image on demand (cached after the first run)
+    /// Image to run: a .img path, a registry name (`postgres`, `myapp@1.2` —
+    /// newest matching version is fetched and cached), or `docker://name:tag`
+    /// to import an OCI image on demand (cached after the first run)
     #[arg(value_name = "IMAGE")]
     pub image: String,
+
+    /// Registry source for name references (any `[sources]` spec)
+    #[arg(long, value_name = "SPEC", default_value = ply_core::catalog::OFFICIAL_RUN_SOURCE)]
+    pub source: String,
 
     /// Re-import a `docker://` reference even if it is already cached
     #[arg(long)]

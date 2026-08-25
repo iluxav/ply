@@ -4,10 +4,17 @@ use ply_core::build::{build, BuildOptions};
 use crate::cli::BuildArgs;
 
 pub fn run(args: BuildArgs) -> Result<()> {
+    let arch = match args.arch.as_deref() {
+        None => None,
+        Some("x64") => Some(ply_core::image::name::Arch::X64),
+        Some("arm64") => Some(ply_core::image::name::Arch::Arm64),
+        Some(other) => anyhow::bail!("--arch `{other}`: supported values are x64, arm64"),
+    };
     let outcome = build(&BuildOptions {
         dir: args.dir,
         output: args.output,
         allow_insecure: args.insecure_source,
+        arch,
     })?;
     for (name, version) in &outcome.locked {
         println!("locked {name} {version}");

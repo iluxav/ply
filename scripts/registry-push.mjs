@@ -210,7 +210,10 @@ await Promise.all(Array.from({ length: Math.min(args.jobs, todo.length) }, worke
 // Append-only: refuse to replace a published image — a version's bytes never
 // change; new bytes mean a new version (or a new arch, which is a new file).
 for (const p of manualPushes) {
-  const key = `manual:${p.img}`;
+  // Keyed by upload_path, not filename: the same name-version can exist in
+  // two namespaces (keg `ply/redis`, runnable app `apps/redis`) and must not
+  // clobber each other's ledger entries.
+  const key = `manual:${p.upload_path}`;
   if (Object.values(state).some((e) => e.upload_path === p.upload_path)) {
     failed++;
     console.log(`${p.img} FAILED: already published (append-only) — bump the version instead`);
