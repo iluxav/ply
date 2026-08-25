@@ -29,13 +29,13 @@ jobs:
 
       - name: build image
         id: img
-        uses: iluxav/ply@v1
+        uses: ./
         with:
           dir: "app"
           upload: "false"
 
       - name: ship + roll
-        uses: iluxav/ply/deploy@v1
+        uses: ./deploy
         with:
           image: ${{ steps.img.outputs.image }}
           host: ${{ vars.WEB_DROPLET_HOST }}

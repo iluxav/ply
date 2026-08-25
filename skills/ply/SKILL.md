@@ -57,9 +57,9 @@ default = "https://registry.plybox.sh/ply/{package}"
 directory ships, which usually means `node_modules`, `.git` and build caches
 end up in the image.
 
-**Check the catalog before writing a version range.** The registry carries
-~3,900 Alpine-derived packages, and what it has for a given name rarely
-matches what upstream released — asking for `node = "22"` when the registry
+**Check the catalog before writing a version range.** The registry is a
+curated Debian-derived (glibc) catalog, and what it has for a given name
+rarely matches what upstream released — asking for `node = "22"` when the registry
 carries 20 and 24 produces a manifest that fails at `ply build`, after the
 user has already committed it:
 
@@ -177,11 +177,12 @@ nothing starts at boot.
 
 ## Using Docker images
 
-`ply import docker://redis:7-alpine -o redis.img` pulls an OCI image,
+`ply import docker://mongo:7 -o mongo.img` pulls an OCI image,
 flattens it, and translates its config (entrypoint, env, ports, workdir,
 user, stop signal) into a ply manifest. Mainstream images run unmodified.
 
-Reach for it when the registry lacks something. Prefer the native package
+Reach for it when the registry lacks something — check `ply run <name>`
+(prebuilt services: postgres, redis, …) first. Prefer the native package
 when it exists — `redis` imports at ~14 MiB fat versus ~3 MiB as a package
 that shares its base with every other app on the box. Check first with
 `ply search redis`.

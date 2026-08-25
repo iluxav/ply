@@ -48,7 +48,7 @@ catalog (`apk2pkg`) is frozen: still served, no longer grown.
 
 ## ply craft — author interactively
 
-For anything that isn't an Alpine package, `craft` turns a shell session
+For anything that isn't a Debian package, `craft` turns a shell session
 into a package. The overlay upper layer *is* the layer:
 
 ```sh

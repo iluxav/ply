@@ -51,7 +51,7 @@ backoff = "1s"                    # doubles per failure…
 max_backoff = "60s"               # …up to this cap; resets after healthy uptime
 
 [requires]
-abi = "linux-x64-musl"            # what the app layer's native deps were built against
+abi = "linux-x64-gnu"             # what the app layer's native deps were built against
 
 [sources]
 default = "https://registry.plybox.sh/ply/{package}"

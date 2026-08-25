@@ -191,7 +191,7 @@ config), and Docker volumes/networks (redeclare in the manifest). The
 comparison is laid out honestly in [ply vs Docker](/docs/ply-vs-docker/).
 
 An imported image is also **fat**: a flattened snapshot, not a composition.
-`redis:7-alpine` imports at 13.6 MiB where the native `redis` package is
-3.2 MiB and shares its base with every other app on the box. Import is the
-safety net that means you never have to say "ply can't run that" — the
-native path is still the one worth being on.
+`redis:7` imports at over 100 MiB where the native `redis` service image is
+1.9 MiB and shares its debian base with every other app on the box. Import
+is the safety net that means you never have to say "ply can't run that" —
+the native path is still the one worth being on.

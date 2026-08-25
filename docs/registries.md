@@ -43,8 +43,10 @@ mytools = { source = "mine", version = "0.1" }    # uses the alias
 
 ## The official registry
 
-`registry.plybox.sh` serves mainstream Alpine packages converted to ply
-images — prebuilt, content-addressed, **append-only** (a published version
+`registry.plybox.sh` serves mainstream packages converted from Debian
+trixie (glibc — npm prebuilts, pip wheels and JNI libraries work
+untouched), plus runnable services under `apps/` — prebuilt,
+content-addressed, **append-only** (a published version
 never changes or disappears, so lockfiles never rot). It's a read-only CDN:
 no accounts, no uploads, no API. Browse it at
 [registry.plybox.sh](https://registry.plybox.sh).
