@@ -20,8 +20,14 @@ ply run nginx.img
 You lose ply's shared-dependency model for that image (it's a snapshot,
 not a composition), but you gain the entire Docker library instantly.
 
-Use it for the off-the-shelf infrastructure pieces — databases, caches,
-dashboards — while your own apps use the native manifest path.
+`ply run docker://image:tag` does the import on demand and caches it, so
+one command works too.
+
+Check [Databases & services](/docs/services/) first, though: the registry
+publishes native runnable images for the common services (`ply run
+postgres@17`), which share their base and packages with everything else on
+the host — a fat import shares nothing. `docker://` is the escape hatch for
+the long tail, not the primary path.
 
 ## What actually runs
 
@@ -161,7 +167,7 @@ decision, not a gap — the third column says why.
 | `docker run -p 8080:80` | `ply run --publish 8080:80` | not a port *mapping*: the run parent load-balances the whole pool |
 | `docker run -v` / `volume` | `[volumes]` in ply.toml | volumes are declared per app; plain host directories underneath |
 | `docker run -e` / `--env-file` | same flags | identical on purpose |
-| `docker compose up` | one ply.toml per app, `ply run --after db app.img` | `--after` waits for the other app's health gate **and injects its address** as `<APP>_ADDR` / `_HOST` / `_PORT` |
+| `docker compose up` | `ply up` — a `[stack]` in ply.toml wires the members | registry apps + local dirs, `after` waits on the health gate **and injects the address** as `<APP>_ADDR` / `_HOST` / `_PORT`; see [Stacks](/docs/stacks/) |
 | `docker ps` / `exec` / `stats` | same verbs | identical on purpose |
 | `docker logs` | stdout / `journalctl -u ply-<app>` | apps are foreground processes; logging is the supervisor's job |
 | `docker pull` | — | lockfiles fetch exact hashes on demand; `ply sync` pre-fetches a host's policy set |
@@ -173,12 +179,13 @@ decision, not a gap — the third column says why.
 | `docker network` + service DNS | `--publish internal:PORT` + `--after` | the publishing parent already balances the pool; the dependant is told where it is |
 | `docker rmi` / `system prune` | `ply gc` | reachability from lockfiles decides; `rm -rf /var/lib/ply` is the factory reset |
 
-Typing the old habit is fine, too: `ply pull`, `ply tag`, `ply compose` and
+Typing the old habit is fine, too: `ply pull`, `ply tag`, `ply logs` and
 friends answer with a one-line pointer to the row above instead of an error.
 
 ## What doesn't cross the bridge
 
-Dockerfiles (ply builds from a manifest, not a script), docker-compose
+Dockerfiles (ply builds from a manifest, not a script), compose files as a
+format (`ply up` reads a `[stack]` in ply.toml instead), docker-compose
 (ply's unit is the app; wiring is `[ports]`, names, and emitted proxy
 config), and Docker volumes/networks (redeclare in the manifest). The
 comparison is laid out honestly in [ply vs Docker](/docs/ply-vs-docker/).

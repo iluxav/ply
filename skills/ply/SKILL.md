@@ -31,7 +31,7 @@ name = "myapp"                      # no "-<digit>" (filename grammar)
 version = "1.2.0"
 entrypoint = ["node", "server.js"]  # exec-style, no shell
 include = ["dist/", "package.json"] # ONLY these ship; omit = pack everything
-base = "alpine@3.20"                # exactly one package owns /
+base = "debian@13"                  # exactly one package owns /
 
 [dependencies]
 node = "22"                         # a range: lowest satisfying version wins
@@ -103,9 +103,12 @@ command is correct in both modes.
 
 ## Wiring several services together
 
-This is where Docker habits hurt most. There is no compose file and no
-service DNS. `--after` declares the dependency edge, waits for the
-dependency's `[health]` gate, **and injects its address**:
+This is where Docker habits hurt most. The compose equivalent is a
+`[stack]` table in a ply.toml (registry services + local app dirs, wired
+with `after` and per-member env) started by `ply up`; prebuilt services run
+by name (`ply run postgres@17 -e POSTGRES_PASSWORD=dev`). Underneath both,
+`--after` declares a dependency edge, waits for the dependency's `[health]`
+gate, **and injects its address**:
 
 ```sh
 ply run pgdb.img --publish internal:5432 &

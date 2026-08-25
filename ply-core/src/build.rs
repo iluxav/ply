@@ -206,6 +206,57 @@ pub fn build(opts: &BuildOptions) -> Result<BuildOutcome> {
     })
 }
 
+/// The dir's canonical image when it is newer than every file under the dir
+/// (make's contract: timestamps; ctime too, so chmod counts). None = build
+/// needed. Conservative: any unreadable entry means rebuild. Top-level build
+/// outputs (images, ply.lock) and .git are not inputs.
+pub fn up_to_date_image(dir: &Path, arch: Option<Arch>) -> Result<Option<PathBuf>> {
+    use std::os::unix::fs::MetadataExt;
+    let stamp =
+        |md: &std::fs::Metadata| (md.mtime(), md.mtime_nsec()).max((md.ctime(), md.ctime_nsec()));
+
+    let manifest_path = dir.join("ply.toml");
+    if !manifest_path.exists() {
+        return Ok(None);
+    }
+    let manifest = Manifest::load(&manifest_path)?;
+    let image_name = ImageName::new(
+        &manifest.package.name,
+        manifest.package.version.clone(),
+        Os::Linux,
+        arch.unwrap_or_else(Arch::host),
+    )?;
+    let image = dir.join(image_name.to_string());
+    let Ok(image_meta) = image.metadata() else {
+        return Ok(None);
+    };
+    let image_stamp = stamp(&image_meta);
+
+    let mut dirs = vec![dir.to_path_buf()];
+    while let Some(d) = dirs.pop() {
+        let Ok(entries) = std::fs::read_dir(&d) else {
+            return Ok(None);
+        };
+        for entry in entries {
+            let Ok(entry) = entry else { return Ok(None) };
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if d == dir && (name.ends_with(".img") || name == "ply.lock" || name == ".git") {
+                continue;
+            }
+            let Ok(md) = entry.metadata() else {
+                return Ok(None);
+            };
+            if stamp(&md) > image_stamp {
+                return Ok(None);
+            }
+            if md.is_dir() {
+                dirs.push(entry.path());
+            }
+        }
+    }
+    Ok(Some(image))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

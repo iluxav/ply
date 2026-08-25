@@ -49,6 +49,15 @@ never changes or disappears, so lockfiles never rot). It's a read-only CDN:
 no accounts, no uploads, no API. Browse it at
 [registry.plybox.sh](https://registry.plybox.sh).
 
+## The apps namespace
+
+Package images (kegs, bases) live under `ply/`. **Runnable apps** — the
+prebuilt services `ply run postgres@17` fetches — live under `apps/`, in
+the same layout (`apps/<name>/index.json` + images). The split lets a keg
+and a service share a name (`redis` the library vs `redis` the server)
+without colliding. `ply run --source` points name resolution at any source
+spec that follows the layout, including `file:///` directories.
+
 ## Publishing your own packages
 
 Because a registry is just files, publishing is copying:

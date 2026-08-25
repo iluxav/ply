@@ -44,6 +44,11 @@ pub enum Command {
     /// Run an image (foreground; SIGTERM works; exit code propagates)
     Run(RunArgs),
 
+    /// Start a [stack] — several apps from one ply.toml, in dependency
+    /// order (docker-compose for ply: registry apps + local dirs, wired
+    /// with `after` and per-member env)
+    Up(UpArgs),
+
     /// Run a command inside a running instance
     Exec(ExecArgs),
 
@@ -247,6 +252,29 @@ pub struct RunArgs {
     /// Never for anything you did not write or import yourself.
     #[arg(long)]
     pub privileged: bool,
+}
+
+#[derive(Args)]
+pub struct UpArgs {
+    /// Members to start (with their `after` dependencies); empty = all
+    #[arg(value_name = "MEMBER")]
+    pub members: Vec<String>,
+
+    /// Directory containing the stack ply.toml
+    #[arg(short = 'C', long, value_name = "DIR", default_value = ".")]
+    pub dir: PathBuf,
+
+    /// Registry source for `run =` members (any `[sources]` spec)
+    #[arg(long, value_name = "SPEC", default_value = ply_core::catalog::OFFICIAL_RUN_SOURCE)]
+    pub source: String,
+
+    /// Re-resolve `run =` members instead of honoring the stack lock
+    #[arg(long)]
+    pub refresh: bool,
+
+    /// How long each member may wait for its `after` dependencies
+    #[arg(long, value_name = "DURATION", default_value = "60s")]
+    pub after_timeout: String,
 }
 
 #[derive(Args)]
@@ -524,7 +552,7 @@ pub fn docker_hint(cmd: &str) -> Option<&'static str> {
         "push" => "publishing is copying a file: upload the .img to any file host (GitHub Releases, a bucket, a directory).\n(docs: https://plybox.sh/docs/registries/)",
         "tag" => "no tags, on purpose: published versions are immutable — nothing like `:latest` can move.\nBump [package] version and `ply build` instead.",
         "login" | "logout" => "registries have no accounts — any file host your network can GET works; the sha256 in ply.lock is the trust, not a login.",
-        "compose" | "up" => "no compose file: every app is its own ply.toml, and apps reach each other by `<app>.ply` names.\n(docs: https://plybox.sh/docs/running/)",
+        "compose" => "compose is `ply up`: a [stack] ply.toml lists members (registry apps + local dirs) wired with `after` and env.\n(docs: https://plybox.sh/docs/running/)",
         "logs" => "logs are stdout — `ply run` is a foreground process. Under systemd: journalctl -u ply-<app>",
         "stop" | "kill" => "Ctrl-C the foreground run, `ply rm <app>`, or `systemctl stop ply-<app>` under systemd.",
         "start" | "restart" => "`ply run IMAGE` starts instances; crash restarts are the [restart] policy's job, reboots are systemd's.\n(docs: https://plybox.sh/docs/deploy/)",
@@ -560,9 +588,9 @@ mod tests {
     #[test]
     fn hints_only_cover_nonexistent_subcommands() {
         for verb in [
-            "pull", "push", "tag", "login", "logout", "compose", "up", "logs", "stop", "kill",
-            "start", "restart", "inspect", "cp", "save", "load", "export", "network", "volume",
-            "commit", "rmi",
+            "pull", "push", "tag", "login", "logout", "compose", "logs", "stop", "kill", "start",
+            "restart", "inspect", "cp", "save", "load", "export", "network", "volume", "commit",
+            "rmi",
         ] {
             assert!(
                 docker_hint(verb).is_some(),

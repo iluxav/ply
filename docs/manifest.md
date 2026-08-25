@@ -18,8 +18,8 @@ user = "appuser:1000:1000"        # optional: run as name:uid:gid
 workdir = "/opt/myapp"            # optional: cwd before exec (default: the app prefix)
 stop_signal = "SIGTERM"           # optional: how to ask it to shut down
 capabilities = []                 # optional: keep nothing (the default) — see below
-base = "alpine@3.20"              # exactly one base per app; or
-                                  # { name = "alpine", version = "3.20", source = "alias" }
+base = "debian@13"                # exactly one base per app; or
+                                  # { name = "debian", version = "13", source = "alias" }
 
 [dependencies]
 node   = "22"                     # range: lowest satisfying version wins (MVS)
@@ -129,3 +129,19 @@ letting you segfault at 2am.
 **`[sources]`** — URL templates; see
 [Registries & publishing](/docs/registries/). `{package}` expands to the
 package name, letting one base URL serve per-package directories.
+
+## Two more files, same grammar
+
+**`[stack]`** — a ply.toml with a `[stack]` table (and no `[package]`) is a
+stack file: several apps wired for `ply up`. Members are
+`{ run = "postgres@17" }` (registry app) or `{ path = "./server" }` (local
+app dir), plus `env` and `after`. Registry members pin into the stack dir's
+`ply.lock` (`ref`, `version`, `digest.<arch>`). See
+[Stacks & local dev](/docs/stacks/).
+
+**`ply.dev.toml`** — a gitignorable dev overlay next to an app's ply.toml,
+applied only by `ply run DIR` / `ply up` (never by `build` — a shipped
+image cannot contain dev configuration). Keys: `entrypoint` (replaces),
+`[env]` (merges; `-e` still wins), `links` (extra binds; relative host
+paths resolve against the app dir, relative container paths land under
+`/opt/<name>/`). See [Stacks & local dev](/docs/stacks/).

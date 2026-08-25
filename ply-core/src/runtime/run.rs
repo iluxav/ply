@@ -46,6 +46,9 @@ pub struct RunOptions {
     /// Docker's retained capabilities (`chown -R x:x /data && exec gosu x`),
     /// which ply's zero-capability default refuses.
     pub privileged: bool,
+    /// Replace the image's entrypoint (dev overlays, boot-failure debugging).
+    /// The image is untouched — this is an argv swap at spawn time.
+    pub entrypoint: Option<Vec<String>>,
 }
 
 /// Live wiring for a published pool, threaded through instance launches.
@@ -92,7 +95,13 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
     }
 
     let store = Store::open_default()?;
-    let mut ctx = prepare_app(&opts.image, &opts.cli_env, opts.allow_insecure, &store)?;
+    let mut ctx = prepare_app(
+        &opts.image,
+        &opts.cli_env,
+        opts.allow_insecure,
+        opts.entrypoint.as_deref(),
+        &store,
+    )?;
 
     // Only apps that need a second uid to exist care about the subid range:
     // a declared [package] user, or an import whose entrypoint will gosu down.
@@ -371,7 +380,13 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                     let _ = std::fs::remove_file(&pointer); // consumed either way
                     let new_image = PathBuf::from(text.trim());
                     eprintln!("ply: deploy -> {}", new_image.display());
-                    match prepare_app(&new_image, &opts.cli_env, opts.allow_insecure, &store) {
+                    match prepare_app(
+                        &new_image,
+                        &opts.cli_env,
+                        opts.allow_insecure,
+                        opts.entrypoint.as_deref(),
+                        &store,
+                    ) {
                         Ok(new_ctx) => {
                             let mut queue: Vec<u32> = instances.iter().map(|i| i.n).collect();
                             queue.sort_unstable();
@@ -599,15 +614,19 @@ fn prepare_app(
     image: &Path,
     cli_env: &[(String, String)],
     allow_insecure: bool,
+    entrypoint_override: Option<&[String]>,
     store: &Store,
 ) -> Result<AppContext> {
     let manifest = read_manifest(image)?;
-    let entrypoint = manifest.package.entrypoint.clone().ok_or_else(|| {
-        Error::Runtime(format!(
-            "{} is a library/runtime package (no entrypoint) — only app images run",
-            image.display()
-        ))
-    })?;
+    let entrypoint = match entrypoint_override {
+        Some(argv) => argv.to_vec(),
+        None => manifest.package.entrypoint.clone().ok_or_else(|| {
+            Error::Runtime(format!(
+                "{} is a library/runtime package (no entrypoint) — only app images run",
+                image.display()
+            ))
+        })?,
+    };
     if manifest.package.isolation == "vm" {
         return Err(Error::Runtime(
             "isolation = \"vm\" is not implemented yet — only \"ns\" runs today".into(),

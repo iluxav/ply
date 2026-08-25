@@ -320,7 +320,7 @@ pub fn fetch_app_image(
     name: &str,
     want: Option<&str>,
     source_spec: &str,
-) -> Result<(PathBuf, crate::image::name::ImageName)> {
+) -> Result<(PathBuf, crate::image::name::ImageName, String)> {
     use crate::image::name::{Arch, ImageName, Os};
 
     let source = Source::parse(source_spec, false)?;
@@ -345,13 +345,36 @@ pub fn fetch_app_image(
         }));
     };
     let image = ImageName::new(name, version, os, arch)?;
-    let (_digest, path) = source.fetch(&image, None, &store)?;
+    let (digest, path) = source.fetch(&image, None, &store)?;
     let manifest = crate::image::read::read_manifest(&path)?;
     if !manifest.is_app() {
         return Err(Error::Source(format!(
             "`{image}` is a library package (keg), not a runnable app — add it to a ply.toml [dependencies] instead"
         )));
     }
+    Ok((path, image, digest))
+}
+
+/// A lock-pinned app image: straight from the store when the digest is
+/// already there (no index fetch, no download — `ply up` offline), else one
+/// digest-verified download.
+pub fn fetch_app_image_pinned(
+    name: &str,
+    version: &str,
+    digest: &str,
+    source_spec: &str,
+) -> Result<(PathBuf, crate::image::name::ImageName)> {
+    use crate::image::name::{Arch, ImageName, Os};
+
+    let store = crate::store::Store::open_default()?;
+    let version = semver::Version::parse(version)
+        .map_err(|e| Error::Source(format!("locked version `{version}` for `{name}`: {e}")))?;
+    let image = ImageName::new(name, version, Os::Linux, Arch::host())?;
+    if let Some(path) = store.image_path(digest) {
+        return Ok((path, image));
+    }
+    let source = Source::parse(source_spec, false)?;
+    let (_digest, path) = source.fetch(&image, Some(digest), &store)?;
     Ok((path, image))
 }
 

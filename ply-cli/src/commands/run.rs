@@ -43,23 +43,73 @@ pub fn exec(args: RunArgs) -> Result<()> {
         }
     }
 
-    // A bare name (`postgres`, `myapp@1.2`) resolves against the registry:
-    // newest matching version, fetched into the store. Only when nothing by
-    // that name exists locally — an existing file always wins.
-    let image_arg =
-        if !args.image.starts_with("docker://") && !std::path::Path::new(&args.image).exists() {
-            match ply_core::catalog::parse_run_ref(&args.image) {
-                Some((name, want)) => {
-                    let (path, resolved) =
-                        ply_core::catalog::fetch_app_image(&name, want.as_deref(), &args.source)?;
-                    eprintln!("ply: resolved {} -> {resolved}", args.image);
-                    path.to_string_lossy().into_owned()
-                }
-                None => args.image.clone(),
+    // Three run forms besides a plain .img path:
+    //  - a directory with ply.toml: build it, run the result (cargo run)
+    //  - a bare name (`postgres`, `myapp@1.2`): resolve against the registry,
+    //    newest matching version, fetched into the store
+    //  - docker://: OCI import (below)
+    // An existing file always wins over a name lookup.
+    let mut dev_entrypoint: Option<Vec<String>> = None;
+    let image_path = std::path::Path::new(&args.image);
+    let image_arg = if !args.image.starts_with("docker://") && image_path.is_dir() {
+        let dir = image_path.to_path_buf();
+        if ply_core::stack::load(&dir)?.is_some() {
+            bail!(
+                "{} is a [stack] — `ply up` starts stacks; `ply run` runs one app",
+                dir.join("ply.toml").display()
+            );
+        }
+        if !dir.join("ply.toml").exists() {
+            bail!(
+                "{} has no ply.toml — `ply run DIR` builds and runs an app directory",
+                dir.display()
+            );
+        }
+        let image = match ply_core::build::up_to_date_image(&dir, None)? {
+            Some(image) => {
+                eprintln!(
+                    "ply: {} up to date",
+                    image.file_name().unwrap_or_default().to_string_lossy()
+                );
+                image
             }
-        } else {
-            args.image.clone()
+            None => {
+                let outcome = ply_core::build::build(&ply_core::build::BuildOptions {
+                    dir: dir.clone(),
+                    output: None,
+                    allow_insecure: false,
+                    arch: None,
+                })?;
+                eprintln!("ply: built {}", outcome.image_name);
+                outcome.image_path
+            }
         };
+        // The dev overlay applies only on the DIR form: it belongs to the
+        // working tree, not the artifact — plain image runs stay pristine.
+        let app = ply_core::image::read::read_manifest(&image)?.package.name;
+        if let Some(overlay) = ply_core::dev::load(&dir, &app)? {
+            eprintln!("ply: applying ply.dev.toml ({})", overlay.describe());
+            dev_entrypoint = overlay.entrypoint;
+            // before the explicit -e flags, so those still win
+            let mut merged = overlay.env;
+            merged.append(&mut cli_env);
+            cli_env = merged;
+            links.extend(overlay.links);
+        }
+        image.to_string_lossy().into_owned()
+    } else if !args.image.starts_with("docker://") && !image_path.exists() {
+        match ply_core::catalog::parse_run_ref(&args.image) {
+            Some((name, want)) => {
+                let (path, resolved, _digest) =
+                    ply_core::catalog::fetch_app_image(&name, want.as_deref(), &args.source)?;
+                eprintln!("ply: resolved {} -> {resolved}", args.image);
+                path.to_string_lossy().into_owned()
+            }
+            None => args.image.clone(),
+        }
+    } else {
+        args.image.clone()
+    };
 
     // `docker://…` becomes a local image before anything else looks at it, so
     // every downstream path (manifest read, lockfile, deploy) sees a plain file.
@@ -76,6 +126,7 @@ pub fn exec(args: RunArgs) -> Result<()> {
         after_timeout: ply_core::manifest::parse_duration(&args.after_timeout)
             .map_err(|e| anyhow::anyhow!("--after-timeout: {e}"))?,
         privileged: args.privileged,
+        entrypoint: dev_entrypoint,
     })?;
     std::process::exit(code);
 }

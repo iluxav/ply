@@ -28,10 +28,10 @@ adds a dependency at its latest version. By hand, it is:
 name = "hello"
 version = "0.1.0"
 entrypoint = ["python3", "-c", "print('hello from ply')"]
-base = "alpine@3.20"
+base = "debian@13"
 
 [dependencies]
-python3 = "3.12"
+python3 = "3.13"
 
 [sources]
 default = "https://registry.plybox.sh/ply/{package}"
@@ -50,8 +50,8 @@ This resolves the version ranges (writing `ply.lock`), fetches the
 dependencies by hash, and produces a deterministic image:
 
 ```
-locked alpine 3.20.7, python3 3.12.13
-built hello-0.1.0-linux-x64.img (2.1 MiB)
+locked debian 13.6.0, python3 3.13.5
+built hello-0.1.0-linux-x64.img (4.0 KiB)
 ```
 
 The image is tiny because dependencies are *references*, not copies — ten
@@ -62,6 +62,7 @@ directory produces a byte-identical file, always.
 
 ```sh
 ply run hello-0.1.0-linux-x64.img
+ply run .                          # same thing: build if changed, then run
 ```
 
 The app runs in the foreground as a normal process: stdout is your terminal,
@@ -77,6 +78,16 @@ ply run -e KEY=value app.img       # environment overrides
 ply run --env-file .env app.img    # secrets stay out of the image
 ply run --link ./src:/opt/app app.img   # dev mode: bind-mount live code
 ```
+
+Need a database next to it? Prebuilt services run by name — no manifest,
+no build ([Databases & services](/docs/services/)):
+
+```sh
+ply run postgres@17 -e POSTGRES_PASSWORD=dev -e POSTGRES_DB=todos
+```
+
+And when the project is db + server + web, one `[stack]` file starts them
+all in order: [`ply up`](/docs/stacks/).
 
 ## Inspect
 

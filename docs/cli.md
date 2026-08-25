@@ -34,10 +34,12 @@ Add a dependency to `./ply.toml`. Without a range, takes the latest
 Then `ply build` to resolve and lock.
 
 ```sh
-ply build [DIR] [-o FILE] [--insecure-source]
+ply build [DIR] [-o FILE] [--arch x64|arm64] [--insecure-source]
 ```
 Resolve dependencies (writing `ply.lock`), produce a deterministic image
-named `<name>-<version>-<os>-<arch>.img`.
+named `<name>-<version>-<os>-<arch>.img`. `--arch` cross-builds: packing is
+arch-independent and dependencies resolve for the target, so an x64 laptop
+builds arm64 droplet images.
 
 ```sh
 ply check IMAGE [--against policy.toml]
@@ -48,12 +50,23 @@ Pure function — wire it into CI.
 ## Run & observe
 
 ```sh
-ply run IMAGE [--scale N] [-e K=V]… [--env-file F] [--link HOST:CONTAINER]
-             [--publish [ADDR:]PORT[:INSTANCE_PORT]]  # parent binds it, L4-balances the pool
-             [--after APP]… [--after-timeout 60s]     # wait for APP, and learn its address
-             [--privileged]                           # keep everything; debugging only
+ply run WHAT [--scale N] [-e K=V]… [--env-file F] [--link HOST:CONTAINER]
+            [--publish [ADDR:]PORT[:INSTANCE_PORT]]  # parent binds it, L4-balances the pool
+            [--after APP]… [--after-timeout 60s]     # wait for APP, and learn its address
+            [--source SPEC]                          # registry for name references
+            [--privileged]                           # keep everything; debugging only
 ```
-Foreground, signals work, exit code propagates.
+Foreground, signals work, exit code propagates. `WHAT` is any of four
+forms:
+
+```sh
+ply run app-1.0.0-linux-x64.img    # an image file
+ply run .                          # an app dir: build (skipped when unchanged), run;
+                                   #   applies ply.dev.toml if present
+ply run postgres@17                # a registry name — newest matching version,
+                                   #   fetched and cached (see Databases & services)
+ply run docker://mongo:7           # OCI import, converted once and cached
+```
 
 **`--publish`** — `ADDR` is `internal`, `public` (the default) or an IPv4
 address:
@@ -87,6 +100,15 @@ wins; an unpublished dependency injects nothing.
 **`--privileged`** — skips rights stripping entirely: capabilities kept,
 `no_new_privs` off, seccomp off. For debugging and triaging imports. Use
 `[package] capabilities` for anything you intend to keep running.
+
+```sh
+ply up [MEMBER…] [-C DIR] [--refresh] [--source SPEC] [--after-timeout 60s]
+```
+Start a `[stack]` — several apps from one ply.toml, dependency-ordered,
+one Ctrl-C teardown. Named members start with their `after` dependencies;
+no members = everything. `run =` members pin version + digest in the stack
+`ply.lock` (offline-capable); `--refresh` re-resolves. See
+[Stacks & local dev](/docs/stacks/).
 
 ```sh
 ply ps [--json]

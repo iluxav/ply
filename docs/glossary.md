@@ -51,6 +51,9 @@ exit codes, and restarts.
 | **host** | one machine running ply |
 | **fleet** | the declared list of hosts — an inventory file, not a membership protocol |
 | **deploy** | replacing an app's version by rolling its pool one instance at a time, health-gated |
+| **stack** | several apps wired in one `[stack]` file — registry services plus local dirs — started together by `ply up` |
+| **service** | a prebuilt *runnable* app in the registry's `apps/` namespace (`ply run postgres@17`); contrast with a keg, which is an inert library |
+| **dev overlay** | `ply.dev.toml` — gitignorable run-time overrides (entrypoint, env, links) applied to dir runs only, never baked into images |
 
 ## Banned words
 

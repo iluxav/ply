@@ -10,8 +10,14 @@ order: 12
 ## Processes, not pets
 
 ```sh
-ply run myapp.img
+ply run myapp.img        # an image file
+ply run .                # an app dir: build if changed, then run
+ply run postgres@17      # a prebuilt service from the registry
 ```
+
+(The name form and the services it serves are covered in
+[Databases & services](/docs/services/); this page is about what happens
+once something runs.)
 
 The app runs in the foreground: stdout/stderr are your terminal, `SIGTERM`
 and `Ctrl-C` work, the exit code propagates. Logs are stdout — pipe them
@@ -264,6 +270,12 @@ ply run --link ./src:/opt/myapp myapp.img
 
 Bind-mounts live code over the image's app layer — edit on the host, run in
 the container, no rebuild loop.
+
+Better: put dev behavior in a gitignorable `ply.dev.toml` next to the
+manifest (entrypoint swap, extra links, env) and just `ply run .` — the
+overlay applies to dir runs only, never to builds or deploys. And when the
+project is several apps, one `[stack]` file runs them all: `ply up`. Both
+in [Stacks & local dev](/docs/stacks/).
 
 ## Observing
 

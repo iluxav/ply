@@ -1,6 +1,6 @@
 ---
 title: Making packages
-description: Three ways to author ply packages — apk2pkg conversion, ply craft sessions, and plain directories.
+description: Three ways to author ply packages — deb2pkg conversion, ply craft sessions, and plain directories.
 section: Guides
 order: 16
 ---
@@ -11,27 +11,40 @@ A ply package is an inert image: files under its own prefix plus a tiny
 manifest describing its `PATH`/`LD_LIBRARY_PATH` contributions. No install
 scripts — ever. That makes packages easy to mint.
 
-## apk2pkg — convert Alpine packages
+## deb2pkg — convert Debian packages
 
-The `apk2pkg` tool converts any Alpine package (plus its dependency
+The `deb2pkg` tool converts a Debian package (plus its runtime library
 closure) into a single self-contained ply package:
 
 ```sh
-apk2pkg ffmpeg --alpine 3.20 -o ./out
-# → out/ffmpeg-6.1.1-linux-x64.img
+deb2pkg redis-server --name redis -o ./out
+# → out/redis-8.0.2-linux-x64.img
 ```
 
-It downloads the apk and everything it needs, vendors the closure into one
-keg (`/opt/ffmpeg-6.1.1/`), resolves Alpine's virtual `provides`
-(so things like ICU data land where binaries expect them), and emits a
-canonical, content-addressed image.
+Debian's `Depends` graph is too coarse to vendor (postgres would drag in
+perl), so deb2pkg reads the **binaries** instead: it unpacks the package,
+walks every ELF's `DT_NEEDED`, maps each soname to its owning package via
+the Contents index, and recurses — vendoring exactly the libraries the code
+loads into one keg (`/opt/redis-8.0.2/`). Maintainer scripts are never
+read: no install hooks, ever, by construction.
 
-Names and versions are normalized to ply's grammar: `g++` → `gpp`,
-`_` → `-`, versions padded to `x.y.z`.
+Three flags cover what scripts would have done:
+
+```sh
+deb2pkg postgresql-17 --name postgresql17 --skip-so llvmjit.so   # drop a dlopen plugin (–150 MiB of LLVM)
+deb2pkg nodejs --with node-cjs-module-lexer                      # vendor non-ELF runtime data the walk can't see
+deb2pkg python3.13 --name python3 --symlink python3=python3.13   # symlinks update-alternatives would have made
+```
+
+`--arch arm64` converts for the other arch from any host — conversion only
+unpacks files. Names and versions normalize to ply's grammar
+(`postgresql-17` → `postgresql17`, epochs stripped: `5:8.0.2-2` → `8.0.2`).
 
 This is the machinery behind the [official registry](https://registry.plybox.sh)
-— mainstream Alpine packages, pre-converted and served from a CDN, so most
-of the time you don't run apk2pkg at all.
+— mainstream packages pre-converted from Debian trixie (glibc, so npm
+prebuilts, pip wheels, and JNI libraries work untouched), served from a
+CDN. Most of the time you don't run deb2pkg at all. The earlier Alpine/musl
+catalog (`apk2pkg`) is frozen: still served, no longer grown.
 
 ## ply craft — author interactively
 
@@ -39,7 +52,7 @@ For anything that isn't an Alpine package, `craft` turns a shell session
 into a package. The overlay upper layer *is* the layer:
 
 ```sh
-ply craft new --base alpine@3.20 mytools    # opens a shell on the base
+ply craft new --base debian@13 mytools      # opens a shell on the base
 # …inside: install things, copy files, configure…
 ply craft changes mytools                   # what did the session add?
 ply craft commit mytools --version 0.1.0    # → mytools-0.1.0-linux-x64.img

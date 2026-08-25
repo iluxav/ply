@@ -31,7 +31,7 @@ An honest comparison. Short version: **Docker is a universal container platform;
 
 **The artifact is a file.** `scp app.img server && ssh server ply run app.img` is the whole deploy. No registry to run, no login, no push/pull protocol. Dependencies fetch by hash on first run from any dumb file host — and the transport is untrusted by design (wrong bytes fail the hash), so a compromised mirror can't hurt you.
 
-**Shared dependencies, smaller apps.** A Next.js app image is ~15 MiB because node and alpine are *references*, not copies; ten Node apps on one host share one node keg in the store. Docker layer sharing achieves some of this but only when images happen to share base-layer history.
+**Shared dependencies, smaller apps.** A Next.js app image is ~15 MiB because node and the debian base are *references*, not copies; ten Node apps on one host share one node keg in the store. Docker layer sharing achieves some of this but only when images happen to share base-layer history.
 
 **Security posture by default.** All capabilities dropped (Docker keeps ~14 by default, including SETUID/CHOWN/NET_RAW), `no_new_privs`, seccomp, `pids.max` always set (fork bombs contained with zero config), noexec scratch. Weakening is an explicit, manifest-visible act — `[package] capabilities`, which is exactly how an imported Docker image gets Docker's fourteen while your own packages keep none.
 
@@ -49,7 +49,7 @@ An honest comparison. Short version: **Docker is a universal container platform;
 
 **Platform reach.** Docker Desktop covers macOS and Windows; ply is Linux-only by scope (macOS dev means a VM or remote host).
 
-**Compose and orchestration on-ramps.** `docker compose up` for multi-service dev environments is genuinely excellent, and the same images carry to Kubernetes when you outgrow a host. ply deliberately stops at one host — if you need overlay networks, service discovery across hosts, or an orchestrator, ply's answer is "that's not this tool."
+**Orchestration on-ramps.** Multi-service dev is covered — `ply up` starts a `[stack]` the way compose does — but Docker's images carry to Kubernetes when you outgrow a host. ply deliberately stops at one host: if you need overlay networks, service discovery across hosts, or an orchestrator, ply's answer is "that's not this tool."
 
 **Build caching for slow builds.** Docker's layer cache (and BuildKit's graph) shines when builds are expensive — big compiles, multi-stage toolchains. ply has no build cache by design; it assumes your own toolchain (`npm run build`, `cargo build`) produced the files and packaging them is cheap. True for most server apps, not for all.
 

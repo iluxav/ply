@@ -7,6 +7,7 @@ pub mod build;
 pub mod bundle;
 pub mod catalog;
 pub mod craft;
+pub mod dev;
 pub mod digest;
 pub mod env;
 pub mod error;
@@ -21,6 +22,7 @@ pub mod rebase;
 pub mod resolve;
 pub mod runtime;
 pub mod source;
+pub mod stack;
 pub mod stats;
 pub mod store;
 

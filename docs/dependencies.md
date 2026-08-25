@@ -12,7 +12,7 @@ order: 10
 ```toml
 [package]
 # …
-base   = "alpine@3.20"       # exactly one base per app (owns /, libc, /bin/sh)
+base   = "debian@13"         # exactly one base per app (owns /, libc, /bin/sh)
 
 [dependencies]
 node   = "22"                # any 22.x — range, not a pin
@@ -24,7 +24,7 @@ The key is the package name; ranges are semver prefixes: `"22"` means
 because it is a singular role, not a list entry — but it resolves, locks,
 and fetches exactly like every other dependency. Its `name@range` string
 form has a table twin for custom sources:
-`base = { name = "alpine", version = "3.20", source = "corp" }`.
+`base = { name = "debian", version = "13", source = "corp" }`.
 
 Every dependency occupies its own prefix in the final filesystem —
 `/opt/node-22.6.0/`, `/opt/ffmpeg-6.1.1/` — so two packages can never

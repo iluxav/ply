@@ -13,6 +13,7 @@ mod run;
 mod search;
 mod setup;
 mod stats;
+mod up;
 
 use anyhow::Result;
 
@@ -25,6 +26,7 @@ pub fn dispatch(command: Command) -> Result<()> {
         Command::Search(args) => search::exec(args),
         Command::Add(args) => add::exec(args),
         Command::Run(args) => run::exec(args),
+        Command::Up(args) => up::exec(args),
         Command::Exec(args) => exec::exec(args),
         Command::Ps(args) => ps::exec(args),
         Command::Stats(args) => stats::exec(args),

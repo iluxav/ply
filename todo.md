@@ -27,6 +27,17 @@
 > First-class `postgres` + `redis` live in `services/`, speaking the
 > docker-library env contract (POSTGRES_PASSWORD/USER/DB, REDIS_PASSWORD/…).
 > `ply build --arch x64|arm64` cross-builds with per-arch dep resolution.
+>
+> **`ply up` (2026-08-25 pm):** [stack] in ply.toml — `run =` registry members
+> (digest-locked in ply.lock, store-served, works offline; `--refresh`
+> re-resolves) + `path =` local members (mtime up-to-date check skips
+> repacks), `after` edges on the readiness gate, per-member env; `ply run .`
+> builds-and-runs a dir (cargo run). Known gaps: (1) env port overrides
+> (PGPORT=5442) aren't visible to the `[health]`/readiness probe, which
+> checks the declared port — fix: a health-port override recorded into
+> instance state; (2) `ply volume ls/rm` (resetting a dev db needs sudo rm
+> today); (3) app names are host-global — a stack member and a manual run of
+> the same app share a pool (canary semantics).
 
 Everything ply can run today is musl, because `alpine` is the only base
 package and every other package is `apk2pkg`-derived from it. For most
