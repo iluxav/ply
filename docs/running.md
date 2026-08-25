@@ -58,11 +58,19 @@ For pretty URLs, TLS, and load balancing, ply deliberately does not proxy —
 it emits config for tools that already do it well:
 
 ```sh
-ply proxy --backend caddy        # Caddyfile for every running app
-ply lb myapp --format nginx      # one app's backend pool
+ply proxy                        # every running app (caddy by default)
+ply proxy myapp --format nginx   # just one, in nginx form
 ```
 
-Instances of the same app round-robin automatically in the emitted config.
+The backend it emits is the app's **published address** — its run parent —
+not a list of instance IPs. The parent already balances the pool and drains
+on deploy, so the emitted config survives scale, rolls and restarts without
+being regenerated.
+
+An app running rootless without `--publish` has no address a proxy can
+reach: its instances share the host network and all report `127.0.0.1`.
+Naming such an app is an error; a bare `ply proxy` sweep skips it with a
+note and still emits everything else.
 
 ## TLS and the edge
 
@@ -160,7 +168,7 @@ ply run api.img --publish internal:3000 --publish internal:9090   # app + metric
 ```
 
 The **first** spec is the app's canonical address: what `--after` hands to
-dependants and what `ply lb` emits. Adding a metrics port second therefore
+dependants and what `ply proxy` emits. Adding a metrics port second therefore
 cannot silently repoint your callers.
 
 Two specs claiming the same host port is refused up front, rather than

@@ -109,8 +109,8 @@ nested table in TOML.
 **`[env]`** — composed after package contributions, before CLI overrides
 (`-e`, `--env-file`); last wins.
 
-**`[ports]`** — documentation the tooling reads: `ply lb`/`ply proxy` emit
-backends for these ports, and `[health]` checks them. Never a host port
+**`[ports]`** — documentation the tooling reads: `ply proxy` falls back to
+these ports for an unpublished app, and `[health]` checks them. Never a host port
 binding — that is `--publish`, deliberately a run-time decision rather than
 a manifest one.
 

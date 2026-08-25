@@ -35,7 +35,7 @@ An honest comparison. Short version: **Docker is a universal container platform;
 
 **Security posture by default.** All capabilities dropped (Docker keeps ~14 by default, including SETUID/CHOWN/NET_RAW), `no_new_privs`, seccomp, `pids.max` always set (fork bombs contained with zero config), noexec scratch. Weakening is an explicit, manifest-visible act — `[package] capabilities`, which is exactly how an imported Docker image gets Docker's fourteen while your own packages keep none.
 
-**Cheap substitution → cheap rollouts.** Because assembly happens at run and parts are content-addressed, swapping a runtime under 50 apps is 50 metadata edits and one new store file — not 50 image rebuilds. Canary deploys fall out free: run old and new images side by side (each instance has its own IP), `ply lb` emits the mixed backend set. Strict blue-green (atomic traffic flip) works today via bring-up-verify-switch but has no first-class primitive yet.
+**Cheap substitution → cheap rollouts.** Because assembly happens at run and parts are content-addressed, swapping a runtime under 50 apps is 50 metadata edits and one new store file — not 50 image rebuilds. Canary deploys fall out free: run old and new images side by side (each instance has its own IP), `ply proxy` emits the backend set. Strict blue-green (atomic traffic flip) works today via bring-up-verify-switch but has no first-class primitive yet.
 
 **Fleet legibility.** State is files (`/run/ply/state/*.json`), policy is a file (`/etc/ply/runtimes.toml`), `ply check` is a pure function usable in CI, `ply audit` reads it all without an agent. `rm -rf /var/lib/ply` is a complete factory reset.
 

@@ -92,9 +92,6 @@ pub enum Command {
     /// Emit reverse-proxy / load-balancer config for running apps
     Proxy(ProxyArgs),
 
-    /// Emit load-balancer config for one app
-    Lb(LbArgs),
-
     /// One-time host preparation (idempotent; run with sudo)
     ///
     /// Installs an AppArmor profile enabling rootless `ply run` on kernels
@@ -459,19 +456,12 @@ pub struct SystemdArgs {
 
 #[derive(Args)]
 pub struct ProxyArgs {
-    /// Proxy to emit config for
-    #[arg(long, value_name = "BACKEND", default_value = "caddy")]
-    pub backend: String,
-}
-
-#[derive(Args)]
-pub struct LbArgs {
-    /// App to emit load-balancer config for
+    /// Apps to emit config for (default: every running app)
     #[arg(value_name = "APP")]
-    pub app: String,
+    pub apps: Vec<String>,
 
     /// Config format
-    #[arg(long, value_name = "FORMAT", default_value = "nginx")]
+    #[arg(long, value_name = "FORMAT", default_value = "caddy")]
     pub format: String,
 }
 
@@ -530,6 +520,9 @@ pub fn docker_hint(cmd: &str) -> Option<&'static str> {
         "volume" => "declare [volumes] in ply.toml; data lives as plain directories under the volumes dir.\n(docs: https://plybox.sh/docs/volumes/)",
         "commit" => "turning a live session into an image is `ply craft` (new → commit).\n(docs: https://plybox.sh/docs/packages/)",
         "rmi" => "`ply gc` deletes store entries no app references; `rm -rf /var/lib/ply` is the factory reset.",
+        // `ply lb` was a second name for the same thing: emit reverse-proxy
+        // config. The only difference was scope, which is now an argument.
+        "lb" => "folded into `ply proxy`: `ply proxy <app>` for one, `ply proxy` for every running app.\n(--format caddy|nginx|haproxy; docs: https://plybox.sh/docs/running/)",
         _ => return None,
     })
 }

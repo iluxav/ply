@@ -125,8 +125,10 @@ ply systemd IMAGE [--scale N] [--publish [ADDR:]P[:IP]] [-e K=V] [--env-file F]
                   [--after APP]… [--user]
                                   # emit a unit file (supervision = systemd);
                                   # --user = ~/.config/systemd/user, for rootless
-ply proxy [--backend caddy]       # emit reverse-proxy config for all apps
-ply lb APP [--format nginx]       # emit one app's LB backend pool
+ply proxy [APP]... [--format caddy|nginx|haproxy]
+                                  # emit reverse-proxy config; no APP = every
+                                  # running app. Backends are the published
+                                  # address, so scale/rolls need no re-emit
 ply setup [--unprivileged-ports [PORT]]
                                   # one-time host prep (idempotent, sudo);
                                   # also reports subuid/newuidmap readiness

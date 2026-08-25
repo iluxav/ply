@@ -36,7 +36,6 @@ pub fn dispatch(command: Command) -> Result<()> {
         Command::Rebase(args) => images::rebase(args),
         Command::Systemd(args) => lifecycle::systemd(args),
         Command::Proxy(args) => lb::proxy(args),
-        Command::Lb(args) => lb::exec(args),
         Command::Setup(args) => setup::exec(args),
         Command::Sync(args) => lifecycle::sync(args),
         Command::Gc(args) => lifecycle::gc(args),
