@@ -1,7 +1,9 @@
 name: release
 on:
   push:
-    tags: ["v*"]
+    # v*.*.* not v*: the `v1` action tag is re-pointed on every action change
+    # and would otherwise start a release that can only fail the version guard.
+    tags: ["v*.*.*"]
 
 permissions:
   contents: write
@@ -46,3 +48,20 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "${{ github.ref_name }}" "${{ matrix.artifact }}" --clobber
+
+  # `make release` creates the release as a DRAFT. A draft is not "latest" and
+  # has no download URL, so `releases/latest/download/…` keeps resolving to the
+  # previous good release while this one builds. Publishing here — after every
+  # matrix leg has uploaded — closes the window where install.sh 404s.
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release edit "${{ github.ref_name }}" --draft=false --latest
+          echo "published ${{ github.ref_name }} with:"
+          gh release view "${{ github.ref_name }}" --json assets --jq '.assets[].name'

@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "sync-content": "rm -rf .content && mkdir -p .content && cp -a ../docs .content/docs && cp ../install.sh public/install.sh",
+    "sync-content": "rm -rf .content && mkdir -p .content && cp -a ../docs .content/docs && cp ../install.sh public/install.sh && node ../scripts/build-skill.mjs",
     "predev": "npm run sync-content",
     "dev": "next dev",
     "build": "next build",

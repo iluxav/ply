@@ -929,7 +929,15 @@ fn launch_instance(
         image: app_image.display().to_string(),
         started,
         restarts,
-        health_port: manifest.health.as_ref().and_then(|h| h.port),
+        // Rootless --publish moves the app: ply injects a per-instance
+        // loopback port as PORT, so that — not the manifest's — is where the
+        // app actually listens. Probing the manifest's port would knock on a
+        // door nobody opened, the instance would never report healthy, and
+        // every `--after` dependant would time out.
+        health_port: match (injected_port, manifest.health.as_ref().and_then(|h| h.port)) {
+            (Some(injected), Some(_)) => Some(injected),
+            (_, declared) => declared,
+        },
         // The first spec is the app's canonical address — what `--after`
         // hands to dependants and what `ply lb` emits.
         published_port: publish.first().map(|w| w.spec.host_port),
@@ -1179,6 +1187,39 @@ pub fn subid_gap() -> Option<&'static str> {
         );
     }
     None
+}
+
+#[cfg(test)]
+mod health_port_tests {
+    /// The rule `launch_instance` applies when recording an instance's health
+    /// endpoint. Rootless `--publish` injects a per-instance loopback port as
+    /// PORT, so the app moves; the gate has to move with it.
+    fn recorded(injected: Option<u16>, declared: Option<u16>) -> Option<u16> {
+        match (injected, declared) {
+            (Some(injected), Some(_)) => Some(injected),
+            (_, declared) => declared,
+        }
+    }
+
+    #[test]
+    fn the_gate_follows_the_injected_port() {
+        // app declares [health] port = 3000, rootless publish moves it to 49001
+        assert_eq!(recorded(Some(49001), Some(3000)), Some(49001));
+    }
+
+    #[test]
+    fn rootful_keeps_the_declared_port() {
+        // own netns, no injection — the app really is on 3000
+        assert_eq!(recorded(None, Some(3000)), Some(3000));
+    }
+
+    #[test]
+    fn an_app_without_a_health_gate_still_has_none() {
+        // injecting a port must not invent a gate the author never asked for;
+        // `alive` remains the bar
+        assert_eq!(recorded(Some(49001), None), None);
+        assert_eq!(recorded(None, None), None);
+    }
 }
 
 #[cfg(test)]

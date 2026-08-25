@@ -97,3 +97,8 @@ ssh server ply run hello-0.1.0-linux-x64.img
 
 Dependencies fetch by hash from your sources on first run. For zero-downtime
 upgrades of a running app, see [Deploys & health gates](/docs/deploy/).
+
+Working with a coding agent? Give it
+[the ply skill](/docs/agents/) first — agents reach for Docker habits by
+default, and the skill is what stops them writing a Dockerfile you never
+asked for.

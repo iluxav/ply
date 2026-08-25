@@ -47,6 +47,7 @@ process, and your app runs as an ordinary child process. `Ctrl-C` stops it.
 ## Where to go next
 
 - [Quickstart](/docs/quickstart/) — running your first app in five minutes
+- [Using ply with AI agents](/docs/agents/) — a skill file so your agent stops writing Dockerfiles
 - [Dependencies & lockfiles](/docs/dependencies/) — how resolution works
 - [Registries & publishing](/docs/registries/) — shipping images anywhere
 - [ply vs Docker](/docs/ply-vs-docker/) — an honest comparison
