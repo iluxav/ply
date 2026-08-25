@@ -46,8 +46,10 @@ release:
 	git add Cargo.toml Cargo.lock; \
 	git commit -m "v$$V"; \
 	git push; \
-	gh release create "v$$V" --title "v$$V" --generate-notes --draft; \
-	echo "release: v$$V drafted — release.yml publishes it once both binaries upload"; \
+	git tag "v$$V"; \
+	git push origin "v$$V"; \
+	echo "release: v$$V tagged — release.yml builds both binaries, then creates the"; \
+	echo "release: release with them attached (nothing is 'latest' until it is complete)"; \
 	echo "release: follow with: gh run watch"
 
 # build the static binary and install it as `ply` (exactly one file lands on the host)

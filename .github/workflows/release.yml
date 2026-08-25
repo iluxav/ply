@@ -44,24 +44,35 @@ jobs:
       - name: test (x64 only)
         if: matrix.target == 'x86_64-unknown-linux-musl'
         run: cargo test --workspace
-      - name: upload to release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ github.ref_name }}" "${{ matrix.artifact }}" --clobber
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+          retention-days: 1
 
-  # `make release` creates the release as a DRAFT. A draft is not "latest" and
-  # has no download URL, so `releases/latest/download/…` keeps resolving to the
-  # previous good release while this one builds. Publishing here — after every
-  # matrix leg has uploaded — closes the window where install.sh 404s.
+  # The release is created ONCE, already holding both binaries.
+  #
+  # It used to be created up-front by `make release`, which made it `latest`
+  # the instant it existed — so `releases/latest/download/…` 404'd for the
+  # ~3 minutes the build took, breaking `curl | sh` for everyone. Creating it
+  # as a draft instead deadlocked: a draft has no git tag, so no tag push, so
+  # this workflow never ran to publish it. Building first and creating the
+  # release with its assets attached has neither failure mode.
   publish:
     needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: publish the release
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - name: create the release with its binaries
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release edit "${{ github.ref_name }}" --draft=false --latest
-          echo "published ${{ github.ref_name }} with:"
+          test -s ply-linux-x64 && test -s ply-linux-arm64 \
+            || { echo "::error::a binary is missing — refusing to publish a partial release"; exit 1; }
+          gh release create "${{ github.ref_name }}" \
+            --title "${{ github.ref_name }}" --generate-notes --latest \
+            ply-linux-x64 ply-linux-arm64
           gh release view "${{ github.ref_name }}" --json assets --jq '.assets[].name'
