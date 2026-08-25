@@ -31,8 +31,10 @@ pub struct RunOptions {
     /// Dev-mode bind mounts: (host path, container path). Same mechanism
     /// as volumes.
     pub links: Vec<(PathBuf, String)>,
-    /// `--publish`: the parent binds this host port and L4-balances the pool.
-    pub publish: Option<crate::runtime::publish::Publish>,
+    /// `--publish`, repeatable: each spec gets its own host listener and its
+    /// own backend pool, all fed by the same instances. An edge needs :80 and
+    /// :443 together; a service may want HTTP plus gRPC or metrics.
+    pub publish: Vec<crate::runtime::publish::Publish>,
     /// `--after`: apps on this host that must be healthy before the first
     /// instance launches (waited for once, at parent start).
     pub after: Vec<String>,
@@ -108,7 +110,7 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
         rootless,
         opts.scale,
         !ctx.manifest.ports.is_empty(),
-        opts.publish.is_some(),
+        !opts.publish.is_empty(),
     ) {
         ScaleGuard::Refuse(msg) => return Err(Error::Runtime(msg.into())),
         ScaleGuard::Warn(msg) => eprintln!("ply: warning: {msg}"),
@@ -118,27 +120,37 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
     // --publish: claim the host port BEFORE anything starts (fail fast on a
     // taken port), then serve the pool from a dedicated accept thread. The
     // pool map follows the instance lifecycle via launch/Drop.
-    let publishing = match opts.publish {
-        Some(spec) => {
-            let listener = crate::runtime::publish::bind(spec, rootless)?;
-            let pool = crate::runtime::publish::Pool::new();
-            let serve_pool = pool.clone();
-            std::thread::spawn(move || crate::runtime::publish::serve(listener, serve_pool));
-            eprintln!(
-                "ply: publishing {}:{} → {} pool{}",
-                spec.scope.bind_addr(rootless),
-                spec.host_port,
-                ctx.manifest.package.name,
-                if rootless {
-                    " (rootless: each instance gets its own injected PORT)"
-                } else {
-                    ""
-                }
-            );
-            Some(PublishWiring { pool, spec })
-        }
-        None => None,
-    };
+    // Every listener is claimed before anything starts, so a taken port fails
+    // fast rather than half-way through a launch.
+    let mut publishing: Vec<PublishWiring> = Vec::new();
+    for spec in &opts.publish {
+        let listener = crate::runtime::publish::bind(*spec, rootless)?;
+        let pool = crate::runtime::publish::Pool::new();
+        let serve_pool = pool.clone();
+        std::thread::spawn(move || crate::runtime::publish::serve(listener, serve_pool));
+        eprintln!(
+            "ply: publishing {}:{} → {} pool",
+            spec.scope.bind_addr(rootless),
+            spec.host_port,
+            ctx.manifest.package.name,
+        );
+        publishing.push(PublishWiring { pool, spec: *spec });
+    }
+    // Rootless instances share the host netns, so they cannot all bind the
+    // same port — ply hands each one its own loopback port as PORT. PORT is a
+    // single variable, so only the FIRST spec can be satisfied that way; the
+    // rest expect the app to bind their instance_port itself (an edge reads
+    // its ports from its own config, not from PORT).
+    if rootless && opts.publish.len() > 1 && opts.scale > 1 {
+        eprintln!(
+            "ply: warning: rootless --scale {} with {} published ports — only the first \
+             ({}) is injected as PORT; the app must bind the rest itself, and instances \
+             will collide if it does",
+            opts.scale,
+            opts.publish.len(),
+            opts.publish[0].instance_port,
+        );
+    }
 
     // --after: block until the named apps pass their health gates. Placed
     // after --publish so a taken port still fails fast, before any launch so
@@ -328,7 +340,7 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                 rootless,
                 Some(slot),
                 info.restarts,
-                publishing.as_ref(),
+                &publishing,
             ) {
                 Ok(instance) => {
                     update_child(info.sig_idx, instance.child.as_raw());
@@ -396,7 +408,7 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                     rootless,
                     Some(slot),
                     restarts,
-                    publishing.as_ref(),
+                    &publishing,
                 )
                 .and_then(|instance| {
                     if wait_healthy(&ctx, &instance) {
@@ -447,7 +459,7 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                             rootless,
                             Some(slot),
                             restarts,
-                            publishing.as_ref(),
+                            &publishing,
                         ) {
                             Ok(instance) => {
                                 if let Some(info) = slots.get_mut(&slot) {
@@ -681,14 +693,14 @@ struct Instance {
     child: Pid,
     _cgroup: Option<Cgroup>,
     guard: InstanceGuard,
-    /// Published pool this instance is registered in (removed on Drop, so
+    /// Published pools this instance is registered in (removed on Drop, so
     /// every stop path — death, roll, shutdown — also stops traffic).
-    pool: Option<crate::runtime::publish::Pool>,
+    pools: Vec<crate::runtime::publish::Pool>,
 }
 
 impl Drop for Instance {
     fn drop(&mut self) {
-        if let Some(pool) = &self.pool {
+        for pool in &self.pools {
             pool.remove(self.n);
         }
         let _ = hosts::remove_entry(&self.app, self.n);
@@ -704,7 +716,7 @@ fn launch_instance(
     rootless: bool,
     slot: Option<u32>,
     restarts: u32,
-    publish: Option<&PublishWiring>,
+    publish: &[PublishWiring],
 ) -> Result<Instance> {
     let manifest = &ctx.manifest;
     let entrypoint = &ctx.entrypoint;
@@ -820,7 +832,7 @@ fn launch_instance(
     // gets its own loopback port, injected as PORT (the parent LBs across
     // them). Overrides any manifest/CLI PORT — with --publish the parent
     // owns the externally visible port.
-    let injected_port = match (publish, rootless) {
+    let injected_port = match (publish.first(), rootless) {
         (Some(_), true) => {
             let port = crate::runtime::publish::allocate_loopback_port()?;
             match spec_env.iter_mut().find(|(k, _)| k == "PORT") {
@@ -918,8 +930,10 @@ fn launch_instance(
         started,
         restarts,
         health_port: manifest.health.as_ref().and_then(|h| h.port),
-        published_port: publish.map(|w| w.spec.host_port),
-        published_addr: publish.map(|w| {
+        // The first spec is the app's canonical address — what `--after`
+        // hands to dependants and what `ply lb` emits.
+        published_port: publish.first().map(|w| w.spec.host_port),
+        published_addr: publish.first().map(|w| {
             format!(
                 "{}:{}",
                 w.spec.scope.connect_addr(rootless),
@@ -938,14 +952,19 @@ fn launch_instance(
 
     // Join the published pool: rootful backends live on the bridge at the
     // shared instance port; rootless ones on their injected loopback port.
-    let pool = publish.map(|wiring| {
-        let backend = match injected_port {
-            Some(port) => std::net::SocketAddr::from(([127, 0, 0, 1], port)),
-            None => std::net::SocketAddr::from((ip, wiring.spec.instance_port)),
-        };
-        wiring.pool.insert(n, backend);
-        wiring.pool.clone()
-    });
+    let pools: Vec<crate::runtime::publish::Pool> = publish
+        .iter()
+        .enumerate()
+        .map(|(i, wiring)| {
+            let backend = match injected_port {
+                // only the first spec gets the injected loopback port
+                Some(port) if i == 0 => std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+                _ => std::net::SocketAddr::from((ip, wiring.spec.instance_port)),
+            };
+            wiring.pool.insert(n, backend);
+            wiring.pool.clone()
+        })
+        .collect();
 
     Ok(Instance {
         app: app.clone(),
@@ -953,7 +972,7 @@ fn launch_instance(
         child,
         _cgroup: cgroup,
         guard,
-        pool,
+        pools,
     })
 }
 
@@ -1160,6 +1179,44 @@ pub fn subid_gap() -> Option<&'static str> {
         );
     }
     None
+}
+
+#[cfg(test)]
+mod multi_publish_tests {
+    use crate::runtime::publish::{parse_publish, BindScope};
+
+    #[test]
+    fn an_edge_can_hold_both_web_ports() {
+        let specs: Vec<_> = ["80:80", "443:443"]
+            .iter()
+            .map(|s| parse_publish(s).unwrap())
+            .collect();
+        assert_eq!(specs.len(), 2);
+        assert_eq!(specs[0].host_port, 80);
+        assert_eq!(specs[1].host_port, 443);
+        // both public by default: an edge is the one thing that should be
+        assert!(specs.iter().all(|s| s.scope == BindScope::Public));
+    }
+
+    #[test]
+    fn scopes_are_per_spec() {
+        // a public web port and a loopback-only admin port on one app
+        let public = parse_publish("443:443").unwrap();
+        let admin = parse_publish("internal:9090").unwrap();
+        assert_eq!(public.scope, BindScope::Public);
+        assert_eq!(admin.scope, BindScope::Internal);
+    }
+
+    #[test]
+    fn the_first_spec_is_the_canonical_address() {
+        // what --after hands to dependants and what ply lb emits; adding a
+        // metrics port must not silently change where callers are pointed
+        let specs: Vec<_> = ["internal:3000", "internal:9090"]
+            .iter()
+            .map(|s| parse_publish(s).unwrap())
+            .collect();
+        assert_eq!(specs.first().unwrap().host_port, 3000);
+    }
 }
 
 #[cfg(test)]

@@ -62,7 +62,11 @@ address:
 ply run api.img --scale 4 --publish 8080          # 0.0.0.0:8080
 ply run db.img  --publish internal:5432           # only other ply apps on this host
 ply run api.img --publish 127.0.0.1:8080:3000     # exactly that address
+ply run edge.img --publish 80:80 --publish 443:443  # repeatable
 ```
+
+Repeating it gives each spec its own listener and pool. The first is the
+app's canonical address (what `--after` hands to dependants).
 
 Reach for `internal` for databases and internal APIs — a bare
 `--publish 5432` puts postgres on every interface.

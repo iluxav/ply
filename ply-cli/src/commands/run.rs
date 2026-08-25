@@ -28,9 +28,20 @@ pub fn exec(args: RunArgs) -> Result<()> {
 
     let publish = args
         .publish
-        .as_deref()
-        .map(ply_core::runtime::publish::parse_publish)
-        .transpose()?;
+        .iter()
+        .map(|s| ply_core::runtime::publish::parse_publish(s))
+        .collect::<Result<Vec<_>, _>>()?;
+    // Two listeners on one host port is a config error, not a race to lose
+    // at bind time with a confusing "address in use".
+    for (i, spec) in publish.iter().enumerate() {
+        if let Some(dup) = publish[..i].iter().find(|p| p.host_port == spec.host_port) {
+            bail!(
+                "--publish {}: host port {} is already published by an earlier --publish",
+                spec.host_port,
+                dup.host_port
+            );
+        }
+    }
 
     let code = run(&RunOptions {
         image: args.image,

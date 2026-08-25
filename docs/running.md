@@ -115,8 +115,11 @@ ply run edge.img                           # rootless edge
 sudo ply run api.img --scale 4 --publish internal:3000
 ```
 
-Rootful edge works too, but the instance lives in its own netns, so the host
-ports reach it via `--publish 443:443 --publish 80:80` — one extra hop.
+Rootful edge works too — the instance lives in its own netns, so the host
+ports reach it through the parent's listeners (`--publish 80:80
+--publish 443:443`), one extra hop each. Publishing `:80` as well as `:443`
+is worth it: it gives caddy its automatic HTTP→HTTPS redirect and lets ACME
+fall back to the HTTP-01 challenge instead of relying on TLS-ALPN-01 alone.
 
 A system-service Caddy is the choice when TLS should keep working while ply
 is stopped entirely: separate supervision, certs in `/var/lib/caddy`, and
@@ -145,6 +148,29 @@ The two modes differ in who picks the instance-side port:
   IPs; tell the parent where the backends are with `HOST:INSTANCE`
   (`--publish 80:3000` for an app serving :3000), or align the app with
   `-e PORT=` to match a bare `--publish`.
+
+### More than one port
+
+`--publish` is repeatable — each spec gets its own host listener and its own
+backend pool, all fed by the same instances:
+
+```sh
+ply run edge.img --publish 80:80 --publish 443:443        # an edge needs both
+ply run api.img --publish internal:3000 --publish internal:9090   # app + metrics
+```
+
+The **first** spec is the app's canonical address: what `--after` hands to
+dependants and what `ply lb` emits. Adding a metrics port second therefore
+cannot silently repoint your callers.
+
+Two specs claiming the same host port is refused up front, rather than
+losing a race at bind time with a confusing "address in use".
+
+Rootless has one limit: instances share the host netns, so ply hands each
+its own loopback port as `PORT` — and `PORT` is a single variable. Only the
+first spec can be satisfied that way, so `--scale N` with several published
+ports warns, and the app must bind the rest itself. An edge reads its ports
+from its own config rather than `PORT`, so scale-1 edges are unaffected.
 
 ### Who can reach it
 

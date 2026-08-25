@@ -73,7 +73,7 @@ pub fn systemd(args: SystemdArgs) -> Result<()> {
     if let Some(scale) = args.scale {
         flags.extend(["--scale".into(), scale.to_string()]);
     }
-    if let Some(publish) = &args.publish {
+    for publish in &args.publish {
         // Validate now — a typo should fail here, not at boot via systemd.
         ply_core::runtime::publish::parse_publish(publish)?;
         flags.extend(["--publish".into(), publish.clone()]);

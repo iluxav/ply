@@ -1,0 +1,35 @@
+# plybox.sh edge. Seeds the config volume on first run; after that THIS copy
+# in the image is inert — edit the volume's copy and `--watch` reloads it.
+#
+# The upstream is the app's PUBLISHED address, not its instance IPs:
+# `ply run … --publish internal:3000` binds the run parent on the bridge
+# gateway (10.77.0.1 rootful), and that parent already balances the pool,
+# skips unhealthy backends and drains on deploy. So this line never changes
+# when you scale, roll, crash or restart. Point caddy at instance IPs
+# instead and the config has to be regenerated on every one of those.
+#
+# A global block, if used, MUST come first — before any site block.
+# Uncomment for a dry run against Let's Encrypt staging: production issuance
+# is capped at 5 duplicates per week with no appeal, so prove the pipeline on
+# staging and spend the real one once.
+#
+# {
+# 	acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+# }
+
+plybox.sh {
+	reverse_proxy 10.77.0.1:3000
+}
+
+# Run it holding both web ports:
+#
+#   ply run … --publish 80:80 --publish 443:443
+#
+# :80 gets caddy's automatic HTTP→HTTPS redirect and lets ACME fall back to
+# the HTTP-01 challenge; :443 serves. With only :443 published, caddy is
+# limited to TLS-ALPN-01 — which works, but has no fallback if it ever
+# breaks.
+#
+# ACME of any kind needs the domain pointed AT this host: grey-cloud it in
+# Cloudflare first, since neither challenge can validate against Cloudflare's
+# IPs.

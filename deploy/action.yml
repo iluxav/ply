@@ -38,7 +38,10 @@ inputs:
     description: Instance count (used at first bootstrap; change via unit later)
     default: "1"
   publish:
-    description: "Optional --publish PORT[:INSTANCE_PORT] for the unit"
+    description: >
+      Optional --publish spec(s) for the unit. One per line for several:
+      an edge wants "80:80\n443:443". Each spec is
+      [ADDR:]PORT[:INSTANCE_PORT] where ADDR is internal|public|an IPv4.
     default: ""
   host-key:
     description: Pinned host key line for known_hosts (default = TOFU keyscan)
@@ -86,7 +89,13 @@ runs:
           ply deploy "$dir/current.img"
         else
           flags="--scale $SCALE"
-          [ -n "$PUBLISH" ] && flags="$flags --publish $PUBLISH"
+          # one --publish per non-empty line, so multi-port apps (an edge on
+          # :80 and :443) bake both listeners into the unit
+          # `if` not `[ … ] &&`: under `set -e` the && form returns 1 on the
+          # empty default and kills the whole bootstrap.
+          while IFS= read -r spec; do
+            if [ -n "$spec" ]; then flags="$flags --publish $spec"; fi
+          done <<< "$PUBLISH"
           ply systemd "$dir/current.img" $flags > "/etc/systemd/system/ply-$APP.service"
           systemctl daemon-reload
           systemctl enable --now "ply-$APP"

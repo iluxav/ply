@@ -1,5 +1,10 @@
 # plybox.sh — build the site (app/ + docs/) and roll it onto the web droplet.
 # Secrets: WEB_DEPLOY_SSH_KEY. Vars: WEB_DROPLET_HOST.
+#
+# Topology: caddy (deploy/edge, a ply app) owns :443 and reverse-proxies to
+# this app's published internal address. The edge is deployed by hand — it
+# changes rarely and holds the TLS certs — so this workflow only rolls the
+# site itself.
 name: deploy-web
 on:
   push:
@@ -34,12 +39,19 @@ jobs:
           host: ${{ vars.WEB_DROPLET_HOST }}
           ssh-key: ${{ secrets.WEB_DEPLOY_SSH_KEY }}
           scale: "2"
-          publish: "80:3000"
+          # internal: the run parent binds the bridge gateway, not 0.0.0.0.
+          # The edge (deploy/edge) owns :443 and proxies to it — publishing
+          # this on :80 would collide with the edge and expose the app
+          # directly. Only used when bootstrapping a unit that is not already
+          # active; a live host takes the `ply deploy` path instead.
+          publish: "internal:3000"
 
       - name: verify from outside
         run: |
+          # Through the edge, over TLS — the app has no public port of its own.
           for i in $(seq 1 20); do
-            curl -fsS -m 5 "http://${{ vars.WEB_DROPLET_HOST }}/" -o /dev/null && exit 0
+            curl -fsS -m 5 "https://plybox.sh/" -o /dev/null && exit 0
             sleep 3
           done
+          echo "::error::plybox.sh did not serve after the roll"
           exit 1

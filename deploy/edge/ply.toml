@@ -1,0 +1,44 @@
+# plybox.sh production edge — one Caddy fronting every app pool on the host.
+#
+# Distinct from demos/edge (which binds :18080 because dev machines squat the
+# classic ports). This one is built to hold :80/:443 on a real host.
+#
+#   ply build deploy/edge
+#   scp deploy/edge/plybox-edge-0.1.0-linux-x64.img root@HOST:/srv/edge/
+#
+# Ports are DECLARED here for one reason: ply grants CAP_NET_BIND_SERVICE to
+# an app that declares a port below 1024, which is what lets an unprivileged
+# caddy bind :80/:443. What caddy actually listens on is the Caddyfile's
+# business, and that lives in a volume — edit it in place and `--watch`
+# reloads with no restart and no rebuild.
+
+[package]
+name = "plybox-edge"
+version = "0.1.0"
+entrypoint = ["/bin/sh", "-c", "[ -f /etc/caddy/Caddyfile ] || cp /opt/plybox-edge/Caddyfile /etc/caddy/Caddyfile; exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile --watch"]
+base = "alpine@3.20"
+
+[dependencies]
+caddy = "2"
+
+[env]
+HOME = "/tmp"
+XDG_CONFIG_HOME = "/tmp"
+# NOT /tmp: caddy keeps issued certificates under $XDG_DATA_HOME/caddy, and
+# /tmp is the instance's tmpfs. On tmpfs every restart re-issues, and Let's
+# Encrypt's duplicate-certificate limit (5 per week, no appeal) locks the
+# domain out. This points at a volume for that reason alone.
+XDG_DATA_HOME = "/data"
+
+[ports]
+http = 80
+https = 443
+
+[volumes]
+# The live config. Edit it on the host; caddy --watch reloads it in place.
+config = { path = "/etc/caddy" }
+# Issued certificates + ACME account keys. MUST survive restarts.
+data = { path = "/data" }
+
+[sources]
+default = "https://registry.plybox.sh/ply/{package}"

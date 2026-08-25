@@ -208,8 +208,12 @@ pub struct RunArgs {
     /// (0.0.0.0, the default) or an IPv4 address. Use `internal` for
     /// databases and internal APIs: `--publish 5432` puts postgres on every
     /// interface, `--publish internal:5432` does not.
+    ///
+    /// Repeatable — each spec gets its own listener and backend pool, so an
+    /// edge can hold `--publish 80:80 --publish 443:443`. The first spec is
+    /// the app's canonical address (what `--after` gives dependants).
     #[arg(long, value_name = "[ADDR:]PORT[:INSTANCE_PORT]")]
-    pub publish: Option<String>,
+    pub publish: Vec<String>,
 
     /// Start only after APP is healthy (repeatable): waits for an instance
     /// of APP to pass its [health] gate — or just to be running if it has none.
@@ -428,9 +432,9 @@ pub struct SystemdArgs {
     #[arg(long, value_name = "N")]
     pub scale: Option<u32>,
 
-    /// Publish the pool on a host port (baked into ExecStart)
+    /// Publish the pool on a host port (baked into ExecStart). Repeatable.
     #[arg(long, value_name = "[ADDR:]PORT[:INSTANCE_PORT]")]
-    pub publish: Option<String>,
+    pub publish: Vec<String>,
 
     /// Environment variables for the app (repeatable, KEY=VALUE)
     #[arg(short = 'e', long = "env", value_name = "KEY=VALUE")]
