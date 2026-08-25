@@ -13,7 +13,9 @@ on:
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    # arm64: the droplet is arm64, and `ply build` builds for the host arch —
+    # this runner makes npm's native modules and the image both linux-arm64.
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
