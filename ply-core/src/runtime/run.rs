@@ -38,6 +38,12 @@ pub struct RunOptions {
     pub after: Vec<String>,
     /// `--after-timeout`: how long to wait for `after` before giving up.
     pub after_timeout: std::time::Duration,
+    /// `--privileged`: skip rights stripping entirely — no capability drop,
+    /// no no_new_privs, no seccomp. The app runs with everything the parent
+    /// had. Debugging and OCI-import triage only: imported images expect
+    /// Docker's retained capabilities (`chown -R x:x /data && exec gosu x`),
+    /// which ply's zero-capability default refuses.
+    pub privileged: bool,
 }
 
 /// Live wiring for a published pool, threaded through instance launches.
@@ -50,6 +56,18 @@ struct PublishWiring {
 
 pub fn run(opts: &RunOptions) -> Result<i32> {
     let rootless = !crate::paths::is_root();
+    if opts.privileged {
+        // Never quiet about this: the whole point of the runtime is that the
+        // app ends up with nothing, and --privileged undoes all three layers.
+        eprintln!(
+            "ply: WARNING: --privileged — capabilities kept, no_new_privs off, seccomp off.{}",
+            if rootless {
+                " Rootless, so this is still bounded by your user namespace."
+            } else {
+                " Running as root: the app gets REAL root on this host."
+            }
+        );
+    }
     if rootless {
         eprintln!(
             "ply: rootless mode — extracted layers, host network (no .ply names), no cgroup limits"
@@ -72,6 +90,18 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
 
     let store = Store::open_default()?;
     let mut ctx = prepare_app(&opts.image, &opts.cli_env, opts.allow_insecure, &store)?;
+
+    // Only apps that need a second uid to exist care about the subid range:
+    // a declared [package] user, or an import whose entrypoint will gosu down.
+    if rootless {
+        let needs_ids =
+            ctx.manifest.package.user.is_some() || ctx.manifest.package.capabilities.is_some();
+        if needs_ids {
+            if let Some(gap) = subid_gap() {
+                eprintln!("ply: warning: {gap}");
+            }
+        }
+    }
 
     match rootless_scale_guard(
         rootless,
@@ -160,6 +190,13 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
         signal::sigaction(Signal::SIGHUP, &hup).ok();
     }
 
+    // How this app asks to be stopped. Imported images carry their own
+    // (nginx SIGQUIT, httpd SIGWINCH); everything else means SIGTERM.
+    let stop_signal = match &ctx.manifest.package.stop_signal {
+        Some(name) => crate::manifest::parse_stop_signal(name)?,
+        None => Signal::SIGTERM,
+    };
+
     // [restart] policy: the parent respawns instances it started. If the
     // parent itself dies, that's systemd's layer.
     let restart_policy = ctx.manifest.restart.clone();
@@ -185,15 +222,7 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
 
     let mut instances: Vec<Instance> = Vec::new();
     for _ in 0..opts.scale.max(1) {
-        let instance = launch_instance(
-            &ctx,
-            &opts.links,
-            &store,
-            rootless,
-            None,
-            0,
-            publishing.as_ref(),
-        )?;
+        let instance = launch_instance(&ctx, opts, &store, rootless, None, 0, publishing.as_ref())?;
         let sig_idx = register_child(instance.child.as_raw());
         slots.insert(
             instance.n,
@@ -284,7 +313,7 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
             );
             match launch_instance(
                 &ctx,
-                &opts.links,
+                opts,
                 &store,
                 rootless,
                 Some(slot),
@@ -347,12 +376,12 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                 if let Some(info) = slots.get(&slot) {
                     update_child(info.sig_idx, 0);
                 }
-                stop_instance(old_instance);
+                stop_instance(old_instance, stop_signal);
 
                 let restarts = slots.get(&slot).map(|s| s.restarts).unwrap_or(0);
                 let outcome = launch_instance(
                     &ctx,
-                    &opts.links,
+                    opts,
                     &store,
                     rootless,
                     Some(slot),
@@ -364,7 +393,7 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                         Ok(instance)
                     } else {
                         let app = instance.app.clone();
-                        stop_instance(instance);
+                        stop_instance(instance, stop_signal);
                         Err(Error::Runtime(format!(
                             "{app}.{slot} failed its health gate"
                         )))
@@ -403,7 +432,7 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                         );
                         match launch_instance(
                             &ctx,
-                            &opts.links,
+                            opts,
                             &store,
                             rootless,
                             Some(slot),
@@ -440,10 +469,13 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
 
 /// Deliberate stop: TERM, up to 10s to comply, then KILL. Reaps the child so
 /// its death never reaches the policy loop.
-fn stop_instance(instance: Instance) {
+fn stop_instance(instance: Instance, stop_signal: Signal) {
     use nix::sys::wait::WaitPidFlag;
     let child = instance.child;
-    let _ = signal::kill(child, Signal::SIGTERM);
+    // The in-container init forwards whatever it receives, so an image that
+    // wants SIGQUIT (nginx) or SIGWINCH (httpd) gets to drain instead of
+    // being SIGKILLed when the 10s patience below runs out.
+    let _ = signal::kill(child, stop_signal);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while let Ok(WaitStatus::StillAlive) = waitpid(child, Some(WaitPidFlag::WNOHANG)) {
         if std::time::Instant::now() >= deadline {
@@ -657,7 +689,7 @@ impl Drop for Instance {
 
 fn launch_instance(
     ctx: &AppContext,
-    links: &[(PathBuf, String)],
+    opts: &RunOptions,
     store: &Store,
     rootless: bool,
     slot: Option<u32>,
@@ -700,7 +732,7 @@ fn launch_instance(
         }
         binds.push((host_dir, volume.path.clone()));
     }
-    for (host, container) in links {
+    for (host, container) in &opts.links {
         let host = std::path::absolute(host).map_err(|source| Error::Io {
             path: host.clone(),
             source,
@@ -751,6 +783,21 @@ fn launch_instance(
         nix::unistd::pipe().map_err(|e| Error::Runtime(format!("pipe: {e}")))?;
 
     let keep_net_bind = manifest.ports.values().any(|p| *p < 1024);
+    let keep_caps =
+        crate::runtime::security::keep_set(manifest.package.capabilities.as_ref(), keep_net_bind)?;
+    if !keep_caps.is_empty() {
+        // Anything above the empty default is worth one line of output — the
+        // whole promise of the runtime is that the app ends up with nothing.
+        eprintln!(
+            "ply: {app} keeps {} capability/ies: {}",
+            keep_caps.len(),
+            keep_caps
+                .iter()
+                .map(|c| c.to_string())
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+    }
     let mut spec_env = env.to_vec();
     if let Some(user) = &run_user {
         for pair in spec_env.iter_mut() {
@@ -778,13 +825,18 @@ fn launch_instance(
         layers,
         instance_dir: instance_dir.clone(),
         hostname: app.clone(),
-        cwd: PathBuf::from(format!("/opt/{app}")),
+        cwd: manifest
+            .package
+            .workdir
+            .clone()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(format!("/opt/{app}"))),
         env: spec_env,
         argv: entrypoint.to_vec(),
         binds,
         sync_rx,
-        keep_net_bind,
-        privileged: false,
+        keep_caps,
+        privileged: opts.privileged,
         rootless,
         run_user,
     };
@@ -887,10 +939,124 @@ fn launch_instance(
     })
 }
 
-/// Map the invoking user to root inside the child's user namespace.
+/// A `/etc/subuid` or `/etc/subgid` delegation: `<name>:<start>:<count>`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SubIdRange {
+    pub start: u32,
+    pub count: u32,
+}
+
+/// This user's line in a subid file. Entries are keyed by name, but the
+/// numeric id is accepted too — both spellings appear in the wild.
+pub fn parse_subid(text: &str, user: &str, id: u32) -> Option<SubIdRange> {
+    let id = id.to_string();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let f: Vec<&str> = line.split(':').collect();
+        if f.len() < 3 || (f[0] != user && f[0] != id) {
+            continue;
+        }
+        if let (Ok(start), Ok(count)) = (f[1].parse::<u32>(), f[2].parse::<u32>()) {
+            if count > 0 {
+                return Some(SubIdRange { start, count });
+            }
+        }
+    }
+    None
+}
+
+/// The invoking user's name, read from the host's passwd file.
+fn username_for(uid: u32) -> Option<String> {
+    let text = std::fs::read_to_string("/etc/passwd").ok()?;
+    text.lines()
+        .map(|l| l.split(':').collect::<Vec<_>>())
+        .find(|f| f.len() > 2 && f[2].parse::<u32>() == Ok(uid))
+        .map(|f| f[0].to_string())
+}
+
+fn have(tool: &str) -> bool {
+    std::env::var("PATH")
+        .unwrap_or_default()
+        .split(':')
+        .any(|d| !d.is_empty() && Path::new(d).join(tool).exists())
+}
+
+/// Map the invoking user into the child's user namespace.
+///
+/// Without a delegated subuid range only ONE id exists inside (root = you),
+/// and every other uid is unmapped: `chown redis .` and `setuid(70)` both
+/// fail with EINVAL, which breaks `[package] user` and every imported image
+/// that drops privileges. A `/etc/subuid` range fixes that, but the kernel
+/// only lets an unprivileged process write a single-entry map — writing a
+/// range needs CAP_SETUID in the parent namespace, which is exactly what the
+/// setuid-root `newuidmap`/`newgidmap` helpers are for. Same mechanism
+/// rootless podman and docker use.
 fn write_id_maps(pid: i32) -> Result<()> {
     let uid = nix::unistd::getuid().as_raw();
     let gid = nix::unistd::getgid().as_raw();
+    let user = username_for(uid).unwrap_or_default();
+
+    let sub = |file: &str, id: u32| {
+        std::fs::read_to_string(file)
+            .ok()
+            .and_then(|t| parse_subid(&t, &user, id))
+    };
+    let ranges = match (sub("/etc/subuid", uid), sub("/etc/subgid", gid)) {
+        (Some(u), Some(g)) if have("newuidmap") && have("newgidmap") => Some((u, g)),
+        _ => None,
+    };
+
+    if let Some((u, g)) = ranges {
+        // NOT setgroups=deny here: that is irreversible, and gosu/su-exec
+        // call setgroups() on their way down to a service user. The helpers
+        // are setuid-root, so they can write gid_map without it.
+        let helper = |tool: &str, args: [String; 7]| -> Result<()> {
+            let out = std::process::Command::new(tool)
+                .args(&args)
+                .output()
+                .map_err(|e| Error::Runtime(format!("{tool}: {e}")))?;
+            if !out.status.success() {
+                return Err(Error::Runtime(format!(
+                    "{tool} {}: {}",
+                    args.join(" "),
+                    String::from_utf8_lossy(&out.stderr).trim()
+                )));
+            }
+            Ok(())
+        };
+        // inside 0 -> your uid (1 id), then inside 1.. -> the delegated range
+        helper(
+            "newuidmap",
+            [
+                pid.to_string(),
+                "0".into(),
+                uid.to_string(),
+                "1".into(),
+                "1".into(),
+                u.start.to_string(),
+                u.count.to_string(),
+            ],
+        )?;
+        helper(
+            "newgidmap",
+            [
+                pid.to_string(),
+                "0".into(),
+                gid.to_string(),
+                "1".into(),
+                "1".into(),
+                g.start.to_string(),
+                g.count.to_string(),
+            ],
+        )?;
+        return Ok(());
+    }
+
+    // Fallback: the single-id map. Everything still runs except apps that
+    // need a second uid to exist — say so once, with the fix.
     let write = |file: &str, contents: String| -> Result<()> {
         let path = format!("/proc/{pid}/{file}");
         std::fs::write(&path, contents).map_err(|source| Error::Io {
@@ -902,6 +1068,105 @@ fn write_id_maps(pid: i32) -> Result<()> {
     write("gid_map", format!("0 {gid} 1"))?;
     write("uid_map", format!("0 {uid} 1"))?;
     Ok(())
+}
+
+/// Why the single-id map is in play, for the one-line warning at startup.
+/// None when a delegated range is usable.
+pub fn subid_gap() -> Option<&'static str> {
+    let uid = nix::unistd::getuid().as_raw();
+    let gid = nix::unistd::getgid().as_raw();
+    let user = username_for(uid).unwrap_or_default();
+    let has_range = |file: &str, id: u32| {
+        std::fs::read_to_string(file)
+            .ok()
+            .and_then(|t| parse_subid(&t, &user, id))
+            .is_some()
+    };
+    if !has_range("/etc/subuid", uid) || !has_range("/etc/subgid", gid) {
+        return Some(
+            "no /etc/subuid+/etc/subgid range for this user — only uid 0 exists inside, so \
+             `[package] user` and imported images that drop privileges will fail with EINVAL.\n\
+             ply:          fix: sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 $USER",
+        );
+    }
+    if !have("newuidmap") || !have("newgidmap") {
+        return Some(
+            "newuidmap/newgidmap not installed — a delegated subuid range exists but the kernel \
+             will not let an unprivileged process apply it, so only uid 0 exists inside.\n\
+             ply:          fix: sudo apt install uidmap   (or: dnf install shadow-utils)",
+        );
+    }
+    None
+}
+
+#[cfg(test)]
+mod subid_tests {
+    use super::*;
+
+    const SUBUID: &str = "# a comment
+iluxa:100000:65536
+someoneelse:200000:65536
+";
+
+    #[test]
+    fn finds_the_range_for_this_user() {
+        assert_eq!(
+            parse_subid(SUBUID, "iluxa", 1000),
+            Some(SubIdRange {
+                start: 100000,
+                count: 65536
+            })
+        );
+    }
+
+    #[test]
+    fn matches_by_numeric_id_too() {
+        // some distros write the uid instead of the name
+        assert_eq!(
+            parse_subid("1000:100000:65536\n", "", 1000),
+            Some(SubIdRange {
+                start: 100000,
+                count: 65536
+            })
+        );
+    }
+
+    #[test]
+    fn another_users_delegation_is_not_ours() {
+        assert_eq!(parse_subid(SUBUID, "nobody", 65534), None);
+    }
+
+    #[test]
+    fn junk_lines_are_skipped_not_fatal() {
+        let text = "broken\n# comment\nnocolons\na:b:c\niluxa:100000:65536\n";
+        assert_eq!(
+            parse_subid(text, "iluxa", 1000),
+            Some(SubIdRange {
+                start: 100000,
+                count: 65536
+            })
+        );
+    }
+
+    #[test]
+    fn a_zero_width_delegation_is_no_delegation() {
+        // a range of 0 ids maps nothing — treat it as absent rather than
+        // handing newuidmap an argument it will reject
+        assert_eq!(parse_subid("iluxa:100000:0\n", "iluxa", 1000), None);
+    }
+
+    #[test]
+    fn the_range_covers_the_service_uids_that_matter() {
+        let r = parse_subid(SUBUID, "iluxa", 1000).unwrap();
+        // redis 999, nginx 101, postgres 70, memcached 11211 all land inside
+        for uid in [70u32, 101, 999, 11211] {
+            assert!(
+                uid >= 1 && uid <= r.count,
+                "uid {uid} outside 1..={}",
+                r.count
+            );
+        }
+    }
 }
 
 const MAX_CHILDREN: usize = 256;

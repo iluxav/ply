@@ -61,12 +61,39 @@ impl LazyFile {
         }
     }
 
+    /// Open a file whose own mode forbids reading it.
+    ///
+    /// Images legitimately ship such files — mysql:8 has `/etc/gshadow` at
+    /// 0000 — and packing one must not depend on being root. The owner may
+    /// always chmod, so borrow the read bit, open, and hand it straight back;
+    /// the fd stays valid across the restore. What lands in the image is the
+    /// mode captured from metadata during the walk, so the original 0000
+    /// still ships.
+    fn open_borrowing_read(path: &Path) -> std::io::Result<File> {
+        use std::os::unix::fs::PermissionsExt;
+        let original = std::fs::metadata(path)?.permissions();
+        let mut relaxed = original.clone();
+        relaxed.set_mode(original.mode() | 0o400);
+        std::fs::set_permissions(path, relaxed)?;
+        let opened = File::open(path);
+        // restore no matter how the open went
+        let _ = std::fs::set_permissions(path, original);
+        opened
+    }
+
     fn open(&mut self) -> std::io::Result<&mut File> {
         use std::io::Seek;
         if self.file.is_none() {
-            let mut file = File::open(&self.path).map_err(|e| {
-                std::io::Error::new(e.kind(), format!("{}: {e}", self.path.display()))
-            })?;
+            let mut file = File::open(&self.path)
+                .or_else(|e| match e.kind() {
+                    std::io::ErrorKind::PermissionDenied => {
+                        Self::open_borrowing_read(&self.path).map_err(|_| e)
+                    }
+                    _ => Err(e),
+                })
+                .map_err(|e| {
+                    std::io::Error::new(e.kind(), format!("{}: {e}", self.path.display()))
+                })?;
             if self.pos != 0 {
                 file.seek(std::io::SeekFrom::Start(self.pos))?;
             }
@@ -227,6 +254,38 @@ mod tests {
         std::fs::write(&exe, b"#!/bin/sh\necho hi\n").unwrap();
         std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
         std::os::unix::fs::symlink("hello.txt", root.join("link")).unwrap();
+    }
+
+    #[test]
+    fn packs_a_file_whose_mode_forbids_reading_it() {
+        // mysql:8 ships /etc/gshadow at 0000. Root reads it regardless, so
+        // this only ever fails for the unprivileged — which is precisely the
+        // rootless import path.
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let secret = dir.path().join("gshadow");
+        std::fs::write(&secret, b"root:::\n").unwrap();
+        std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let out = dir.path().join("out.img");
+        write_image(
+            &[TreeSource {
+                dir: dir.path(),
+                prefix: "",
+                filter: None,
+            }],
+            &[],
+            &out,
+        )
+        .expect("a 0000 file must not fail the build");
+
+        // and the unreadable mode is what ships, not the borrowed one
+        assert_eq!(
+            std::fs::metadata(&secret).unwrap().permissions().mode() & 0o777,
+            0o000,
+            "the source file's mode must be handed back"
+        );
+        assert!(out.exists());
     }
 
     #[test]

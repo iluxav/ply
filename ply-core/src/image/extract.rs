@@ -23,6 +23,14 @@ pub fn extract_rootfs(image: &Path, dest: &Path) -> Result<()> {
         ))
     })?;
 
+    // Directory modes are applied only after every node is written: a
+    // read-only directory (0555 is common in RHEL-family trees) would
+    // otherwise refuse the files that belong inside it. Root would not
+    // notice — it has CAP_DAC_OVERRIDE — which is exactly how this stays
+    // hidden until someone runs rootless.
+    let mut deferred: std::collections::BTreeMap<std::path::PathBuf, u32> =
+        std::collections::BTreeMap::new();
+
     for node in fs.files() {
         let rel = node
             .fullpath
@@ -40,10 +48,12 @@ pub fn extract_rootfs(image: &Path, dest: &Path) -> Result<()> {
         match &node.inner {
             InnerNode::Dir(_) => {
                 std::fs::create_dir_all(&target).map_err(ioerr)?;
+                let mode = node.header.permissions as u32;
                 let _ = std::fs::set_permissions(
                     &target,
-                    std::fs::Permissions::from_mode(node.header.permissions as u32),
+                    std::fs::Permissions::from_mode(mode | 0o700),
                 );
+                deferred.insert(target.clone(), mode);
             }
             InnerNode::File(f) => {
                 if let Some(parent) = target.parent() {
@@ -69,6 +79,12 @@ pub fn extract_rootfs(image: &Path, dest: &Path) -> Result<()> {
             // devices/fifos never make it into ply images (writer refuses)
             _ => {}
         }
+    }
+
+    // Deepest first: BTreeMap orders a parent before its children, so
+    // reversing seals a directory only once nothing else goes inside it.
+    for (dir, mode) in deferred.iter().rev() {
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(*mode));
     }
     Ok(())
 }

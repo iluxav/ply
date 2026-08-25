@@ -28,8 +28,9 @@ pub struct ContainerSpec {
     /// Read end of the parent's sync pipe: proceed on 1 byte (parent placed
     /// us in the cgroup), abort on EOF (parent failed).
     pub sync_rx: std::os::fd::OwnedFd,
-    /// Keep CAP_NET_BIND_SERVICE (a declared port is < 1024).
-    pub keep_net_bind: bool,
+    /// Capabilities the app keeps after stripping. Empty for ply-native
+    /// packages; Docker's fourteen for `capabilities = "oci"` imports.
+    pub keep_caps: Vec<caps::Capability>,
     /// Skip rights stripping entirely — ONLY for `ply craft` authoring
     /// sessions, where installing packages needs real root inside.
     pub privileged: bool,
@@ -189,8 +190,15 @@ fn setup_and_exec(spec: &ContainerSpec) -> Result<isize> {
     nix::unistd::sethostname(&spec.hostname)
         .map_err(|e| crate::Error::Runtime(format!("sethostname: {e}")))?;
 
-    if nix::unistd::chdir(&spec.cwd).is_err() {
-        // App prefix missing (unusual but legal) — stay at /.
+    // Staying at `/` is a legal fallback for a thin image with no prefix dir,
+    // but it is silently wrong for anything whose entrypoint operates on `.`
+    // (redis: `find . -exec chown redis {} +` walks the entire rootfs). Say so.
+    if let Err(e) = nix::unistd::chdir(&spec.cwd) {
+        eprintln!(
+            "ply: warning: cannot enter {} ({e}) — running from / instead; \
+             set [package] workdir if the entrypoint expects a directory",
+            spec.cwd.display()
+        );
     }
 
     let argv: Vec<CString> = spec
@@ -229,7 +237,7 @@ fn setup_and_exec(spec: &ContainerSpec) -> Result<isize> {
             // still works). setuid then clears effective/permitted; nnp +
             // seccomp close the rest.
             if !spec.privileged {
-                if let Err(e) = crate::runtime::security::drop_capabilities(spec.keep_net_bind) {
+                if let Err(e) = crate::runtime::security::drop_capabilities(&spec.keep_caps) {
                     eprintln!("ply: rights stripping failed: {e}");
                     std::process::exit(126);
                 }
@@ -265,7 +273,7 @@ fn setup_and_exec(spec: &ContainerSpec) -> Result<isize> {
         }
         Ok(nix::unistd::ForkResult::Parent { child }) => {
             if !spec.privileged {
-                crate::runtime::security::drop_capabilities(false)?;
+                crate::runtime::security::drop_capabilities(&[])?;
                 crate::runtime::security::no_new_privs()?;
                 crate::runtime::security::apply_seccomp()?;
             }
@@ -290,6 +298,9 @@ fn init_loop(app: nix::unistd::Pid) -> isize {
             Signal::SIGQUIT,
             Signal::SIGUSR1,
             Signal::SIGUSR2,
+            // httpd's graceful-stop signal. Default action is ignore, so
+            // without a handler here the forward would never happen.
+            Signal::SIGWINCH,
         ] {
             let _ = nix::sys::signal::signal(sig, SigHandler::Handler(init_forward));
         }

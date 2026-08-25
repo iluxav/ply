@@ -110,7 +110,7 @@ pub fn exec(target: &str, cmd: &[String]) -> Result<i32> {
 fn child_exec(instance: &InstanceState, cmd: &[String], env: Vec<CString>) -> i32 {
     // Same clamps as the app itself — an exec'd shell is not a side door.
     let clamps = || -> Result<()> {
-        crate::runtime::security::drop_capabilities(false)?;
+        crate::runtime::security::drop_capabilities(&[])?;
         crate::runtime::security::no_new_privs()?;
         crate::runtime::security::apply_seccomp()
     };

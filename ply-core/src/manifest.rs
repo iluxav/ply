@@ -147,6 +147,24 @@ pub struct Package {
     /// app's volumes, and switches uid/gid before rights-stripping.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user: Option<String>,
+    /// Absolute directory to chdir into before exec. Absent = the app's own
+    /// prefix (`/opt/<name>`), which is right for packages ply built. Imported
+    /// OCI images carry their own `WorkingDir` here — without it their
+    /// entrypoints run from `/`, and the ones that walk `.` (redis does
+    /// `find . -exec chown redis {} +`) rampage over the whole rootfs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workdir: Option<String>,
+    /// What the app keeps after rights stripping. Absent — the default, and
+    /// what every ply-native package should stay on — means the app gets
+    /// NOTHING: empty bounding set, no_new_privs, seccomp.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<Capabilities>,
+    /// Signal that asks the app to shut down, e.g. "SIGQUIT". Absent =
+    /// SIGTERM. Not every daemon agrees TERM means "finish up": nginx wants
+    /// SIGQUIT for a graceful drain and httpd wants SIGWINCH, and both would
+    /// otherwise be killed mid-request when ply's 10s patience runs out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_signal: Option<String>,
     /// The package's base story (last field: the table form must serialize
     /// after scalar values). `true` marks the one package per graph that owns
     /// `/` (its files pack at the image root instead of an /opt prefix);
@@ -154,6 +172,24 @@ pub struct Package {
     /// this package runs on.
     #[serde(default, skip_serializing_if = "Base::is_absent")]
     pub base: Base,
+}
+
+/// `package.capabilities` — the rights an app keeps, for the rare app that
+/// genuinely needs some. Omitting it is always the right answer for a package
+/// ply built: a native keg never chowns or setuids, because `[package] user`
+/// does that from the parent, before rights stripping.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum Capabilities {
+    /// `capabilities = "oci"` — Docker's default fourteen. `ply import` sets
+    /// this because official images assume it: their entrypoints do
+    /// `chown -R x:x /data && exec gosu x …`, which needs CAP_CHOWN and
+    /// CAP_SETUID/SETGID. Not a blank cheque — it is Docker's set exactly,
+    /// and no more.
+    Preset(String),
+    /// `capabilities = ["chown", "net_bind_service"]` — exactly these. Names
+    /// are case-insensitive and the `CAP_` prefix is optional.
+    List(Vec<String>),
 }
 
 /// `package.base` — either the base *marker* (`base = true`, in a base
@@ -217,6 +253,23 @@ pub fn parse_user(s: &str) -> Result<RunUser> {
         }),
         _ => Err(bad()),
     }
+}
+
+/// `package.stop_signal` → the signal to send. Case-insensitive, `SIG`
+/// optional: "quit", "SIGQUIT" and "sigquit" are the same request.
+pub fn parse_stop_signal(s: &str) -> Result<nix::sys::signal::Signal> {
+    let upper = s.trim().to_ascii_uppercase();
+    let full = if upper.starts_with("SIG") {
+        upper
+    } else {
+        format!("SIG{upper}")
+    };
+    full.parse::<nix::sys::signal::Signal>().map_err(|_| {
+        Error::Manifest(format!(
+            "package.stop_signal `{s}`: not a signal name (expected e.g. \"SIGTERM\", \
+             \"SIGQUIT\", \"SIGWINCH\")"
+        ))
+    })
 }
 
 fn default_isolation() -> String {
@@ -368,6 +421,21 @@ impl Manifest {
                         .into(),
                 ));
             }
+        }
+        if let Some(workdir) = &self.package.workdir {
+            if !workdir.starts_with('/') {
+                return Err(Error::Manifest(format!(
+                    "package.workdir must be an absolute path inside the image, got `{workdir}`"
+                )));
+            }
+        }
+        // Resolve now so a typo fails at `ply build`, not at 3am on the box.
+        crate::runtime::security::keep_set(self.package.capabilities.as_ref(), false)?;
+        if let Some(sig) = &self.package.stop_signal {
+            parse_stop_signal(sig)?;
+        }
+        if let Some(user) = &self.package.user {
+            parse_user(user)?;
         }
         for (name, volume) in &self.volumes {
             if !volume.path.starts_with('/') {
@@ -700,5 +768,113 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("absolute"));
+    }
+
+    #[test]
+    fn workdir_round_trips_and_must_be_absolute() {
+        let manifest = Manifest::parse(
+            r#"
+            [package]
+            name = "redis"
+            version = "7.2.9"
+            entrypoint = ["docker-entrypoint.sh", "redis-server"]
+            workdir = "/data"
+        "#,
+        )
+        .expect("absolute workdir parses");
+        assert_eq!(manifest.package.workdir.as_deref(), Some("/data"));
+        // survives the embed → read cycle every image goes through
+        let reparsed = Manifest::parse(&manifest.to_toml().unwrap()).unwrap();
+        assert_eq!(reparsed.package.workdir.as_deref(), Some("/data"));
+
+        let err = Manifest::parse(
+            r#"
+            [package]
+            name = "a"
+            version = "1.0.0"
+            entrypoint = ["a"]
+            workdir = "data"
+        "#,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("absolute"), "{err}");
+    }
+
+    #[test]
+    fn capabilities_round_trip_and_typos_fail_at_build_time() {
+        let m = Manifest::parse(
+            r#"
+            [package]
+            name = "imported"
+            version = "1.0.0"
+            entrypoint = ["docker-entrypoint.sh"]
+            capabilities = "oci"
+        "#,
+        )
+        .expect("preset parses");
+        assert_eq!(
+            m.package.capabilities,
+            Some(Capabilities::Preset("oci".into()))
+        );
+        let reparsed = Manifest::parse(&m.to_toml().unwrap()).unwrap();
+        assert_eq!(reparsed.package.capabilities, m.package.capabilities);
+
+        let m = Manifest::parse(
+            r#"
+            [package]
+            name = "a"
+            version = "1.0.0"
+            entrypoint = ["a"]
+            capabilities = ["chown", "setuid"]
+        "#,
+        )
+        .expect("explicit list parses");
+        assert_eq!(
+            m.package.capabilities,
+            Some(Capabilities::List(vec!["chown".into(), "setuid".into()]))
+        );
+
+        // a typo must not survive to run time
+        let err = Manifest::parse(
+            r#"
+            [package]
+            name = "a"
+            version = "1.0.0"
+            entrypoint = ["a"]
+            capabilities = ["definitely_not_a_cap"]
+        "#,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("definitely_not_a_cap"), "{err}");
+    }
+
+    #[test]
+    fn native_manifests_omit_capabilities_entirely() {
+        let m = Manifest::parse(
+            r#"
+            [package]
+            name = "a"
+            version = "1.0.0"
+            entrypoint = ["a"]
+        "#,
+        )
+        .unwrap();
+        assert_eq!(m.package.capabilities, None);
+        assert!(!m.to_toml().unwrap().contains("capabilities"));
+    }
+
+    #[test]
+    fn workdir_is_optional_and_omitted_when_unset() {
+        let manifest = Manifest::parse(
+            r#"
+            [package]
+            name = "a"
+            version = "1.0.0"
+            entrypoint = ["a"]
+        "#,
+        )
+        .unwrap();
+        assert_eq!(manifest.package.workdir, None);
+        assert!(!manifest.to_toml().unwrap().contains("workdir"));
     }
 }

@@ -260,7 +260,7 @@ pub fn shell(name: &str, cmd: &[String]) -> Result<i32> {
         argv,
         binds: vec![],
         sync_rx,
-        keep_net_bind: false,
+        keep_caps: vec![],
         privileged: true, // authoring needs real root; host netns for apk/apt
         rootless: false,
         run_user: None,
@@ -398,6 +398,9 @@ pub fn commit(name: &str, version: &Version, output: Option<&Path>) -> Result<Co
             },
             provides_abi: None,
             user: None,
+            workdir: None,
+            capabilities: None,
+            stop_signal: None,
             include: vec![],
             isolation: "ns".into(),
         },

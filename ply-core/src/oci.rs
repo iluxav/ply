@@ -103,6 +103,17 @@ struct OciConfig {
     cmd: Option<Vec<String>>,
     #[serde(rename = "ExposedPorts", default)]
     exposed_ports: Option<std::collections::BTreeMap<String, serde_json::Value>>,
+    /// The image's `WORKDIR`. Entrypoints that operate on `.` depend on it —
+    /// dropping it starts them at `/` instead.
+    #[serde(rename = "WorkingDir", default)]
+    working_dir: Option<String>,
+    /// The image's `USER`. Daemons that refuse to run as root depend on it —
+    /// memcached exits 64 rather than start.
+    #[serde(rename = "User", default)]
+    user: Option<String>,
+    /// How the image asks to be shut down: nginx "SIGQUIT", httpd "SIGWINCH".
+    #[serde(rename = "StopSignal", default)]
+    stop_signal: Option<String>,
 }
 
 const ACCEPT: &str = "application/vnd.docker.distribution.manifest.v2+json, \
@@ -157,6 +168,83 @@ impl Client {
             .map_err(|e| Error::Source(format!("token {url}: {e}")))?;
         Ok(body.token)
     }
+}
+
+/// The image's `WORKDIR` as a ply `[package] workdir`. An absent or empty
+/// `WorkingDir` is how OCI spells "no WORKDIR" — both become None so the
+/// runtime falls back to the app prefix instead of chdir'ing to "". A
+/// relative value is unusable inside the container and is dropped too.
+fn workdir_from_config(config: &OciConfig) -> Option<String> {
+    config
+        .working_dir
+        .as_deref()
+        .map(str::trim)
+        .filter(|d| d.starts_with('/'))
+        .map(str::to_string)
+}
+
+/// The image's `USER` as a ply `[package] user` ("name:uid:gid").
+///
+/// OCI allows `memcache`, `11`, `11:11` or `memcache:memcache`, and names
+/// only mean anything against the image's OWN account files — so resolve
+/// against the extracted rootfs, not the host's. Unresolvable names are
+/// dropped rather than guessed: running as root is at least a state the
+/// operator can see, where a wrong uid silently writes files nobody owns.
+fn user_from_config(config: &OciConfig, rootfs: &Path) -> Option<String> {
+    let spec = config
+        .user
+        .as_deref()
+        .map(str::trim)
+        .filter(|u| !u.is_empty())?;
+    let (user_part, group_part) = match spec.split_once(':') {
+        Some((u, g)) => (u, Some(g)),
+        None => (spec, None),
+    };
+
+    // `<file>` line whose field 0 matches `key`, or whose id field matches it.
+    let lookup = |file: &str, key: &str| -> Option<(String, u32)> {
+        let text = std::fs::read_to_string(rootfs.join(file)).ok()?;
+        for line in text.lines() {
+            let f: Vec<&str> = line.split(':').collect();
+            if f.len() < 3 || (f[0] != key && f[2] != key) {
+                continue;
+            }
+            // a malformed line is skipped, never fatal to the whole search
+            if let Ok(id) = f[2].parse::<u32>() {
+                return Some((f[0].to_string(), id));
+            }
+        }
+        None
+    };
+
+    let (name, uid) = match user_part.parse::<u32>() {
+        // numeric: keep the id, borrow the name if the image knows one
+        Ok(uid) => (
+            lookup("etc/passwd", user_part)
+                .map(|(n, _)| n)
+                .unwrap_or_else(|| format!("uid{uid}")),
+            uid,
+        ),
+        Err(_) => lookup("etc/passwd", user_part)?,
+    };
+
+    let gid = match group_part {
+        Some(g) => match g.parse::<u32>() {
+            Ok(gid) => gid,
+            Err(_) => lookup("etc/group", g).map(|(_, gid)| gid)?,
+        },
+        // no group given: the account's primary gid, else mirror the uid
+        None => std::fs::read_to_string(rootfs.join("etc/passwd"))
+            .ok()
+            .and_then(|text| {
+                text.lines()
+                    .map(|l| l.split(':').collect::<Vec<_>>())
+                    .find(|f| f.len() > 3 && f[0] == name)
+                    .and_then(|f| f[3].parse::<u32>().ok())
+            })
+            .unwrap_or(uid),
+    };
+    Some(format!("{name}:{uid}:{gid}"))
 }
 
 pub fn import(spec: &str, output: &Path) -> Result<ImportOutcome> {
@@ -216,6 +304,8 @@ pub fn import(spec: &str, output: &Path) -> Result<ImportOutcome> {
         path: rootfs.clone(),
         source,
     })?;
+    let mut deferred_dir_modes: std::collections::BTreeMap<PathBuf, u32> =
+        std::collections::BTreeMap::new();
     for (i, layer) in doc.layers.iter().enumerate() {
         eprintln!(
             "ply: layer {}/{} {}",
@@ -226,8 +316,9 @@ pub fn import(spec: &str, output: &Path) -> Result<ImportOutcome> {
         let response = client.get(&format!("blobs/{}", layer.digest), "*/*")?;
         let reader = response.into_body().into_reader();
         let gz = layer.media_type.ends_with("gzip") || layer.media_type.is_empty();
-        apply_layer_tar(reader, gz, &rootfs)?;
+        apply_layer_tar(reader, gz, &rootfs, &mut deferred_dir_modes)?;
     }
+    restore_dir_modes(&deferred_dir_modes);
 
     // Synthesized ply manifest.
     let name = image_ref
@@ -237,6 +328,15 @@ pub fn import(spec: &str, output: &Path) -> Result<ImportOutcome> {
         .unwrap_or("imported")
         .replace(['_', '.'], "-");
     let version = Version::parse(&image_ref.tag).unwrap_or_else(|_| Version::new(0, 0, 0));
+    // Read before the Entrypoint/Cmd moves below partially consume `config`.
+    let workdir = workdir_from_config(&config);
+    let run_user = user_from_config(&config, &rootfs);
+    let stop_signal = config
+        .stop_signal
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
     let mut entrypoint: Vec<String> = config.entrypoint.unwrap_or_default();
     entrypoint.extend(config.cmd.unwrap_or_default());
     if entrypoint.is_empty() {
@@ -272,7 +372,14 @@ pub fn import(spec: &str, output: &Path) -> Result<ImportOutcome> {
             entrypoint: Some(entrypoint),
             base: Default::default(),
             provides_abi: None,
-            user: None,
+            user: run_user,
+            stop_signal,
+            workdir,
+            // Official images are built against Docker's capability set:
+            // their entrypoints chown the data dir and gosu down to a service
+            // user. ply-native packages never need this — [package] user does
+            // the same job from the parent, before rights stripping.
+            capabilities: Some(crate::manifest::Capabilities::Preset("oci".into())),
             include: vec![],
             isolation: "ns".into(),
         },
@@ -321,7 +428,31 @@ pub fn import(spec: &str, output: &Path) -> Result<ImportOutcome> {
 
 /// Apply one OCI layer tar: regular extract + whiteout handling
 /// (`.wh.<name>` deletes, `.wh..wh..opq` empties the directory).
-fn apply_layer_tar(reader: impl Read, gzipped: bool, rootfs: &Path) -> Result<()> {
+/// Restore deferred directory modes, deepest first. BTreeMap order puts a
+/// parent before its children, so reversing walks children first — a dir is
+/// only sealed once nothing else needs to be written inside it.
+fn restore_dir_modes(modes: &std::collections::BTreeMap<PathBuf, u32>) {
+    use std::os::unix::fs::PermissionsExt;
+    for (dir, mode) in modes.iter().rev() {
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(*mode));
+    }
+}
+
+/// Apply one layer tar into `rootfs`.
+///
+/// Directory modes are NOT applied as encountered. An image whose tar creates
+/// a directory read-only (mysql:8 ships `etc/pki/ca-trust/.../directory-hash`
+/// at 0555) would otherwise refuse every later entry inside it — invisibly to
+/// root, which has CAP_DAC_OVERRIDE, and fatally to everyone else. Modes are
+/// collected in `deferred` and restored by the caller once EVERY layer has
+/// been applied, since a later layer may still add files to an earlier
+/// layer's directory.
+fn apply_layer_tar(
+    reader: impl Read,
+    gzipped: bool,
+    rootfs: &Path,
+    deferred: &mut std::collections::BTreeMap<PathBuf, u32>,
+) -> Result<()> {
     let reader: Box<dyn Read> = if gzipped {
         Box::new(flate2::read::GzDecoder::new(reader))
     } else {
@@ -375,9 +506,236 @@ fn apply_layer_tar(reader: impl Read, gzipped: bool, rootfs: &Path) -> Result<()
         if target.exists() && !target.is_dir() {
             let _ = std::fs::remove_file(&target);
         }
+        let is_dir = entry.header().entry_type() == tar::EntryType::Directory;
+        let mode = entry.header().mode().unwrap_or(0o755) & 0o7777;
         entry
             .unpack_in(rootfs)
             .map_err(|e| Error::Source(format!("unpack {}: {e}", path.display())))?;
+        if is_dir {
+            use std::os::unix::fs::PermissionsExt;
+            // stays traversable+writable until every layer is in
+            let _ =
+                std::fs::set_permissions(&target, std::fs::Permissions::from_mode(mode | 0o700));
+            deferred.insert(target, mode);
+        }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config(json: &str) -> OciConfig {
+        serde_json::from_str(json).expect("config parses")
+    }
+
+    #[test]
+    fn working_dir_becomes_the_package_workdir() {
+        // redis:7-alpine declares WORKDIR /data; without it the entrypoint's
+        // `find . -exec chown redis {} +` walks the whole rootfs from /.
+        let cfg = config(r#"{"WorkingDir":"/data","Cmd":["redis-server"]}"#);
+        assert_eq!(workdir_from_config(&cfg).as_deref(), Some("/data"));
+    }
+
+    #[test]
+    fn absent_empty_or_relative_working_dir_is_none() {
+        for json in [
+            r#"{"Cmd":["sh"]}"#,
+            r#"{"WorkingDir":"","Cmd":["sh"]}"#,
+            r#"{"WorkingDir":"   ","Cmd":["sh"]}"#,
+            r#"{"WorkingDir":"app","Cmd":["sh"]}"#,
+        ] {
+            assert_eq!(
+                workdir_from_config(&config(json)),
+                None,
+                "should fall back to the app prefix: {json}"
+            );
+        }
+    }
+
+    #[test]
+    fn config_still_parses_the_fields_import_already_relied_on() {
+        let cfg = config(
+            r#"{"Env":["PATH=/usr/bin"],"Entrypoint":["docker-entrypoint.sh"],
+                "Cmd":["redis-server"],"ExposedPorts":{"6379/tcp":{}},"WorkingDir":"/data"}"#,
+        );
+        assert_eq!(cfg.env, vec!["PATH=/usr/bin"]);
+        assert_eq!(
+            cfg.entrypoint.as_deref(),
+            Some(&["docker-entrypoint.sh".to_string()][..])
+        );
+        assert_eq!(cfg.cmd.as_deref(), Some(&["redis-server".to_string()][..]));
+        assert!(cfg.exposed_ports.expect("ports").contains_key("6379/tcp"));
+    }
+}
+
+#[cfg(test)]
+mod layer_tests {
+    use super::*;
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+
+    /// A tar with a read-only directory followed by a file inside it —
+    /// exactly mysql:8's `etc/pki/ca-trust/.../directory-hash` at 0555.
+    fn readonly_dir_then_child() -> Vec<u8> {
+        let mut builder = tar::Builder::new(Vec::new());
+        let mut dir = tar::Header::new_gnu();
+        dir.set_entry_type(tar::EntryType::Directory);
+        dir.set_path("ro-dir/").unwrap();
+        dir.set_size(0);
+        dir.set_mode(0o555); // no write bit: the whole problem
+        dir.set_cksum();
+        builder.append(&dir, std::io::empty()).unwrap();
+
+        let body = b"cert";
+        let mut file = tar::Header::new_gnu();
+        file.set_entry_type(tar::EntryType::Regular);
+        file.set_path("ro-dir/002c0b4f.0").unwrap();
+        file.set_size(body.len() as u64);
+        file.set_mode(0o444);
+        file.set_cksum();
+        builder.append(&file, &body[..]).unwrap();
+        builder.into_inner().unwrap()
+    }
+
+    #[test]
+    fn a_read_only_directory_does_not_block_its_own_contents() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rootfs = tmp.path().join("rootfs");
+        std::fs::create_dir_all(&rootfs).unwrap();
+        let mut deferred = std::collections::BTreeMap::new();
+
+        apply_layer_tar(
+            &readonly_dir_then_child()[..],
+            false,
+            &rootfs,
+            &mut deferred,
+        )
+        .expect("a 0555 directory must not fail the layer for non-root users");
+
+        let child = rootfs.join("ro-dir/002c0b4f.0");
+        assert!(
+            child.exists(),
+            "file inside the read-only dir was not written"
+        );
+        assert_eq!(std::fs::read(&child).unwrap(), b"cert");
+
+        // still writable mid-extraction, so a later layer can add to it
+        let mode = std::fs::metadata(rootfs.join("ro-dir"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o200, 0o200, "dir should stay writable until sealed");
+
+        // and sealed to the image's real mode once every layer is applied
+        restore_dir_modes(&deferred);
+        let mode = std::fs::metadata(rootfs.join("ro-dir"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o555, "the image's mode must be restored");
+    }
+
+    #[test]
+    fn deferred_modes_are_restored_deepest_first() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outer = tmp.path().join("a");
+        let inner = outer.join("b");
+        std::fs::create_dir_all(&inner).unwrap();
+        let mut deferred = std::collections::BTreeMap::new();
+        deferred.insert(outer.clone(), 0o555);
+        deferred.insert(inner.clone(), 0o555);
+
+        // sealing the parent first would make the child unreachable to chmod
+        restore_dir_modes(&deferred);
+        for dir in [&inner, &outer] {
+            let mode = std::fs::metadata(dir).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o555, "{} not sealed", dir.display());
+        }
+        // leave the tree removable for tempdir cleanup
+        for dir in [&outer, &inner] {
+            let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755));
+        }
+        let _ = std::io::stdout().flush();
+    }
+}
+
+#[cfg(test)]
+mod user_tests {
+    use super::*;
+
+    fn rootfs_with_accounts() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("etc")).unwrap();
+        std::fs::write(
+            dir.path().join("etc/passwd"),
+            "root:x:0:0:root:/root:/bin/sh\n\
+             # a comment line that must not abort the search\n\
+             memcache:x:11:11:memcache:/home/memcache:/sbin/nologin\n\
+             postgres:x:70:70::/var/lib/postgresql:/bin/sh\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("etc/group"),
+            "root:x:0:\nmemcache:x:11:\nstaff:x:50:\n",
+        )
+        .unwrap();
+        dir
+    }
+
+    fn user(spec: Option<&str>) -> Option<String> {
+        let dir = rootfs_with_accounts();
+        let config = OciConfig {
+            user: spec.map(str::to_string),
+            ..Default::default()
+        };
+        user_from_config(&config, dir.path())
+    }
+
+    #[test]
+    fn a_named_user_resolves_against_the_images_own_passwd() {
+        // memcached exits 64 rather than run as root; this is what fixes it
+        assert_eq!(user(Some("memcache")).as_deref(), Some("memcache:11:11"));
+        assert_eq!(user(Some("postgres")).as_deref(), Some("postgres:70:70"));
+    }
+
+    #[test]
+    fn every_oci_user_spelling_resolves() {
+        assert_eq!(user(Some("11")).as_deref(), Some("memcache:11:11"));
+        assert_eq!(user(Some("11:11")).as_deref(), Some("memcache:11:11"));
+        assert_eq!(
+            user(Some("memcache:staff")).as_deref(),
+            Some("memcache:11:50")
+        );
+        assert_eq!(user(Some("memcache:50")).as_deref(), Some("memcache:11:50"));
+    }
+
+    #[test]
+    fn absent_or_empty_user_stays_root() {
+        assert_eq!(user(None), None);
+        assert_eq!(user(Some("")), None);
+        assert_eq!(user(Some("   ")), None);
+    }
+
+    #[test]
+    fn an_unknown_name_is_dropped_rather_than_guessed() {
+        // better to run as root, visibly, than to invent a uid and write
+        // files nobody owns
+        assert_eq!(user(Some("nosuchuser")), None);
+    }
+
+    #[test]
+    fn a_numeric_id_the_image_does_not_know_still_works() {
+        assert_eq!(user(Some("4242")).as_deref(), Some("uid4242:4242:4242"));
+    }
+
+    #[test]
+    fn resolved_users_are_accepted_by_the_manifest_parser() {
+        // the whole point: this string must survive [package] user parsing
+        let spec = user(Some("memcache")).unwrap();
+        let parsed = crate::manifest::parse_user(&spec).expect("round-trips");
+        assert_eq!(parsed.name, "memcache");
+        assert_eq!((parsed.uid, parsed.gid), (11, 11));
+    }
 }

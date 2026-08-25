@@ -37,7 +37,7 @@ pub fn dispatch(command: Command) -> Result<()> {
         Command::Systemd(args) => lifecycle::systemd(args),
         Command::Proxy(args) => lb::proxy(args),
         Command::Lb(args) => lb::exec(args),
-        Command::Setup => setup::exec(),
+        Command::Setup(args) => setup::exec(args),
         Command::Sync(args) => lifecycle::sync(args),
         Command::Gc(args) => lifecycle::gc(args),
         Command::Rm(args) => lifecycle::rm(args),

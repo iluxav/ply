@@ -98,9 +98,10 @@ pub enum Command {
     /// One-time host preparation (idempotent; run with sudo)
     ///
     /// Installs an AppArmor profile enabling rootless `ply run` on kernels
-    /// that restrict unprivileged user namespaces (Ubuntu 24.04+). On hosts
-    /// without the restriction it does nothing.
-    Setup,
+    /// that restrict unprivileged user namespaces (Ubuntu 24.04+), then
+    /// reports what else rootless still needs (subuid range, newuidmap,
+    /// privileged ports). Safe to re-run.
+    Setup(SetupArgs),
 
     /// Pre-fetch every package in the host policy into the store
     ///
@@ -212,6 +213,13 @@ pub struct RunArgs {
     /// How long to wait for --after apps before giving up
     #[arg(long, value_name = "DURATION", default_value = "60s")]
     pub after_timeout: String,
+
+    /// Skip rights stripping: keep all capabilities, no_new_privs off, seccomp
+    /// off. For debugging and for imported Docker images whose entrypoints
+    /// expect Docker's retained capabilities (`chown … && exec gosu …`).
+    /// Never for anything you did not write or import yourself.
+    #[arg(long)]
+    pub privileged: bool,
 }
 
 #[derive(Args)]
@@ -554,4 +562,14 @@ mod tests {
         };
         assert_eq!(args.after, vec!["pgdb"]);
     }
+}
+
+#[derive(Args)]
+pub struct SetupArgs {
+    /// Lower net.ipv4.ip_unprivileged_port_start so rootless instances can
+    /// bind privileged ports (default 80: nginx, httpd, caddy and traefik all
+    /// bind it themselves). HOST-WIDE — every unprivileged process on this
+    /// machine gains the same right. Persisted in /etc/sysctl.d.
+    #[arg(long, value_name = "PORT", num_args = 0..=1, default_missing_value = "80")]
+    pub unprivileged_ports: Option<u16>,
 }
