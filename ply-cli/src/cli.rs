@@ -52,6 +52,16 @@ pub enum Command {
     /// Run a command inside a running instance
     Exec(ExecArgs),
 
+    /// Set an app's instance count (the run parent grows/shrinks the pool)
+    ///
+    /// Writes the app's control file — commands are files; the parent acts
+    /// within ~2s. Works from anything that can write the dir: this CLI,
+    /// the dashboard, `echo 4 > …/control/scale` over ssh.
+    Scale(ScaleArgs),
+
+    /// Rolling restart on the current image (health-gated, like a deploy)
+    Restart(RestartArgs),
+
     /// Show an app's recent output (bounded ring; journald keeps history)
     ///
     /// The run parent tees every instance's stdout+stderr into
@@ -295,6 +305,23 @@ pub struct UpArgs {
     /// How long each member may wait for its `after` dependencies
     #[arg(long, value_name = "DURATION", default_value = "60s")]
     pub after_timeout: String,
+}
+
+#[derive(Args)]
+pub struct ScaleArgs {
+    /// App to scale
+    #[arg(value_name = "APP")]
+    pub app: String,
+    /// Target instance count
+    #[arg(value_name = "N")]
+    pub n: u32,
+}
+
+#[derive(Args)]
+pub struct RestartArgs {
+    /// App to rolling-restart
+    #[arg(value_name = "APP")]
+    pub app: String,
 }
 
 #[derive(Args)]

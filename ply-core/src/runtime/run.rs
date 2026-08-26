@@ -274,6 +274,8 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
     // context to fall back to if a new instance flunks its health gate.
     let mut roll_queue: Vec<u32> = Vec::new();
     let mut old_ctx: Option<AppContext> = None;
+    // Control dir (commands as files): polled on a 2s cadence.
+    let mut last_control_poll = std::time::Instant::now();
 
     // Reap, respawn per policy, exit when nothing is left to wait for.
     let mut exit_code = 0;
@@ -405,6 +407,129 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                     "ply: SIGHUP received but no deploy pointer at {} — ignoring",
                     pointer.display()
                 ),
+            }
+        }
+
+        // Control dir: consume command files (scale, restart) and notice a
+        // deploy pointer written without a SIGHUP. Same 2s cadence as the
+        // proxy watcher; the parent is already awake every 150ms.
+        if !shutting_down && last_control_poll.elapsed() >= std::time::Duration::from_secs(2) {
+            last_control_poll = std::time::Instant::now();
+            let app_name = ctx.manifest.package.name.clone();
+            // a pointer file alone is a deploy request (file-only protocol)
+            if crate::paths::apps_dir()
+                .join(&app_name)
+                .join("next-image")
+                .exists()
+            {
+                RELOAD_REQUESTED.store(true, Ordering::SeqCst);
+            }
+            for command in crate::runtime::control::poll(&app_name) {
+                match command {
+                    crate::runtime::control::Command::Scale(target) => {
+                        let target = target as usize;
+                        let current = slots.len();
+                        if target > current {
+                            let mut grown = 0;
+                            for _ in current..target {
+                                match launch_instance(
+                                    &ctx,
+                                    opts,
+                                    &store,
+                                    rootless,
+                                    None,
+                                    0,
+                                    &publishing,
+                                ) {
+                                    Ok(instance) => {
+                                        let sig_idx = register_child(instance.child.as_raw());
+                                        slots.insert(
+                                            instance.n,
+                                            SlotInfo {
+                                                backoff: initial_backoff,
+                                                restarts: 0,
+                                                started: std::time::Instant::now(),
+                                                sig_idx,
+                                            },
+                                        );
+                                        instances.push(instance);
+                                        grown += 1;
+                                    }
+                                    Err(e) => {
+                                        eprintln!("ply: scale up failed: {e}");
+                                        crate::runtime::control::write_result(
+                                            &app_name,
+                                            "scale",
+                                            false,
+                                            &format!("{e}"),
+                                        );
+                                        break;
+                                    }
+                                }
+                            }
+                            if grown == target - current {
+                                eprintln!("ply: scaled {app_name} to {target}");
+                                crate::runtime::control::write_result(
+                                    &app_name,
+                                    "scale",
+                                    true,
+                                    &format!("{current} -> {target}"),
+                                );
+                            }
+                        } else if target < current {
+                            // stop the highest slots; forget them so nothing respawns
+                            let mut extras: Vec<u32> = slots.keys().copied().collect();
+                            extras.sort_unstable();
+                            for slot in extras.into_iter().rev().take(current - target) {
+                                if let Some(pos) = instances.iter().position(|i| i.n == slot) {
+                                    let instance = instances.remove(pos);
+                                    if let Some(info) = slots.get(&slot) {
+                                        update_child(info.sig_idx, 0);
+                                    }
+                                    stop_instance(instance, stop_signal);
+                                }
+                                slots.remove(&slot);
+                                pending.retain(|(n, _)| *n != slot);
+                                roll_queue.retain(|n| *n != slot);
+                            }
+                            eprintln!("ply: scaled {app_name} to {target}");
+                            crate::runtime::control::write_result(
+                                &app_name,
+                                "scale",
+                                true,
+                                &format!("{current} -> {target}"),
+                            );
+                        } else {
+                            crate::runtime::control::write_result(
+                                &app_name,
+                                "scale",
+                                true,
+                                &format!("already at {target}"),
+                            );
+                        }
+                    }
+                    crate::runtime::control::Command::Restart => {
+                        if roll_queue.is_empty() {
+                            let mut queue: Vec<u32> = instances.iter().map(|i| i.n).collect();
+                            queue.sort_unstable();
+                            eprintln!("ply: rolling restart of {app_name} ({} slots)", queue.len());
+                            roll_queue = queue;
+                            crate::runtime::control::write_result(
+                                &app_name,
+                                "restart",
+                                true,
+                                "rolling restart started",
+                            );
+                        } else {
+                            crate::runtime::control::write_result(
+                                &app_name,
+                                "restart",
+                                false,
+                                "a roll is already in progress",
+                            );
+                        }
+                    }
+                }
             }
         }
 

@@ -2,6 +2,7 @@
 
 mod add;
 mod build;
+mod control;
 mod craft;
 mod exec;
 mod images;
@@ -30,6 +31,8 @@ pub fn dispatch(command: Command) -> Result<()> {
         Command::Up(args) => up::exec(args),
         Command::Exec(args) => exec::exec(args),
         Command::Logs(args) => logs::exec(args),
+        Command::Scale(args) => control::scale(args),
+        Command::Restart(args) => control::restart(args),
         Command::Ps(args) => ps::exec(args),
         Command::Stats(args) => stats::exec(args),
         Command::Check(args) => lifecycle::check(args),

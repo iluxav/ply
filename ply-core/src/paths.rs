@@ -20,7 +20,9 @@ pub fn run_dir() -> PathBuf {
 
 /// Durable data (volumes, app records, craft sessions).
 pub fn data_dir() -> PathBuf {
-    if is_root() {
+    if let Ok(dir) = std::env::var("PLY_DATA_DIR") {
+        PathBuf::from(dir)
+    } else if is_root() {
         PathBuf::from("/var/lib/ply")
     } else if let Ok(home) = std::env::var("HOME") {
         PathBuf::from(home).join(".local/share/ply")
