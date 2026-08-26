@@ -90,11 +90,10 @@ pub fn systemd(args: SystemdArgs) -> Result<()> {
         flags.extend(["--domain".into(), domain.clone()]);
     }
     if args.grant_links {
-        if let Some(requests) = ply_core::image::read::read_manifest(&args.image)?.requests {
-            for link in &requests.links {
-                flags.extend(["--link".into(), link.clone()]);
-            }
-        }
+        // The flag, not its expansion: `ply run --grant-links` reads the
+        // image's CURRENT [requests] at every start, so a unit survives
+        // image updates that add grants (expansion once baked a stale set).
+        flags.push("--grant-links".into());
     }
     for app in &args.after {
         flags.extend(["--after".into(), app.clone()]);

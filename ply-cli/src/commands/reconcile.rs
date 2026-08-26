@@ -82,7 +82,7 @@ struct Applied {
 
 fn apply(name: &str, spec: &Spec, app_names: &mut BTreeSet<String>) -> Result<Applied> {
     // Resolve the image: registry runnable, or a file already on this host.
-    let image: PathBuf = match (&spec.app, &spec.image) {
+    let (image, shown): (PathBuf, String) = match (&spec.app, &spec.image) {
         (Some(app), None) => {
             let source = spec
                 .source
@@ -92,14 +92,16 @@ fn apply(name: &str, spec: &Spec, app_names: &mut BTreeSet<String>) -> Result<Ap
                 ply_core::catalog::fetch_app_image(app, spec.version.as_deref(), &source)
                     .with_context(|| format!("fetching `{app}` from the registry"))?;
             println!("{name}: {resolved}");
-            path
+            let shown = resolved.to_string();
+            (path, shown)
         }
         (None, Some(path)) => {
             let path = PathBuf::from(path);
             if !path.exists() {
                 bail!("image {} does not exist on this host", path.display());
             }
-            path
+            let shown = basename(&path);
+            (path, shown)
         }
         _ => unreachable!("Spec::parse enforces exactly one"),
     };
@@ -116,11 +118,7 @@ fn apply(name: &str, spec: &Spec, app_names: &mut BTreeSet<String>) -> Result<Ap
 
     let mut flags = spec.flags();
     if spec.grant_links {
-        if let Some(requests) = &manifest.requests {
-            for link in &requests.links {
-                flags.extend(["--link".into(), link.clone()]);
-            }
-        }
+        flags.push("--grant-links".into());
     }
 
     let unit_text = format!(
@@ -134,7 +132,7 @@ fn apply(name: &str, spec: &Spec, app_names: &mut BTreeSet<String>) -> Result<Ap
         run("systemctl", &["enable", "--now", &format!("ply-{name}")])?;
         return Ok(Applied {
             changed: false,
-            detail: format!("unchanged ({})", basename(&image)),
+            detail: format!("unchanged ({shown})"),
         });
     }
     std::fs::write(&unit_path, &unit_text)
@@ -144,7 +142,7 @@ fn apply(name: &str, spec: &Spec, app_names: &mut BTreeSet<String>) -> Result<Ap
     run("systemctl", &["restart", &format!("ply-{name}")])?;
     Ok(Applied {
         changed: true,
-        detail: format!("deployed {}", basename(&image)),
+        detail: format!("deployed {shown}"),
     })
 }
 
