@@ -77,9 +77,10 @@ fi
 # --- optional guided setup (edge + dashboard) --------------------------------
 # Interactive only when a human can answer: prompts read /dev/tty, never
 # stdin (stdin is this script when piped through sh). CI and automation stay
-# prompt-free: no /dev/tty, or PLY_WIZARD=no, skips everything; env vars
-# answer the questions non-interactively:
-#   PLY_EDGE=yes|no   PLY_DASHBOARD=yes|no   PLY_DOMAIN=dash.example.com
+# prompt-free: no /dev/tty skips everything, and env vars answer the
+# questions non-interactively — set them on the SH side of the pipe:
+#   curl … | PLY_WIZARD=no sh                  (skip the wizard entirely)
+#   curl … | PLY_EDGE=yes PLY_DASHBOARD=yes PLY_DOMAIN=dash.example.com sh
 PLY_BIN=/usr/local/bin/ply
 [ -x "$PLY_BIN" ] || PLY_BIN="$HOME/.local/bin/ply"
 
@@ -100,12 +101,12 @@ ask() { # ask "question" default -> echoes yes|no
     esac
 }
 
-ask_text() { # ask_text "question" -> echoes answer (may be empty)
+ask_text() { # ask_text "question" -> echoes answer, whitespace-trimmed
     if [ -n "${2:-}" ]; then echo "$2"; return; fi
     if [ ! -e /dev/tty ] || [ "${PLY_WIZARD:-yes}" = "no" ]; then echo ""; return; fi
     printf "%s " "$1" > /dev/tty
     IFS= read -r answer < /dev/tty || answer=""
-    echo "$answer"
+    echo "$answer" | tr -d '[:space:]'
 }
 
 # The wizard needs root (systemd units, Caddy, ports 80/443) — skip quietly
