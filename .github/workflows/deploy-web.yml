@@ -6,10 +6,10 @@
 # changes rarely and holds the TLS certs — so this workflow only rolls the
 # site itself.
 name: deploy-web
+# Deploys are deliberate: `make release-web` dispatches this; a plain push
+# ships nothing. (Path-triggered deploys raced releases — a pushed install.sh
+# went live before the CLI release it depended on existed.)
 on:
-  push:
-    branches: [main]
-    paths: ["app/**", "docs/**", "install.sh"]
   workflow_dispatch:      # make release-web
 
 # a push-trigger and a dispatched run must never roll the droplet

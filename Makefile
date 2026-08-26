@@ -29,6 +29,7 @@ static:
 #   make release-cli            # CLI: version bump, gate, tag (release.yml builds binaries)
 #   make release-cli V=0.2.0    # explicit version
 #   make release-web            # site: dispatch deploy-web.yml for current main
+#                               # (the ONLY way the site deploys — pushes ship nothing)
 #   make release                # both, CLI first
 release: release-cli release-web
 
