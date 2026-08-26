@@ -52,6 +52,13 @@ pub enum Command {
     /// Run a command inside a running instance
     Exec(ExecArgs),
 
+    /// Show an app's recent output (bounded ring; journald keeps history)
+    ///
+    /// The run parent tees every instance's stdout+stderr into
+    /// <run-dir>/logs/<app>.<n>.log (512 KiB x2 per instance). This reads
+    /// those files — works identically foreground, under systemd, rootless.
+    Logs(LogsArgs),
+
     /// List running instances
     Ps(PsArgs),
 
@@ -252,6 +259,19 @@ pub struct RunArgs {
     /// Never for anything you did not write or import yourself.
     #[arg(long)]
     pub privileged: bool,
+
+    /// Mount the host links the image's [requests] section asks for. Never
+    /// automatic: a manifest ships inside the image, so host access needs
+    /// this explicit yes. Without it, requests are listed and NOT mounted.
+    #[arg(long)]
+    pub grant_links: bool,
+
+    /// Serve this app at a hostname via the ply-managed edge (repeatable).
+    /// Records the domain in instance state; `ply proxy --watch` (installed
+    /// by `sudo ply setup --edge`) renders it into Caddy config and Caddy
+    /// obtains the certificate. Point the domain's DNS at this host first.
+    #[arg(long, value_name = "HOST")]
+    pub domain: Vec<String>,
 }
 
 #[derive(Args)]
@@ -275,6 +295,21 @@ pub struct UpArgs {
     /// How long each member may wait for its `after` dependencies
     #[arg(long, value_name = "DURATION", default_value = "60s")]
     pub after_timeout: String,
+}
+
+#[derive(Args)]
+pub struct LogsArgs {
+    /// App (or app.<n> instance); omit to list what has logs
+    #[arg(value_name = "APP")]
+    pub app: Option<String>,
+
+    /// Follow: keep printing as new output arrives
+    #[arg(short = 'f', long)]
+    pub follow: bool,
+
+    /// Lines of history to show first
+    #[arg(short = 'n', long, value_name = "N", default_value_t = 100)]
+    pub lines: usize,
 }
 
 #[derive(Args)]
@@ -484,6 +519,16 @@ pub struct SystemdArgs {
     #[arg(long, value_name = "FILE")]
     pub env_file: Option<PathBuf>,
 
+    /// Serve at a hostname via the ply-managed edge (repeatable; baked
+    /// into ExecStart — see `ply run --domain`)
+    #[arg(long, value_name = "HOST")]
+    pub domain: Vec<String>,
+
+    /// Expand the image's [requests] links into explicit --link flags in the
+    /// unit (auditable in the unit file; the grant happens here, once)
+    #[arg(long)]
+    pub grant_links: bool,
+
     /// Start after APP is healthy (repeatable): ordered in [Unit] and
     /// gated by `--after` in ExecStart
     #[arg(long, value_name = "APP")]
@@ -506,6 +551,17 @@ pub struct ProxyArgs {
     /// Config format
     #[arg(long, value_name = "FORMAT", default_value = "caddy")]
     pub format: String,
+
+    /// Keep the config current: re-render on instance-state changes, write
+    /// --out on difference, reload Caddy. This is the edge's engine —
+    /// `sudo ply setup --edge` installs it as a systemd unit.
+    #[arg(long)]
+    pub watch: bool,
+
+    /// Write here instead of stdout (default under --watch:
+    /// /etc/ply/edge/apps/ply.caddy)
+    #[arg(long, value_name = "FILE")]
+    pub out: Option<String>,
 }
 
 #[derive(Args)]
@@ -553,7 +609,6 @@ pub fn docker_hint(cmd: &str) -> Option<&'static str> {
         "tag" => "no tags, on purpose: published versions are immutable — nothing like `:latest` can move.\nBump [package] version and `ply build` instead.",
         "login" | "logout" => "registries have no accounts — any file host your network can GET works; the sha256 in ply.lock is the trust, not a login.",
         "compose" => "compose is `ply up`: a [stack] ply.toml lists members (registry apps + local dirs) wired with `after` and env.\n(docs: https://plybox.sh/docs/running/)",
-        "logs" => "logs are stdout — `ply run` is a foreground process. Under systemd: journalctl -u ply-<app>",
         "stop" | "kill" => "Ctrl-C the foreground run, `ply rm <app>`, or `systemctl stop ply-<app>` under systemd.",
         "start" | "restart" => "`ply run IMAGE` starts instances; crash restarts are the [restart] policy's job, reboots are systemd's.\n(docs: https://plybox.sh/docs/deploy/)",
         "inspect" => "`ply check IMAGE` validates an image; `ply ps` / `ply stats` show running instances.",
@@ -588,7 +643,7 @@ mod tests {
     #[test]
     fn hints_only_cover_nonexistent_subcommands() {
         for verb in [
-            "pull", "push", "tag", "login", "logout", "compose", "logs", "stop", "kill", "start",
+            "pull", "push", "tag", "login", "logout", "compose", "stop", "kill", "start",
             "restart", "inspect", "cp", "save", "load", "export", "network", "volume", "commit",
             "rmi",
         ] {
@@ -630,4 +685,11 @@ pub struct SetupArgs {
     /// machine gains the same right. Persisted in /etc/sysctl.d.
     #[arg(long, value_name = "PORT", num_args = 0..=1, default_missing_value = "80")]
     pub unprivileged_ports: Option<u16>,
+
+    /// Install the HTTPS edge: Caddy (downloaded if absent) + a ply-managed
+    /// Caddyfile + two systemd units — `ply-edge` (Caddy) and `ply-proxy`
+    /// (`ply proxy --watch`). After this, `ply run --domain app.example.com`
+    /// is all an app needs for a certificate and HTTPS serving.
+    #[arg(long)]
+    pub edge: bool,
 }

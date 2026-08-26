@@ -49,6 +49,9 @@ pub struct RunOptions {
     /// Replace the image's entrypoint (dev overlays, boot-failure debugging).
     /// The image is untouched — this is an argv swap at spawn time.
     pub entrypoint: Option<Vec<String>>,
+    /// `--domain` hostnames for the edge (recorded in instance state; the
+    /// proxy watcher renders them into vhost config). TLS is Caddy's job.
+    pub domains: Vec<String>,
 }
 
 /// Live wiring for a published pool, threaded through instance launches.
@@ -831,6 +834,12 @@ fn launch_instance(
     // Sync pipe: the child waits for cgroup + network before setup.
     let (sync_rx, sync_tx) =
         nix::unistd::pipe().map_err(|e| Error::Runtime(format!("pipe: {e}")))?;
+    // Log tee: the child's stdout+stderr become this pipe; a copier thread
+    // passes the stream through to the parent's stdout (journald/terminal
+    // behavior unchanged) while also feeding the bounded log ring that
+    // `ply logs` and the dashboard read.
+    let (log_rx, log_tx) =
+        nix::unistd::pipe().map_err(|e| Error::Runtime(format!("log pipe: {e}")))?;
 
     let keep_net_bind = manifest.ports.values().any(|p| *p < 1024);
     let keep_caps =
@@ -892,6 +901,7 @@ fn launch_instance(
         privileged: opts.privileged,
         rootless,
         run_user,
+        log_fd: Some(log_tx),
     };
 
     let mut stack = vec![0u8; 1024 * 1024];
@@ -979,10 +989,35 @@ fn launch_instance(
                 w.spec.host_port
             )
         }),
+        domains: opts.domains.clone(),
     };
     state.save()?;
     if !rootless {
         hosts::add_entry(app, n, ip)?; // /etc/hosts needs root
+    }
+
+    // Parent half of the log tee: our copy of the write end must close or
+    // the copier would never see EOF when the instance dies.
+    drop(spec.log_fd);
+    {
+        let mut ring = crate::runtime::logring::RingWriter::create(app, n)?;
+        let log_rx = log_rx;
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let mut file = std::fs::File::from(log_rx);
+            let mut buf = [0u8; 8192];
+            loop {
+                match file.read(&mut buf) {
+                    Ok(0) | Err(_) => break, // instance ended
+                    Ok(size) => {
+                        let chunk = &buf[..size];
+                        let _ = std::io::stdout().write_all(chunk);
+                        let _ = std::io::stdout().flush();
+                        ring.append(chunk);
+                    }
+                }
+            }
+        });
     }
 
     // Release the child.

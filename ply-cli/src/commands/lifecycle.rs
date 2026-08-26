@@ -85,6 +85,17 @@ pub fn systemd(args: SystemdArgs) -> Result<()> {
         let file = std::path::absolute(file)?;
         flags.extend(["--env-file".into(), file.display().to_string()]);
     }
+    for domain in &args.domain {
+        crate::commands::run::validate_domain(domain)?;
+        flags.extend(["--domain".into(), domain.clone()]);
+    }
+    if args.grant_links {
+        if let Some(requests) = ply_core::image::read::read_manifest(&args.image)?.requests {
+            for link in &requests.links {
+                flags.extend(["--link".into(), link.clone()]);
+            }
+        }
+    }
     for app in &args.after {
         flags.extend(["--after".into(), app.clone()]);
     }

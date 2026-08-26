@@ -29,7 +29,152 @@ pub fn exec(args: SetupArgs) -> Result<()> {
     if let Some(port) = args.unprivileged_ports {
         unprivileged_ports_step(port)?;
     }
+    if args.edge {
+        edge_step()?;
+    }
     report_rootless_readiness(args.unprivileged_ports);
+    Ok(())
+}
+
+/// `--edge`: Caddy + a ply-managed config + two units. After this, an app's
+/// `--domain` is the only step between it and HTTPS: the watcher renders
+/// vhosts from instance state; Caddy fetches certificates.
+const CADDY_VERSION: &str = "2.11.4";
+
+fn edge_step() -> Result<()> {
+    std::fs::create_dir_all("/etc/ply/edge/apps")?;
+
+    // 1. Caddy binary (skip when the host already has one).
+    let caddy = find_in_path("caddy")
+        .map(Ok)
+        .unwrap_or_else(install_caddy)?;
+
+    // 2. Root Caddyfile: imports the watcher's output. Only ever written by
+    //    us — refuse to clobber a hand-edited one.
+    const MARKER: &str = "# managed by `ply setup --edge`";
+    let root = std::path::Path::new(crate::commands::lb::EDGE_CADDYFILE);
+    let desired = format!(
+        "{MARKER} — edit apps via `ply run --domain`, not here
+import {}/apps/*.caddy
+",
+        crate::commands::lb::EDGE_DIR
+    );
+    let current = std::fs::read_to_string(root).unwrap_or_default();
+    if current.is_empty() || current.starts_with(MARKER) {
+        if current != desired {
+            std::fs::write(root, &desired)?;
+        }
+        println!("ok: {} (imports apps/*.caddy)", root.display());
+    } else {
+        bail!(
+            "{} exists and was not written by ply — move it aside and re-run",
+            root.display()
+        );
+    }
+    // The import glob must match something or Caddy refuses to start.
+    let apps_file = std::path::Path::new(crate::commands::lb::EDGE_APPS_FILE);
+    if !apps_file.exists() {
+        std::fs::write(
+            apps_file,
+            "# ply proxy --watch writes app vhosts here
+",
+        )?;
+    }
+
+    // 3. Units: Caddy, and the watcher that feeds it.
+    let ply = std::env::current_exe()?;
+    let ply = ply.canonicalize().unwrap_or(ply);
+    write_unit(
+        "/etc/systemd/system/ply-edge.service",
+        &format!(
+            "[Unit]
+Description=ply edge (Caddy)
+After=network-online.target
+Wants=network-online.target
+
+             [Service]
+ExecStart={caddy} run --config {config}
+ExecReload={caddy} reload --config {config}
+Restart=on-failure
+LimitNOFILE=1048576
+
+             [Install]
+WantedBy=multi-user.target
+",
+            caddy = caddy,
+            config = crate::commands::lb::EDGE_CADDYFILE,
+        ),
+    )?;
+    write_unit(
+        "/etc/systemd/system/ply-proxy.service",
+        &format!(
+            "[Unit]
+Description=ply proxy watcher (renders app vhosts for the edge)
+After=ply-edge.service
+Wants=ply-edge.service
+
+             [Service]
+ExecStart={} proxy --watch
+Restart=on-failure
+
+             [Install]
+WantedBy=multi-user.target
+",
+            ply.display()
+        ),
+    )?;
+    run_cmd("systemctl", &["daemon-reload"])?;
+    run_cmd("systemctl", &["enable", "--now", "ply-edge", "ply-proxy"])?;
+
+    println!("edge installed: ply-edge (Caddy) + ply-proxy (watcher) are running");
+    println!("next: point a domain's DNS at this host, open ports 80/443, then");
+    println!("      ply run app.img --publish internal:<port> --domain app.example.com");
+    Ok(())
+}
+
+fn find_in_path(bin: &str) -> Option<String> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|d| d.join(bin))
+        .find(|p| p.is_file())
+        .map(|p| p.display().to_string())
+}
+
+/// Download the official static Caddy build (the same one the caddy package
+/// in the registry wraps) to /usr/local/bin.
+fn install_caddy() -> Result<String> {
+    let arch = match std::env::consts::ARCH {
+        "aarch64" => "arm64",
+        _ => "amd64",
+    };
+    let url = format!(
+        "https://github.com/caddyserver/caddy/releases/download/v{CADDY_VERSION}/caddy_{CADDY_VERSION}_linux_{arch}.tar.gz"
+    );
+    println!("downloading caddy {CADDY_VERSION} ({arch}) …");
+    let status = std::process::Command::new("sh")
+        .args([
+            "-c",
+            &format!("curl -fsSL '{url}' | tar -xz -C /usr/local/bin caddy && chmod 755 /usr/local/bin/caddy"),
+        ])
+        .status()?;
+    if !status.success() {
+        bail!("caddy download failed ({url})");
+    }
+    Ok("/usr/local/bin/caddy".to_string())
+}
+
+fn write_unit(path: &str, content: &str) -> Result<()> {
+    if std::fs::read_to_string(path).unwrap_or_default() != content {
+        std::fs::write(path, content)?;
+    }
+    Ok(())
+}
+
+fn run_cmd(cmd: &str, args: &[&str]) -> Result<()> {
+    let status = std::process::Command::new(cmd).args(args).status()?;
+    if !status.success() {
+        bail!("{cmd} {} exited with {status}", args.join(" "));
+    }
     Ok(())
 }
 

@@ -51,6 +51,22 @@ pub struct Manifest {
     /// explicit source; other keys are aliases usable as `source = "<alias>"`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub sources: BTreeMap<String, String>,
+
+    /// Host access the image asks for. NEVER applied on its own — a manifest
+    /// ships inside the image, and an image must not grant itself host
+    /// access. `ply run --grant-links` is the operator's explicit yes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requests: Option<Requests>,
+}
+
+/// `[requests]` — declared needs, granted (or not) at run time.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Requests {
+    /// Bind mounts as "HOST:CONTAINER", both absolute. The dashboard's
+    /// read surfaces are the canonical example.
+    #[serde(default)]
+    pub links: Vec<String>,
 }
 
 /// `[restart]` — the run parent respawns instances it started. Nothing more:
@@ -414,6 +430,17 @@ impl Manifest {
 
     fn validate(&self) -> Result<()> {
         validate_package_name(&self.package.name)?;
+        if let Some(requests) = &self.requests {
+            for link in &requests.links {
+                let ok = matches!(link.split_once(':'),
+                    Some((host, container)) if host.starts_with('/') && container.starts_with('/'));
+                if !ok {
+                    return Err(Error::Manifest(format!(
+                        "requests.links `{link}`: expected \"/abs/host:/abs/container\""
+                    )));
+                }
+            }
+        }
         if let Some(entrypoint) = &self.package.entrypoint {
             if entrypoint.is_empty() {
                 return Err(Error::Manifest(
@@ -554,6 +581,22 @@ pub fn validate_package_name(name: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn requests_links_parse_and_validate() {
+        let m = Manifest::parse(
+            "[package]\nname = \"dash\"\nversion = \"1.0.0\"\nentrypoint = [\"./x\"]\nbase = \"debian@13\"\n\n[requests]\nlinks = [\"/run/ply:/ply/host/run\"]\n",
+        )
+        .unwrap();
+        assert_eq!(m.requests.unwrap().links, vec!["/run/ply:/ply/host/run"]);
+
+        for bad in ["relative:/abs", "/abs:relative", "no-colon"] {
+            let text = format!(
+                "[package]\nname = \"dash\"\nversion = \"1.0.0\"\nentrypoint = [\"./x\"]\nbase = \"debian@13\"\n\n[requests]\nlinks = [\"{bad}\"]\n"
+            );
+            assert!(Manifest::parse(&text).is_err(), "{bad} must be rejected");
+        }
+    }
 
     const FULL: &str = r#"
         [package]

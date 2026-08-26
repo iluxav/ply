@@ -116,10 +116,11 @@ are a decade of someone else's work, and the README's "no proxy" claim is
 load-bearing. ply stays a config emitter, which is what `ply lb` / `ply proxy`
 already are.
 
-- [ ] `--domain <host>` on `ply run` (repeatable), recorded in instance state next to the published port
-- [ ] `ply proxy --watch`: inotify on `/run/ply/state` → regenerate Caddyfile → `POST /load` to Caddy's admin API. Already in the TASKS.md backlog; `--domain` is what makes it worth building
-- [ ] `ply setup --edge` — install Caddy + a ply-managed Caddyfile include, so a fresh droplet is one command from HTTPS
-- [ ] Docs: apex + wildcard, `demos/edge` promoted from demo to the documented path
+- [x] `--domain <host>` on `ply run` (repeatable, validated), recorded in instance state; `ply systemd --domain` bakes it into units
+- [x] `ply proxy --watch`: 2s state poll → render vhosts → write apps file on change → `caddy reload`. Tolerates missing caddy; runs as the `ply-proxy` unit
+- [x] `ply setup --edge` — Caddy (downloaded if absent) + `/etc/ply/edge/Caddyfile` + `ply-edge`/`ply-proxy` units, idempotent, refuses to clobber a hand-written Caddyfile
+- [x] Docs: running.md one-command path, cli.md. Remaining: apex+wildcard guide, promote demos/edge story
+- [ ] **Gate pending: fresh droplet e2e** — DNS → `sudo ply setup --edge` → `ply run --domain` → valid cert. Needs a scratch droplet + a test domain (NOT the prod droplet — plybox-edge owns :80/:443 there)
 
 **Gate:** fresh droplet → `ply run app.img --domain app.example.com` → valid cert, HTTPS serving, no manual Caddy editing.
 

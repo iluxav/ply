@@ -18,3 +18,4 @@ go-to-market.md
 # generated from skills/ply by scripts/build-skill.mjs
 /app/public/ply-skill.md
 /app/public/ply.skill
+/ply-dashboard

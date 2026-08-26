@@ -42,10 +42,20 @@ pub struct ContainerSpec {
     pub rootless: bool,
     /// Switch to this user before exec ([package] user = "name:uid:gid").
     pub run_user: Option<crate::manifest::RunUser>,
+    /// Write end of the parent's log tee: stdout+stderr are redirected here
+    /// so the parent can copy the stream to its own stdout AND the bounded
+    /// log ring. None = inherit (craft shells stay interactive).
+    pub log_fd: Option<std::os::fd::OwnedFd>,
 }
 
 /// Child entry point. Never returns on success (execve).
 pub fn child_main(spec: &ContainerSpec) -> isize {
+    // First thing: route our own output through the parent's tee, so even
+    // pre-exec setup errors land in the log ring.
+    if let Some(fd) = &spec.log_fd {
+        let _ = nix::unistd::dup2_stdout(fd);
+        let _ = nix::unistd::dup2_stderr(fd);
+    }
     let mut byte = [0u8; 1];
     match nix::unistd::read(&spec.sync_rx, &mut byte) {
         Ok(1) => {}
@@ -137,11 +147,15 @@ fn setup_and_exec(spec: &ContainerSpec) -> Result<isize> {
         let target = root.join(container_path.trim_start_matches('/'));
         std::fs::create_dir_all(&target)
             .map_err(|e| crate::Error::Runtime(format!("volume target {container_path}: {e}")))?;
+        // MS_REC: a source with locked child mounts (host /proc, /sys — they
+        // carry overmounts) can only be bound recursively inside a user
+        // namespace; a plain bind gets EINVAL. Recursive is also the honest
+        // semantic for every other link.
         nix::mount::mount(
             Some(host_dir),
             &target,
             None::<&str>,
-            nix::mount::MsFlags::MS_BIND,
+            nix::mount::MsFlags::MS_BIND | nix::mount::MsFlags::MS_REC,
             None::<&str>,
         )
         .map_err(|e| {

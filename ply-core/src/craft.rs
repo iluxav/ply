@@ -265,6 +265,7 @@ pub fn shell(name: &str, cmd: &[String]) -> Result<i32> {
         privileged: true, // authoring needs real root; host netns for apk/apt
         rootless: false,
         run_user: None,
+        log_fd: None,
     };
 
     // Host network (no CLONE_NEWNET): package managers need the internet,
@@ -415,6 +416,7 @@ pub fn commit(name: &str, version: &Version, output: Option<&Path>) -> Result<Co
         restart: None,
         layer: None,
         sources: Default::default(),
+        requests: None,
     };
 
     // Deletions can't ship yet (the writer refuses device nodes) — count and warn.

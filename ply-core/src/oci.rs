@@ -428,6 +428,7 @@ pub fn import(spec: &str, output: &Path) -> Result<ImportOutcome> {
         restart: None,
         layer: None,
         sources: Default::default(),
+        requests: None,
     };
 
     let image_name = ImageName::new(&name, version, Os::Linux, Arch::host())?;

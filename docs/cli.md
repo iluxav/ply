@@ -114,7 +114,13 @@ no members = everything. `run =` members pin version + digest in the stack
 ply ps [--json]
 ply stats [APP|APP.N] [--json] [--sample-ms MS]
 ply exec APP[.N] CMD…
+ply logs [APP[.N]] [-f] [-n LINES]
 ```
+
+**`ply logs`** reads the bounded per-instance ring the run parent tees
+(512 KiB ×2 per instance, in the run dir) — identical foreground, under
+systemd, rootless. journald remains the unbounded archive on systemd hosts.
+No APP lists what has logs; `-f` follows.
 
 ## Lifecycle
 
@@ -147,13 +153,18 @@ ply systemd IMAGE [--scale N] [--publish [ADDR:]P[:IP]] [-e K=V] [--env-file F]
                   [--after APP]… [--user]
                                   # emit a unit file (supervision = systemd);
                                   # --user = ~/.config/systemd/user, for rootless
-ply proxy [APP]... [--format caddy|nginx|haproxy]
+ply proxy [APP]... [--format caddy|nginx|haproxy] [--watch] [--out FILE]
                                   # emit reverse-proxy config; no APP = every
                                   # running app. Backends are the published
-                                  # address, so scale/rolls need no re-emit
-ply setup [--unprivileged-ports [PORT]]
+                                  # address, so scale/rolls need no re-emit.
+                                  # --watch keeps FILE current and reloads
+                                  # Caddy — installed as a unit by --edge
+ply setup [--unprivileged-ports [PORT]] [--edge]
                                   # one-time host prep (idempotent, sudo);
-                                  # also reports subuid/newuidmap readiness
+                                  # also reports subuid/newuidmap readiness.
+                                  # --edge installs Caddy + the proxy watcher:
+                                  # after it, --domain is all an app needs
+                                  # for HTTPS
 ply sync                          # pre-fetch the host policy's packages
 ```
 

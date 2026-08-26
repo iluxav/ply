@@ -6,8 +6,9 @@ mod craft;
 mod exec;
 mod images;
 mod init;
-mod lb;
+pub mod lb;
 mod lifecycle;
+mod logs;
 mod ps;
 mod run;
 mod search;
@@ -28,6 +29,7 @@ pub fn dispatch(command: Command) -> Result<()> {
         Command::Run(args) => run::exec(args),
         Command::Up(args) => up::exec(args),
         Command::Exec(args) => exec::exec(args),
+        Command::Logs(args) => logs::exec(args),
         Command::Ps(args) => ps::exec(args),
         Command::Stats(args) => stats::exec(args),
         Command::Check(args) => lifecycle::check(args),

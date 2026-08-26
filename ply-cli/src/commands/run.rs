@@ -3,7 +3,29 @@ use ply_core::runtime::run::{parse_env_file, run, RunOptions};
 
 use crate::cli::RunArgs;
 
+/// A domain lands verbatim in proxy config — refuse anything that could
+/// smuggle config syntax. Hostname labels, dots, one leading wildcard.
+pub fn validate_domain(domain: &str) -> Result<()> {
+    let host = domain.strip_prefix("*.").unwrap_or(domain);
+    let ok = !host.is_empty()
+        && host.len() <= 253
+        && host.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+        });
+    if !ok {
+        bail!("--domain `{domain}`: not a valid hostname (labels of [a-z0-9-], dots between, optional leading `*.`)");
+    }
+    Ok(())
+}
+
 pub fn exec(args: RunArgs) -> Result<()> {
+    for domain in &args.domain {
+        validate_domain(domain)?;
+    }
     let mut links: Vec<(std::path::PathBuf, String)> = Vec::new();
     for link in &args.link {
         let Some((host, container)) = link.split_once(':') else {
@@ -115,6 +137,32 @@ pub fn exec(args: RunArgs) -> Result<()> {
     // every downstream path (manifest read, lockfile, deploy) sees a plain file.
     let image = ply_core::oci::ensure_local(&image_arg, args.pull)?;
 
+    // [requests] links: the image asks, the operator answers. --grant-links
+    // mounts them; otherwise they are listed and NOT mounted — never silent
+    // host access for image authors.
+    if let Some(requests) = ply_core::image::read::read_manifest(&image)?.requests {
+        if !requests.links.is_empty() {
+            if args.grant_links {
+                for spec in &requests.links {
+                    let (host, container) = spec.split_once(':').expect("validated at build");
+                    links.push((host.into(), container.to_string()));
+                }
+                eprintln!(
+                    "ply: granted {} requested link(s): {}",
+                    requests.links.len(),
+                    requests.links.join(", ")
+                );
+            } else {
+                eprintln!(
+                    "ply: image requests host links (NOT granted — --grant-links mounts them):"
+                );
+                for spec in &requests.links {
+                    eprintln!("ply:   {spec}");
+                }
+            }
+        }
+    }
+
     let code = run(&RunOptions {
         image,
         cli_env,
@@ -127,6 +175,37 @@ pub fn exec(args: RunArgs) -> Result<()> {
             .map_err(|e| anyhow::anyhow!("--after-timeout: {e}"))?,
         privileged: args.privileged,
         entrypoint: dev_entrypoint,
+        domains: args.domain.clone(),
     })?;
     std::process::exit(code);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_domain;
+
+    #[test]
+    fn domain_grammar() {
+        for good in [
+            "api.example.com",
+            "example.com",
+            "*.example.com",
+            "a-b.x-1.io",
+            "localhost",
+        ] {
+            assert!(validate_domain(good).is_ok(), "{good}");
+        }
+        for bad in [
+            "",
+            "-x.com",
+            "x-.com",
+            "a b.com",
+            "a{b}.com",
+            "*.",
+            "a..b",
+            "*.*.x.com",
+        ] {
+            assert!(validate_domain(bad).is_err(), "{bad}");
+        }
+    }
 }

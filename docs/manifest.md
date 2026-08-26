@@ -126,6 +126,12 @@ default; `scope = "shared"` and `ephemeral = true` are the two modifiers.
 built against; the resolver refuses mismatched runtimes loudly instead of
 letting you segfault at 2am.
 
+**`[requests]`** — host access the image asks for: `links = ["/abs/host:/abs/container", …]`.
+Never applied on its own (a manifest ships inside the image — an image must
+not grant itself host access); `ply run --grant-links` is the operator's
+explicit yes, `ply systemd --grant-links` bakes the expansion into a unit.
+Without the flag the requests are listed and not mounted.
+
 **`[sources]`** — URL templates; see
 [Registries & publishing](/docs/registries/). `{package}` expands to the
 package name, letting one base URL serve per-package directories.

@@ -34,6 +34,11 @@ pub struct InstanceState {
     pub published_port: Option<u16>,
     #[serde(default)]
     pub published_addr: Option<String>,
+    /// `--domain` hostnames the edge should route to this app's published
+    /// address. Parent-owned like the published pair; every instance of an
+    /// app records the same list. `ply proxy` turns these into vhosts.
+    #[serde(default)]
+    pub domains: Vec<String>,
 }
 
 fn state_dir() -> PathBuf {

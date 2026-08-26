@@ -85,6 +85,27 @@ SNI routing, h2/h3 and websocket upgrades are a decade of someone else's
 work — the edge is Caddy (or nginx), and ply's job is to say what the
 upstreams are.
 
+### The one-command path: --domain
+
+```sh
+sudo ply setup --edge                 # once per host: Caddy + the ply-managed
+                                      # config + two systemd units
+ply run api.img --publish internal:3000 --domain api.example.com
+```
+
+That's HTTPS. `--domain` (repeatable) records the hostname in instance
+state; the `ply-proxy` unit (`ply proxy --watch`) notices, renders the
+vhost into Caddy's config, and hot-reloads — Caddy obtains the certificate
+and serves `https://api.example.com`, proxying to the app's published
+pool. Point the domain's DNS at the host and open 80/443 first; that's the
+whole ceremony. Scale, deploys and restarts never touch the proxy config,
+because the backend is the parent's stable address.
+
+`ply systemd --domain …` bakes the same flag into a unit for production.
+Everything below is the manual version of what `--edge` automates — still
+fully supported, and what you want when Caddy is configured beyond ply's
+defaults.
+
 The upstream worth pointing at is the app's **published address**, not its
 instance IPs:
 
@@ -284,6 +305,7 @@ ply ps                # instances: pid, ip, uptime, health, restarts
 ply ps --json         # machine-readable, for scripts and CI
 ply stats             # live CPU%, memory, pids, net rx/tx, throttling
 ply stats myapp.2     # one instance
+ply logs myapp -f     # recent output, followed (bounded ring; journald keeps history)
 ply exec myapp sh     # shell into instance 1 of myapp
 ply exec myapp.2 sh   # a specific instance
 ```
