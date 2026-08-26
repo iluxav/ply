@@ -204,7 +204,14 @@ fn build_from_repo(name: &str, spec: &Spec) -> Result<(PathBuf, String, bool)> {
     let checkout = PathBuf::from("/var/lib/ply/builds").join(name);
     std::fs::create_dir_all(checkout.parent().unwrap())?;
 
+    // A relative deploy_key resolves against the deployments dir — that is
+    // the one path a spec author (the dashboard included) always knows.
     let git_ssh = spec.deploy_key.as_deref().map(|key| {
+        let key = if key.starts_with('/') {
+            key.to_string()
+        } else {
+            ply_core::deployments::dir().join(key).display().to_string()
+        };
         format!("ssh -i {key} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new")
     });
     let git = |args: &[&str], cwd: Option<&PathBuf>| -> Result<String> {
