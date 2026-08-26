@@ -131,10 +131,12 @@ if is_root_like && { [ -e /dev/tty ] || [ -n "${PLY_EDGE:-}${PLY_DASHBOARD:-}" ]
             curl -fsSL -o "$tmp/$dash_img" \
                 "https://github.com/iluxav/ply-dashboard/releases/download/$dash_tag/$dash_img"
             as_root install -m 644 "$tmp/$dash_img" "/srv/ply-dashboard/$dash_img"
+            # stable symlink: an update is download + re-link + restart
+            as_root ln -sfn "/srv/ply-dashboard/$dash_img" /srv/ply-dashboard/current.img
 
             set -- --grant-links --publish internal:7070
             [ -n "$domain" ] && set -- "$@" --domain "$domain"
-            as_root sh -c "'$PLY_BIN' systemd '/srv/ply-dashboard/$dash_img' $* \
+            as_root sh -c "'$PLY_BIN' systemd /srv/ply-dashboard/current.img $* \
                 > /etc/systemd/system/ply-dashboard.service"
             as_root systemctl daemon-reload
             as_root systemctl enable --now ply-dashboard
