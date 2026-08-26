@@ -37,9 +37,14 @@ pub fn exec() -> Result<()> {
                 changed_units |= applied.changed;
                 desired.insert(name.clone());
                 deployments::write_status(&name, true, &applied.detail);
+                // journal state changes only — "unchanged" runs are silence
+                if !applied.detail.starts_with("unchanged") {
+                    ply_core::runtime::events::emit(&name, "deploy", &applied.detail);
+                }
             }
             Err(e) => {
                 deployments::write_status(&name, false, &format!("{e:#}"));
+                ply_core::runtime::events::emit(&name, "deploy-failed", &format!("{e:#}"));
                 eprintln!("ply: reconcile {name}: {e:#}");
             }
         }

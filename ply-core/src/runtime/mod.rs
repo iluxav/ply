@@ -2,6 +2,7 @@ pub mod after;
 pub mod cgroup;
 pub mod container;
 pub mod control;
+pub mod events;
 pub mod exec;
 pub mod hosts;
 pub mod logring;

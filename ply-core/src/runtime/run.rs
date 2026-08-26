@@ -347,6 +347,14 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                     .map(|r| r.policy.as_str())
                     .unwrap_or("?"),
             );
+            crate::runtime::events::emit(
+                &ctx.manifest.package.name,
+                "instance-restart",
+                &format!(
+                    "{}.{slot} respawned (restart #{})",
+                    ctx.manifest.package.name, info.restarts
+                ),
+            );
             match launch_instance(
                 &ctx,
                 opts,
@@ -475,6 +483,11 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                                     true,
                                     &format!("{current} -> {target}"),
                                 );
+                                crate::runtime::events::emit(
+                                    &app_name,
+                                    "scale",
+                                    &format!("{current} -> {target}"),
+                                );
                             }
                         } else if target < current {
                             // stop the highest slots; forget them so nothing respawns
@@ -499,6 +512,11 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                                 true,
                                 &format!("{current} -> {target}"),
                             );
+                            crate::runtime::events::emit(
+                                &app_name,
+                                "scale",
+                                &format!("{current} -> {target}"),
+                            );
                         } else {
                             crate::runtime::control::write_result(
                                 &app_name,
@@ -513,6 +531,11 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                             let mut queue: Vec<u32> = instances.iter().map(|i| i.n).collect();
                             queue.sort_unstable();
                             eprintln!("ply: rolling restart of {app_name} ({} slots)", queue.len());
+                            crate::runtime::events::emit(
+                                &app_name,
+                                "restart",
+                                &format!("rolling restart ({} slots)", queue.len()),
+                            );
                             roll_queue = queue;
                             crate::runtime::control::write_result(
                                 &app_name,
