@@ -65,7 +65,7 @@ pub fn exec() -> Result<()> {
         println!("removing ply-{stem} (deployment file deleted)");
         let _ = run("systemctl", &["disable", "--now", &format!("ply-{stem}")]);
         let _ = std::fs::remove_file(entry.path());
-        let _ = std::fs::remove_file(deployments::dir().join(format!("{stem}.status")));
+        let _ = std::fs::remove_file(deployments::status_path(stem));
         changed_units = true;
     }
 
@@ -258,10 +258,30 @@ fn build_from_repo(name: &str, spec: &Spec) -> Result<(PathBuf, String, bool)> {
             ".npm-cache",
             "-e",
             ".tmp",
+            "-e",
+            "*.img",
         ],
         Some(&checkout),
     )?;
     let commit = git(&["rev-parse", "--short=12", "HEAD"], Some(&checkout))?;
+
+    // Nothing new to build? (same commit, same spec, image exists) — skip:
+    // reconcile fires for every dir change including OTHER deployments'.
+    let spec_fingerprint = format!("{commit} {}", spec_hash(spec));
+    let marker = checkout.join(".ply-build/built");
+    let canonical = checkout.join(format!(
+        "{name}-0.1.0-linux-{}.img",
+        ply_core::image::name::Arch::host().as_str()
+    ));
+    if std::fs::read_to_string(&marker).unwrap_or_default() == spec_fingerprint
+        && canonical.exists()
+    {
+        return Ok((
+            canonical.clone(),
+            format!("{} @ {commit}", basename(&canonical)),
+            false,
+        ));
+    }
 
     // build step, memory-fenced, toolchain from the registry
     if let Some(build) = &spec.build {
@@ -378,6 +398,7 @@ fn build_from_repo(name: &str, spec: &Spec) -> Result<(PathBuf, String, bool)> {
     let rebuilt = previous.trim() != outcome.digest;
     let _ = std::fs::create_dir_all(checkout.join(".ply-build"));
     let _ = std::fs::write(&digest_file, &outcome.digest);
+    let _ = std::fs::write(checkout.join(".ply-build/built"), &spec_fingerprint);
     println!("{name}: {} @ {commit}", outcome.image_name);
     Ok((
         outcome.image_path,
@@ -428,6 +449,18 @@ fn mem_bytes_to_mb(size: &str) -> u64 {
 fn toml_array(items: &[String]) -> String {
     let quoted: Vec<String> = items.iter().map(|i| format!("{i:?}")).collect();
     format!("[{}]", quoted.join(", "))
+}
+
+/// Cheap content hash of the spec fields that shape the build/manifest.
+fn spec_hash(spec: &Spec) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    format!(
+        "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
+        spec.build, spec.runtime, spec.entrypoint, spec.include, spec.port, spec.env, spec.r#ref
+    )
+    .hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
 }
 
 fn valid_name(name: &str) -> bool {

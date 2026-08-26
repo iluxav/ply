@@ -142,15 +142,30 @@ impl Spec {
     }
 }
 
-/// One reconcile outcome, written as `<name>.status`.
+/// Status lives in a SUBDIRECTORY of the watched dir: systemd's
+/// PathModified fires on the dir's own entries, so reconcile writing
+/// results next to the specs would retrigger itself forever (it did).
+/// Writes inside `.status/` change nothing the watcher sees.
+pub fn status_dir() -> PathBuf {
+    dir().join(".status")
+}
+
+pub fn status_path(name: &str) -> PathBuf {
+    status_dir().join(format!("{name}.status"))
+}
+
+/// One reconcile outcome, written as `.status/<name>.status`.
 pub fn write_status(name: &str, ok: bool, detail: &str) {
-    let dir = dir();
+    let dir = status_dir();
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let line = format!("{{\"ok\":{ok},\"detail\":{detail:?},\"ts\":{ts}}}\n");
-    let tmp = dir.join(format!(".{name}.status.tmp"));
+    let tmp = dir.join(format!(".{name}.tmp"));
     if std::fs::write(&tmp, line).is_ok() {
         let _ = std::fs::rename(&tmp, dir.join(format!("{name}.status")));
     }
