@@ -173,6 +173,12 @@ pub fn allocate_loopback_port() -> Result<u16> {
 pub fn bind(spec: Publish, rootless: bool) -> Result<TcpListener> {
     let addr = spec.scope.bind_addr(rootless);
     let port = spec.host_port;
+    // `internal` binds the bridge gateway, and on a freshly prepared host
+    // the bridge does not exist until the first instance would create it —
+    // the listener claim comes first, so create it here (idempotent).
+    if !rootless && addr == crate::runtime::network::GATEWAY {
+        crate::runtime::network::ensure_bridge()?;
+    }
     TcpListener::bind((addr, port)).map_err(|e| {
         Error::Runtime(format!(
             "--publish {port}: cannot bind {addr}:{port}: {e} — published ports are real host ports (one owner per port)"

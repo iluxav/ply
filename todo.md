@@ -120,7 +120,7 @@ already are.
 - [x] `ply proxy --watch`: 2s state poll → render vhosts → write apps file on change → `caddy reload`. Tolerates missing caddy; runs as the `ply-proxy` unit
 - [x] `ply setup --edge` — Caddy (downloaded if absent) + `/etc/ply/edge/Caddyfile` + `ply-edge`/`ply-proxy` units, idempotent, refuses to clobber a hand-written Caddyfile
 - [x] Docs: running.md one-command path, cli.md. Remaining: apex+wildcard guide, promote demos/edge story
-- [ ] **Gate pending: fresh droplet e2e** — DNS → `sudo ply setup --edge` → `ply run --domain` → valid cert. Needs a scratch droplet + a test domain (NOT the prod droplet — plybox-edge owns :80/:443 there)
+- [x] **Gate PASSED 2026-08-25** — fresh droplet 143.244.185.28: install.sh (v0.1.22) → `ply setup --edge` → `ply run docker://traefik/whoami --publish internal:8080:80 --domain test.plybox.sh` → LE cert in 4s, HTTPS/2 serving. Found+fixed on the way: `internal:` bind before first-ever instance needed `ensure_bridge()` (fresh-host-only bug). Dashboard gate too: installed from GitHub via its install.sh, `--grant-links`, own cert at dash.plybox.sh
 
 **Gate:** fresh droplet → `ply run app.img --domain app.example.com` → valid cert, HTTPS serving, no manual Caddy editing.
 
