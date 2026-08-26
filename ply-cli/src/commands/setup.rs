@@ -123,10 +123,49 @@ WantedBy=multi-user.target
             ply.display()
         ),
     )?;
+    // Declarative deployments: the dir is watched by systemd (inotify) and
+    // `ply reconcile` converges units to it. A deployment is a file.
+    std::fs::create_dir_all("/var/lib/ply/deployments")?;
+    write_unit(
+        "/etc/systemd/system/ply-deployments.path",
+        "[Unit]
+Description=ply deployments dir watcher (a deployment is a file)
+
+         [Path]
+PathModified=/var/lib/ply/deployments
+MakeDirectory=yes
+
+         [Install]
+WantedBy=multi-user.target
+",
+    )?;
+    write_unit(
+        "/etc/systemd/system/ply-deployments.service",
+        &format!(
+            "[Unit]
+Description=ply reconcile (converge systemd units to the deployments dir)
+
+             [Service]
+Type=oneshot
+ExecStart={} reconcile
+",
+            ply.display()
+        ),
+    )?;
     run_cmd("systemctl", &["daemon-reload"])?;
-    run_cmd("systemctl", &["enable", "--now", "ply-edge", "ply-proxy"])?;
+    run_cmd(
+        "systemctl",
+        &[
+            "enable",
+            "--now",
+            "ply-edge",
+            "ply-proxy",
+            "ply-deployments.path",
+        ],
+    )?;
 
     println!("edge installed: ply-edge (Caddy) + ply-proxy (watcher) are running");
+    println!("deployments: drop a <name>.toml in /var/lib/ply/deployments and it runs");
     println!("next: point a domain's DNS at this host, open ports 80/443, then");
     println!("      ply run app.img --publish internal:<port> --domain app.example.com");
     Ok(())

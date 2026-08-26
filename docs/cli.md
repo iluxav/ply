@@ -126,6 +126,13 @@ No APP lists what has logs; `-f` follows.
 
 ```sh
 ply deploy IMAGE [--timeout S]     # rolling deploy, health-gated (see Deploys)
+ply scale APP N                    # grow/shrink the pool (a command is a file
+                                   # in the app's control dir; parent acts in ~2s)
+ply restart APP                    # rolling restart, health-gated
+ply reconcile                      # converge systemd units to
+                                   # /var/lib/ply/deployments/*.toml — fired
+                                   # automatically by systemd's dir watch;
+                                   # a deployment is a file (root)
 ply rm APP [--volumes]             # volumes kept unless --volumes
 ply gc                             # drop store entries nothing references
 ```

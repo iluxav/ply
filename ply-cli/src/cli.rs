@@ -52,6 +52,12 @@ pub enum Command {
     /// Run a command inside a running instance
     Exec(ExecArgs),
 
+    /// Make systemd agree with /var/lib/ply/deployments/ (a deployment is
+    /// a file: `<name>.toml` naming a registry app or an image, plus env,
+    /// publish, domains). Fired automatically by ply-deployments.path when
+    /// the dir changes; safe to run by hand. Root only.
+    Reconcile,
+
     /// Set an app's instance count (the run parent grows/shrinks the pool)
     ///
     /// Writes the app's control file — commands are files; the parent acts

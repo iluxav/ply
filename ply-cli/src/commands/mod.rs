@@ -11,6 +11,7 @@ pub mod lb;
 mod lifecycle;
 mod logs;
 mod ps;
+mod reconcile;
 mod run;
 mod search;
 mod setup;
@@ -33,6 +34,7 @@ pub fn dispatch(command: Command) -> Result<()> {
         Command::Logs(args) => logs::exec(args),
         Command::Scale(args) => control::scale(args),
         Command::Restart(args) => control::restart(args),
+        Command::Reconcile => reconcile::exec(),
         Command::Ps(args) => ps::exec(args),
         Command::Stats(args) => stats::exec(args),
         Command::Check(args) => lifecycle::check(args),
