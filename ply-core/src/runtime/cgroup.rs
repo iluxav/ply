@@ -33,6 +33,18 @@ impl Cgroup {
                 // soft limit below the hard one: reclaim before the OOM kill
                 cg.write("memory.high", &(bytes * 9 / 10).to_string())?;
             }
+            if let Some(swap) = &res.swap {
+                let bytes = parse_size(swap)?;
+                cg.write("memory.swap.max", &bytes.to_string())?;
+            }
+            if let Some(weight) = res.cpu_weight {
+                if !(1..=10000).contains(&weight) {
+                    return Err(Error::Manifest(format!(
+                        "resources.cpu_weight `{weight}`: cgroup v2 wants 1..=10000"
+                    )));
+                }
+                cg.write("cpu.weight", &weight.to_string())?;
+            }
             if let Some(cpu) = &res.cpu {
                 let cores: f64 = cpu.parse().map_err(|_| {
                     Error::Manifest(format!(

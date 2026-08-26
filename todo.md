@@ -1,9 +1,14 @@
 # todo.md — the road to fighting Coolify
 
+> **North star: they sell a dashboard that needs a server;
+> we sell a server that happens to have a dashboard.**
+>
 > Spec: `AGENTS.md`. Delivered phases: `TASKS.md`. This file is the *next*
 > product bet, not the backlog — everything here serves one thesis:
 >
 > **Coolify needs a $24 droplet to run itself. ply runs 50 apps on a $6 one.**
+> (Their own docs: 2 CPU / 2 GB / 30 GB *minimum* for Coolify itself —
+> verified 2026-08-25. ply's floor is the $4 / 512 MB droplet.)
 >
 > The test for every item below: **does it add a resident process?** Socket
 > activation *removes* processes. A static status page adds none. A dashboard

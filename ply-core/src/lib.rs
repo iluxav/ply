@@ -12,6 +12,7 @@ pub mod dev;
 pub mod digest;
 pub mod env;
 pub mod error;
+pub mod github;
 pub mod image;
 pub mod lifecycle;
 pub mod lockfile;

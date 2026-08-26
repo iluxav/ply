@@ -29,10 +29,56 @@ pub fn exec(args: SetupArgs) -> Result<()> {
     if let Some(port) = args.unprivileged_ports {
         unprivileged_ports_step(port)?;
     }
+    if let Some(size) = &args.swap {
+        swap_step(size)?;
+    }
     if args.edge {
         edge_step()?;
     }
     report_rootless_readiness(args.unprivileged_ports);
+    Ok(())
+}
+
+/// `--swap 2G`: the classic small-VPS move, wrapped. Disk standing in as
+/// slow overflow memory — what lets a 512 MB droplet finish a 2 GB build.
+fn swap_step(size: &str) -> Result<()> {
+    if std::fs::read_to_string("/proc/swaps")
+        .map(|s| s.lines().count() > 1)
+        .unwrap_or(false)
+    {
+        println!("ok: swap already active (/proc/swaps)");
+        return Ok(());
+    }
+    size.strip_suffix(['G', 'M'])
+        .and_then(|n| n.parse::<u32>().ok())
+        .filter(|n| *n > 0)
+        .ok_or_else(|| anyhow::anyhow!("--swap `{size}`: expected e.g. 2G or 512M"))?;
+    println!("creating /swapfile ({size}) …");
+    run_cmd("fallocate", &["-l", size, "/swapfile"])?;
+    std::fs::set_permissions(
+        "/swapfile",
+        std::os::unix::fs::PermissionsExt::from_mode(0o600),
+    )?;
+    run_cmd("mkswap", &["/swapfile"])?;
+    run_cmd("swapon", &["/swapfile"])?;
+    let fstab = std::fs::read_to_string("/etc/fstab").unwrap_or_default();
+    if !fstab.contains("/swapfile") {
+        std::fs::write(
+            "/etc/fstab",
+            format!(
+                "{fstab}/swapfile none swap sw 0 0
+"
+            ),
+        )?;
+    }
+    // overflow tier, not a habit: prefer RAM until pressure is real
+    let _ = std::fs::write("/proc/sys/vm/swappiness", "10");
+    let _ = std::fs::write(
+        "/etc/sysctl.d/60-ply-swappiness.conf",
+        "vm.swappiness=10
+",
+    );
+    println!("swap active: {size} at /swapfile (persisted; swappiness 10)");
     Ok(())
 }
 

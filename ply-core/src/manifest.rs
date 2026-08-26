@@ -358,6 +358,15 @@ pub struct Resources {
     pub cpu: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pids: Option<u32>,
+    /// memory.swap.max — cap the swap OVERFLOW separately from RAM
+    /// (default: unlimited, which is what lets a fenced batch job like a
+    /// build spill to disk instead of dying or evicting neighbors).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub swap: Option<String>,
+    /// cpu.weight 1–10000 (default 100) — background jobs take ~25 so
+    /// interactive apps win the CPU under contention.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_weight: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

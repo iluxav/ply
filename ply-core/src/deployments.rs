@@ -32,9 +32,47 @@ pub struct Spec {
     /// A runnable app from the registry's apps namespace…
     #[serde(default)]
     pub app: Option<String>,
-    /// …or a local image path. Exactly one of the two.
+    /// …or a local image path…
     #[serde(default)]
     pub image: Option<String>,
+    /// …or a GitHub repo whose releases carry the CI-built .img
+    /// (`github = "org/repo"`). Exactly one of the three.
+    #[serde(default)]
+    pub github: Option<String>,
+    /// Asset app name for `github` (the `<name>` in
+    /// `<name>-<ver>-linux-<arch>.img`); defaults to the deployment name.
+    #[serde(default)]
+    pub asset: Option<String>,
+    /// Fine-grained PAT (Contents: read) for private repos — a root-owned
+    /// file, never the token itself.
+    #[serde(default)]
+    pub token_file: Option<String>,
+    /// …or a git repo to clone and BUILD ON THIS HOST (lane 2):
+    /// `repo = "https://github.com/org/app"` or `git@github.com:org/app.git`.
+    #[serde(default)]
+    pub repo: Option<String>,
+    /// Branch (or any committish) to build; default: the remote HEAD branch.
+    #[serde(default)]
+    pub r#ref: Option<String>,
+    /// Build command, run inside a memory-fenced ply container whose only
+    /// toolchain is `runtime` from the registry. The checkout persists
+    /// between builds — node_modules and framework caches ARE the cache.
+    #[serde(default)]
+    pub build: Option<String>,
+    /// Builder toolchain, e.g. "node@24" (registry package + version range).
+    #[serde(default)]
+    pub runtime: Option<String>,
+    /// Read-only per-repo SSH key for private repos (git lanes only).
+    #[serde(default)]
+    pub deploy_key: Option<String>,
+    /// When the repo has no ply.toml: the app manifest, inline.
+    #[serde(default)]
+    pub entrypoint: Vec<String>,
+    #[serde(default)]
+    pub include: Vec<String>,
+    /// Declared app port (labels + health gate for the generated manifest).
+    #[serde(default)]
+    pub port: Option<u16>,
     /// Version constraint for `app` (newest matching wins, then pinned in
     /// the generated unit by the fetched file's identity).
     #[serde(default)]
@@ -64,14 +102,18 @@ pub struct Spec {
 impl Spec {
     pub fn parse(text: &str) -> Result<Spec> {
         let spec: Spec = toml::from_str(text).map_err(|e| Error::Manifest(e.to_string()))?;
-        match (&spec.app, &spec.image) {
-            (Some(_), Some(_)) => Err(Error::Manifest(
-                "a deployment names `app` (registry) OR `image` (a file) — not both".into(),
+        let sources = spec.app.is_some() as u8
+            + spec.image.is_some() as u8
+            + spec.github.is_some() as u8
+            + spec.repo.is_some() as u8;
+        match sources {
+            1 => Ok(spec),
+            0 => Err(Error::Manifest(
+                "a deployment needs one of: `app` (registry), `image` (a file), `github` (release assets), `repo` (build here)".into(),
             )),
-            (None, None) => Err(Error::Manifest(
-                "a deployment needs `app = \"name\"` (registry) or `image = \"/path.img\"`".into(),
+            _ => Err(Error::Manifest(
+                "a deployment names exactly one of `app`, `image`, `github`, `repo`".into(),
             )),
-            _ => Ok(spec),
         }
     }
 

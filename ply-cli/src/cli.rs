@@ -719,6 +719,12 @@ pub struct SetupArgs {
     #[arg(long, value_name = "PORT", num_args = 0..=1, default_missing_value = "80")]
     pub unprivileged_ports: Option<u16>,
 
+    /// Create and enable a swapfile (e.g. --swap 2G) — small droplets need
+    /// it for JS builds: the memory-fenced builder spills here instead of
+    /// OOMing or evicting your running apps. Persisted in /etc/fstab.
+    #[arg(long, value_name = "SIZE")]
+    pub swap: Option<String>,
+
     /// Install the HTTPS edge: Caddy (downloaded if absent) + a ply-managed
     /// Caddyfile + two systemd units — `ply-edge` (Caddy) and `ply-proxy`
     /// (`ply proxy --watch`). After this, `ply run --domain app.example.com`
