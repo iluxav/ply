@@ -31,21 +31,19 @@ pub fn spawn(app: &str, slot: u32, nonce: &str) {
         Ok(nix::unistd::ForkResult::Parent { child }) => {
             let _ = nix::sys::wait::waitpid(child, None);
         }
-        Ok(nix::unistd::ForkResult::Child) => {
-            match unsafe { nix::unistd::fork() } {
-                Ok(nix::unistd::ForkResult::Child) => {
-                    let code = match serve(&app, slot, &nonce) {
-                        Ok(()) => 0,
-                        Err(e) => {
-                            eprintln!("ply: terminal {app}.{slot}: {e}");
-                            1
-                        }
-                    };
-                    std::process::exit(code);
-                }
-                _ => std::process::exit(0),
+        Ok(nix::unistd::ForkResult::Child) => match unsafe { nix::unistd::fork() } {
+            Ok(nix::unistd::ForkResult::Child) => {
+                let code = match serve(&app, slot, &nonce) {
+                    Ok(()) => 0,
+                    Err(e) => {
+                        eprintln!("ply: terminal {app}.{slot}: {e}");
+                        1
+                    }
+                };
+                std::process::exit(code);
             }
-        }
+            _ => std::process::exit(0),
+        },
         Err(e) => eprintln!("ply: terminal fork: {e}"),
     }
 }
@@ -233,8 +231,14 @@ use std::os::unix::process::CommandExt;
 mod tests {
     #[test]
     fn resize_parsing() {
-        assert_eq!(super::parse_resize(br#"{"cols":120,"rows":32}"#), Some((120, 32)));
-        assert_eq!(super::parse_resize(br#"{"rows":32,"cols":120}"#), Some((120, 32)));
+        assert_eq!(
+            super::parse_resize(br#"{"cols":120,"rows":32}"#),
+            Some((120, 32))
+        );
+        assert_eq!(
+            super::parse_resize(br#"{"rows":32,"cols":120}"#),
+            Some((120, 32))
+        );
         assert_eq!(super::parse_resize(b"junk"), None);
     }
 

@@ -29,7 +29,10 @@ pub enum Command {
     Restart,
     /// Open a terminal into a slot: the parent answers with a PTY served
     /// on `control/term-<nonce>.sock`.
-    Exec { slot: u32, nonce: String },
+    Exec {
+        slot: u32,
+        nonce: String,
+    },
 }
 
 /// Read and CONSUME pending commands (files are removed; half-written
@@ -64,9 +67,9 @@ pub fn poll(app: &str) -> Vec<Command> {
         let _ = std::fs::remove_file(&exec);
         let mut parts = text.split_whitespace();
         let slot = parts.next().and_then(|s| s.parse::<u32>().ok());
-        let nonce = parts.next().filter(|n| {
-            (8..=64).contains(&n.len()) && n.chars().all(|c| c.is_ascii_hexdigit())
-        });
+        let nonce = parts
+            .next()
+            .filter(|n| (8..=64).contains(&n.len()) && n.chars().all(|c| c.is_ascii_hexdigit()));
         match (slot, nonce) {
             (Some(slot), Some(nonce)) => out.push(Command::Exec {
                 slot,
