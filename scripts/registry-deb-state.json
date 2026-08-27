@@ -190,5 +190,13 @@
   "upload_path": "apps/redis/redis-8.0.2-linux-arm64.img",
   "bytes": 4096,
   "pushed_at": "2026-08-25T20:43:59.589Z"
+ },
+ "manual:apps/plybox-web/plybox-web-0.2.0-linux-x64.img": {
+  "name": "plybox-web",
+  "version": "0.2.0",
+  "img": "plybox-web-0.2.0-linux-x64.img",
+  "upload_path": "apps/plybox-web/plybox-web-0.2.0-linux-x64.img",
+  "bytes": 16736256,
+  "pushed_at": "2026-08-27T03:35:23.589Z"
  }
 }

@@ -137,3 +137,14 @@ independent:
 
 And the standing rule regardless: the private key lives only in the GitHub
 secret; a server never holds the credential that opens itself.
+
+## Or skip CI push entirely
+
+Everything above pushes from CI. The inverse — the droplet **pulling** —
+needs no server credentials in GitHub at all: run `sudo ply setup --edge`
+once, drop a deployment file naming your repo or its releases, and the
+host rebuilds or re-pulls itself within a minute of every push. On this
+same $4 droplet size, a Next.js app builds on-host in ~3½ minutes cold and
+~80 seconds incremental. The full story is
+[Deployments & CD](/docs/deployments/) — and the optional
+[Dashboard](/docs/dashboard/) gives it a web face, terminal included.

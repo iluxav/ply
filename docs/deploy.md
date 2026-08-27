@@ -81,12 +81,16 @@ ply systemd myapp.img --scale 4 --publish 80:3000 \
 sudo systemctl enable --now ply-myapp
 ```
 
-## CI-driven deployment
+## Continuous deployment
 
-Because a deploy is `scp` + one command over SSH, GitHub Actions can drive
-the whole thing — build on release, push the image to your host, roll
-with health gates, verify with `ply ps --json`. The published actions
-(`iluxav/ply@v1` to build, `iluxav/ply/deploy@v1` to ship and roll) do it
-in two workflow steps — the complete recipe is
-[Running on DigitalOcean](/docs/digitalocean/). Dedicated `ply push` /
-`ply status` / `ply rollback` verbs are on the roadmap.
+The page above is the push side: `ply deploy` rolls whatever you hand it,
+so CI can `scp` an image and run one command over SSH. The published
+actions (`iluxav/ply@v1` to build, `iluxav/ply/deploy@v1` to ship and
+roll) do it in two workflow steps — the complete recipe is
+[Running on DigitalOcean](/docs/digitalocean/).
+
+The pull side is usually the better default: declare a deployment file
+naming a GitHub repo or release, and the host converges itself — on push,
+within a minute, with no server credentials in CI at all. That whole
+story, including building straight from a repo on a $4 droplet, is
+[Deployments & CD](/docs/deployments/).

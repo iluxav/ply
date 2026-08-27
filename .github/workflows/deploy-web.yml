@@ -1,10 +1,14 @@
-# plybox.sh — build the site (app/ + docs/) and roll it onto the web droplet.
-# Secrets: WEB_DEPLOY_SSH_KEY. Vars: WEB_DROPLET_HOST.
+# plybox.sh — build the site (app/ + docs/) and publish it to the registry.
+# Secrets: CLOUDFLARE_API_TOKEN (R2 write), CLOUDFLARE_ACCOUNT_ID.
+#
+# Pull-based: CI never touches the droplet. The prod host runs a
+# `plybox-web` deployment (app = "plybox-web") with the reconcile timer —
+# it notices the new registry version and rolls itself within a minute.
+# CI holds registry credentials only; nothing here can log into prod.
 #
 # Topology: caddy (deploy/edge, a ply app) owns :443 and reverse-proxies to
-# this app's published internal address. The edge is deployed by hand — it
-# changes rarely and holds the TLS certs — so this workflow only rolls the
-# site itself.
+# the app's published internal address. The edge is deployed by hand — it
+# changes rarely and holds the TLS certs.
 name: deploy-web
 # Deploys are deliberate: `make release-web` dispatches this; a plain push
 # ships nothing. (Path-triggered deploys raced releases — a pushed install.sh
@@ -29,6 +33,12 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: "24" }
 
+      # The registry is append-only: a version's bytes never change, so
+      # every publish needs a fresh one. The run number is the clock
+      # (0.2.x was seeded by hand; CI owns 0.3.x — always newer).
+      - name: stamp version
+        run: sed -i "s/^version = \".*\"/version = \"0.3.${{ github.run_number }}\"/" app/ply.toml
+
       - name: build site (standalone)
         working-directory: app
         run: |
@@ -42,26 +52,39 @@ jobs:
           dir: "app"
           upload: "false"
 
-      - name: ship + roll
-        uses: ./deploy
-        with:
-          image: ${{ steps.img.outputs.image }}
-          host: ${{ vars.WEB_DROPLET_HOST }}
-          ssh-key: ${{ secrets.WEB_DEPLOY_SSH_KEY }}
-          scale: "2"
-          # internal: the run parent binds the bridge gateway, not 0.0.0.0.
-          # The edge (deploy/edge) owns :443 and proxies to it — publishing
-          # this on :80 would collide with the edge and expose the app
-          # directly. Only used when bootstrapping a unit that is not already
-          # active; a live host takes the `ply deploy` path instead.
-          publish: "internal:3000"
+      - name: publish to registry
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          IMG="${{ steps.img.outputs.image }}"
+          BASE=$(basename "$IMG")
+          npx wrangler r2 object put "ply-registry-deb/apps/plybox-web/$BASE" \
+            --file "$IMG" --remote \
+            --cache-control "public, max-age=31536000, immutable" \
+            --content-type application/octet-stream
+          # append to the version index (newest-matching resolution reads this)
+          curl -fsSL https://registry.plybox.sh/apps/plybox-web/index.json -o index.json || echo "[]" > index.json
+          node -e "const fs=require('fs');const i=JSON.parse(fs.readFileSync('index.json'));const b=process.argv[1];if(!i.includes(b))i.push(b);fs.writeFileSync('index.json',JSON.stringify(i))" "$BASE"
+          npx wrangler r2 object put "ply-registry-deb/apps/plybox-web/index.json" \
+            --file index.json --remote \
+            --cache-control "public, max-age=60" --content-type application/json
+          echo "published $BASE — prod pulls it within its next reconcile beat"
 
       - name: verify from outside
         run: |
+          # The droplet's timer beats once a minute; a build + roll follows.
           # Through the edge, over TLS — the app has no public port of its own.
-          for i in $(seq 1 20); do
-            curl -fsS -m 5 "https://plybox.sh/" -o /dev/null && exit 0
-            sleep 3
+          BASE=$(basename "${{ steps.img.outputs.image }}")
+          WANT="0.3.${{ github.run_number }}"
+          for i in $(seq 1 40); do
+            sleep 6
+            if curl -fsS -m 5 "https://plybox.sh/" -o /dev/null; then
+              # serving is necessary; matching version is the real proof —
+              # but the site does not expose its version, so serving + the
+              # registry carrying $WANT is what we can honestly check.
+              curl -fsS "https://registry.plybox.sh/apps/plybox-web/index.json" | grep -q "$WANT" && exit 0
+            fi
           done
-          echo "::error::plybox.sh did not serve after the roll"
+          echo "::error::plybox.sh did not converge on $WANT"
           exit 1
