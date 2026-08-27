@@ -142,9 +142,27 @@ host without swap, and tells you the fix); Rust belongs in CI — use lane 3.
 | `entrypoint`, `include`, `port` | repo lane, when the repo has no `ply.toml` |
 | `token_file` / `deploy_key` | private-repo credential (PAT file / SSH key) |
 | `publish`, `domain`, `env`, `env_file`, `scale`, `after` | passed through to `ply run` |
+| | a relative `env_file` (`.env/site.env`) resolves against the deployments dir |
 | `grant_links` | mount the `[requests]` links the image asks for (dashboard-style apps) |
 | `auto` | `false` = converge only when the file is touched |
 | `source` | registry override for the `app` lane |
+
+## Shared env files
+
+Secrets never belong in a spec — a fleet repo is at its best public.
+The convention: env files live in `deployments/.env/<name>.env` (0600,
+host-local, never synced), and specs carry the *reference*:
+
+```toml
+env_file = ".env/site.env"
+```
+
+Relative paths resolve against the deployments dir, exactly like
+`token_file` and `deploy_key`. Several apps sharing one file is the
+point — a stack's database password is written once. The dashboard has
+an editor for these (with a *save & apply* that touches every
+referencing spec so the apps restart onto the new values); over ssh,
+`vi` and `touch` do the same job.
 
 ## GitOps fleet
 

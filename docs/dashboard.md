@@ -69,6 +69,18 @@ timer installed, updates flow with no clicks at all (see
 [Deployments & CD](/docs/deployments/)); `auto = false` keeps an app
 manual, and the button still works, because a touch is explicit intent.
 
+## Shared env files
+
+The deploy page manages `deployments/.env/*.env` — the secrets your
+specs reference (`env_file = ".env/site.env"`) without containing.
+The editor lives in the right drawer, values blurred until you ask;
+**save** writes the file (0600), **save & apply** also touches every
+spec that references it, so reconcile restarts those apps onto the new
+values. Specs pointing at absolute paths (`/root/foo.env`) are listed
+too, read-only, with a nudge to move them under `.env/` where the
+dashboard can reach them. Deleting a file that something still
+references is refused.
+
 ## Logs, events, post-mortems
 
 Every instance writes a rotating log ring; the dashboard tails it live.

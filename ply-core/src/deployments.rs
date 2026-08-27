@@ -150,7 +150,15 @@ impl Spec {
             flags.extend(["-e".into(), format!("{key}={value}")]);
         }
         if let Some(file) = &self.env_file {
-            flags.extend(["--env-file".into(), file.clone()]);
+            // Relative paths resolve against the deployments dir, like
+            // deploy_key/token_file: a (public) fleet repo can then carry
+            // `env_file = ".env/name.env"` — a reference, never the values.
+            let resolved = if file.starts_with('/') {
+                file.clone()
+            } else {
+                dir().join(file).display().to_string()
+            };
+            flags.extend(["--env-file".into(), resolved]);
         }
         for domain in &self.domain {
             flags.extend(["--domain".into(), domain.clone()]);
