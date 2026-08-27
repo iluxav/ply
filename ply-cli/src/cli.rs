@@ -129,6 +129,12 @@ pub enum Command {
     Setup(SetupArgs),
     /// Update ply itself to the newest release
     SelfUpdate(SelfUpdateArgs),
+    /// Log in to the registry (GitHub device flow — your namespace is your login)
+    Login,
+    /// Show who you are logged in as
+    Whoami,
+    /// Publish an image to the registry under your namespace
+    Push(PushArgs),
 
     /// Pre-fetch every package in the host policy into the store
     ///
@@ -713,6 +719,12 @@ mod tests {
 }
 
 #[derive(Args)]
+pub struct PushArgs {
+    /// The image to publish (<name>-<x.y.z>-linux-<arch>.img)
+    pub image: std::path::PathBuf,
+}
+
+#[derive(clap::Args, Debug)]
 pub struct SelfUpdateArgs {
     /// Only report whether a newer release exists
     #[arg(long)]

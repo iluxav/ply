@@ -1,5 +1,6 @@
 // One module per command as they are implemented (per TASKS.md phase).
 
+mod account;
 mod add;
 mod build;
 mod control;
@@ -48,6 +49,9 @@ pub fn dispatch(command: Command) -> Result<()> {
         Command::Proxy(args) => lb::proxy(args),
         Command::Setup(args) => setup::exec(args),
         Command::SelfUpdate(args) => self_update::exec(args),
+        Command::Login => account::login(),
+        Command::Whoami => account::whoami(),
+        Command::Push(args) => account::push(&args.image),
         Command::Sync(args) => lifecycle::sync(args),
         Command::Gc(args) => lifecycle::gc(args),
         Command::Rm(args) => lifecycle::rm(args),
