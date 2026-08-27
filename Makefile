@@ -34,12 +34,7 @@ static:
 release: release-cli release-web
 
 release-web:
-	@set -eu; \
-	test "$$(git rev-parse --abbrev-ref HEAD)" = main || { echo "release-web: not on main"; exit 1; }; \
-	test -z "$$(git status --porcelain)" || { echo "release-web: working tree not clean"; exit 1; }; \
-	git pull --ff-only; git push; \
-	gh workflow run deploy-web.yml; \
-	echo "release-web: deploy-web dispatched for $$(git rev-parse --short HEAD) — follow with: gh run watch"
+	@$(MAKE) -C app release
 
 release-cli:
 	@set -eu; \

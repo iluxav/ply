@@ -26,7 +26,9 @@ runs:
   steps:
     - name: install ply
       shell: bash
-      run: curl -fsSL https://plybox.sh/install.sh | sh
+      # i.plybox.sh: the installer lives on the registry bucket, not the
+      # website — CI keeps working even when plybox.sh itself is mid-deploy.
+      run: command -v ply >/dev/null || curl -fsSL https://i.plybox.sh/install.sh | PLY_WIZARD=no sh
     - name: build image
       id: build
       shell: bash

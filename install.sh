@@ -88,10 +88,14 @@ PLY_BIN=/usr/local/bin/ply
 is_root_like() { [ "$(id -u)" = "0" ] || { command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; }; }
 as_root() { if [ "$(id -u)" = "0" ]; then "$@"; else sudo "$@"; fi; }
 
+# A tty that EXISTS is not a tty that WORKS: CI runners ship a /dev/tty
+# node that fails on open. Probe by opening, never by stat.
+has_tty() { (exec < /dev/tty) 2>/dev/null; }
+
 ask() { # ask "question" default -> echoes yes|no
     q=$1; default=$2
     if [ -n "${3:-}" ]; then echo "$3"; return; fi        # env override
-    if [ ! -e /dev/tty ] || [ "${PLY_WIZARD:-yes}" = "no" ]; then echo no; return; fi
+    if ! has_tty || [ "${PLY_WIZARD:-yes}" = "no" ]; then echo no; return; fi
     if [ "$default" = "yes" ]; then hint="[Y/n]"; else hint="[y/N]"; fi
     printf "%s %s " "$q" "$hint" > /dev/tty
     IFS= read -r answer < /dev/tty || answer=""
@@ -104,7 +108,7 @@ ask() { # ask "question" default -> echoes yes|no
 
 ask_text() { # ask_text "question" -> echoes answer, whitespace-trimmed
     if [ -n "${2:-}" ]; then echo "$2"; return; fi
-    if [ ! -e /dev/tty ] || [ "${PLY_WIZARD:-yes}" = "no" ]; then echo ""; return; fi
+    if ! has_tty || [ "${PLY_WIZARD:-yes}" = "no" ]; then echo ""; return; fi
     printf "%s " "$1" > /dev/tty
     IFS= read -r answer < /dev/tty || answer=""
     echo "$answer" | tr -d '[:space:]'
@@ -112,7 +116,7 @@ ask_text() { # ask_text "question" -> echoes answer, whitespace-trimmed
 
 # The wizard needs root (systemd units, Caddy, ports 80/443) — skip quietly
 # for user-mode installs and CI.
-if is_root_like && { [ -e /dev/tty ] || [ -n "${PLY_EDGE:-}${PLY_DASHBOARD:-}${PLY_FLEET:-}" ]; } && [ "${PLY_WIZARD:-yes}" != "no" ]; then
+if is_root_like && { has_tty || [ -n "${PLY_EDGE:-}${PLY_DASHBOARD:-}${PLY_FLEET:-}" ]; } && [ "${PLY_WIZARD:-yes}" != "no" ]; then
     echo ""
     # A host can follow a fleet repo (GitOps): its apps, domains and even
     # the dashboard are files in git — the standalone questions below
