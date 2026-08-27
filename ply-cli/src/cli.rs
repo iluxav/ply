@@ -646,9 +646,8 @@ pub struct OutdatedArgs {}
 pub fn docker_hint(cmd: &str) -> Option<&'static str> {
     Some(match cmd {
         "pull" => "dependencies fetch on demand, pinned by ply.lock — there is nothing to pull.\n(`ply sync` pre-fetches a host policy's packages; docs: https://plybox.sh/docs/dependencies/)",
-        "push" => "publishing is copying a file: upload the .img to any file host (GitHub Releases, a bucket, a directory).\n(docs: https://plybox.sh/docs/registries/)",
         "tag" => "no tags, on purpose: published versions are immutable — nothing like `:latest` can move.\nBump [package] version and `ply build` instead.",
-        "login" | "logout" => "registries have no accounts — any file host your network can GET works; the sha256 in ply.lock is the trust, not a login.",
+        "logout" => "signing out is deleting ~/.config/ply/credentials — `ply login` mints a fresh token.\nInstalling never needs an account; only publishing does.",
         "compose" => "compose is `ply up`: a [stack] ply.toml lists members (registry apps + local dirs) wired with `after` and env.\n(docs: https://plybox.sh/docs/running/)",
         "stop" | "kill" => "Ctrl-C the foreground run, `ply rm <app>`, or `systemctl stop ply-<app>` under systemd.",
         "start" | "restart" => "`ply run IMAGE` starts instances; crash restarts are the [restart] policy's job, reboots are systemd's.\n(docs: https://plybox.sh/docs/deploy/)",
@@ -684,7 +683,7 @@ mod tests {
     #[test]
     fn hints_only_cover_nonexistent_subcommands() {
         for verb in [
-            "pull", "push", "tag", "login", "logout", "compose", "stop", "kill", "start",
+            "pull", "tag", "logout", "compose", "stop", "kill", "start",
             "restart", "inspect", "cp", "save", "load", "export", "network", "volume", "commit",
             "rmi",
         ] {
