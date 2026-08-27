@@ -1,0 +1,7 @@
+{
+  "type": "app",
+  "description": "plybox.sh — the ply website (dogfood: prod pulls this from here)",
+  "license": "",
+  "homepage": "https://plybox.sh",
+  "publish": "internal:3000"
+}

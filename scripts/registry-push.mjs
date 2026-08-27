@@ -26,7 +26,7 @@
 import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
-import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, rmSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -304,6 +304,20 @@ async function publishState() {
   }
 
   const meta = new Map(catalog.packages.map((p) => [p.name, p]));
+  // curated metadata: registry/meta/<owner>/<name>.json — the catalog is
+  // code-reviewed; type/contract/origin come from git, not from a UI build
+  const curated = new Map();
+  const metaRoot = join(ROOT, "registry/meta");
+  if (existsSync(metaRoot)) {
+    for (const owner of readdirSync(metaRoot)) {
+      const ownerDir = join(metaRoot, owner);
+      if (!statSync(ownerDir).isDirectory()) continue;
+      for (const f of readdirSync(ownerDir)) {
+        if (!f.endsWith(".json")) continue;
+        curated.set(f.slice(0, -5), { owner, ...JSON.parse(readFileSync(join(ownerDir, f), "utf8")) });
+      }
+    }
+  }
   const byKey = new Map(); // "namespace/name" -> package record
   const seenImg = new Set();
   for (const e of entries) {
@@ -313,12 +327,19 @@ async function publishState() {
     const key = `${namespace}/${e.name}`;
     if (!byKey.has(key)) {
       const m = meta.get(e.name);
+      const c = curated.get(e.name) ?? {};
       byKey.set(key, {
         namespace,
+        owner: c.owner ?? "ply",
         name: e.name,
-        description: m?.description ?? "",
-        license: m?.license ?? "",
-        homepage: m?.url ?? "",
+        type: c.type ?? (namespace === "apps" ? "app" : "layer"),
+        description: c.description ?? m?.description ?? "",
+        license: c.license ?? m?.license ?? "",
+        homepage: c.homepage ?? m?.url ?? "",
+        contract: c.contract,
+        publish: c.publish,
+        grant_links: c.grant_links,
+        origin: c.origin,
         // Provenance: unmodified Alpine build. repo/apk/origin locate the
         // package page and the aports recipe (license text, source tarball).
         alpine: m ? { branch: catalog.branch, repo: m.repo, apk: m.apk, origin: m.origin } : undefined,

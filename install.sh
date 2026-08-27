@@ -81,6 +81,7 @@ fi
 # questions non-interactively — set them on the SH side of the pipe:
 #   curl … | PLY_WIZARD=no sh                  (skip the wizard entirely)
 #   curl … | PLY_EDGE=yes PLY_DASHBOARD=yes PLY_DOMAIN=dash.example.com sh
+#   curl … | PLY_FLEET=git@github.com:you/infra.git PLY_FLEET_HOST=web-1 sh
 PLY_BIN=/usr/local/bin/ply
 [ -x "$PLY_BIN" ] || PLY_BIN="$HOME/.local/bin/ply"
 
@@ -111,10 +112,35 @@ ask_text() { # ask_text "question" -> echoes answer, whitespace-trimmed
 
 # The wizard needs root (systemd units, Caddy, ports 80/443) — skip quietly
 # for user-mode installs and CI.
-if is_root_like && { [ -e /dev/tty ] || [ -n "${PLY_EDGE:-}${PLY_DASHBOARD:-}" ]; } && [ "${PLY_WIZARD:-yes}" != "no" ]; then
+if is_root_like && { [ -e /dev/tty ] || [ -n "${PLY_EDGE:-}${PLY_DASHBOARD:-}${PLY_FLEET:-}" ]; } && [ "${PLY_WIZARD:-yes}" != "no" ]; then
     echo ""
+    # A host can follow a fleet repo (GitOps): its apps, domains and even
+    # the dashboard are files in git — the standalone questions below
+    # would only collide with what the repo declares.
+    fleet=$(ask_text "follow a fleet repo? (GitOps: apps sync from git; blank = standalone):" "${PLY_FLEET:-}")
+    if [ -n "$fleet" ]; then
+        fleet_host=$(ask_text "fleet host name (hosts/<name>/ in the repo; blank = this hostname):" "${PLY_FLEET_HOST:-}")
+        fleet_key=$(ask_text "deploy key path (private repo; blank = public):" "${PLY_FLEET_KEY:-}")
+        set -- --edge --fleet "$fleet"
+        [ -n "$fleet_host" ] && set -- "$@" --fleet-host "$fleet_host"
+        [ -n "$fleet_key" ] && set -- "$@" --fleet-key "$fleet_key"
+        mem_kb=$(awk '/MemTotal/{print $2}' /proc/meminfo 2>/dev/null || echo 0)
+        if [ "$mem_kb" -lt 2000000 ] && [ "$(ask "create a 2G swapfile? (small hosts need it for builds and memory spikes)" yes "${PLY_SWAP:-}")" = "yes" ]; then
+            set -- "$@" --swap 2G
+        fi
+        as_root "$PLY_BIN" setup "$@"
+        echo ""
+        echo "fleet host ready — it converges to the repo every minute."
+        echo "point your domains' DNS here; certificates issue on their own."
+        exit 0
+    fi
+
     if [ "$(ask "enable the HTTPS edge? (Caddy + auto-TLS: apps get domains via --domain)" yes "${PLY_EDGE:-}")" = "yes" ]; then
         as_root "$PLY_BIN" setup --edge
+        mem_kb=$(awk '/MemTotal/{print $2}' /proc/meminfo 2>/dev/null || echo 0)
+        if [ "$mem_kb" -lt 2000000 ] && [ "$(ask "create a 2G swapfile? (small hosts need it for builds and memory spikes)" yes "${PLY_SWAP:-}")" = "yes" ]; then
+            as_root "$PLY_BIN" setup --swap 2G
+        fi
         domain=$(ask_text "domain for the dashboard, pointed at this host (blank = skip):" "${PLY_DOMAIN:-}")
     else
         domain=""

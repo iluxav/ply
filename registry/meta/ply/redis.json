@@ -1,0 +1,8 @@
+{
+  "type": "app",
+  "description": "Redis in-memory data store (docker-library env contract)",
+  "license": "RSALv2/SSPLv1",
+  "homepage": "https://redis.io",
+  "contract": "REDIS_PASSWORD=\nREDIS_PORT=6379",
+  "publish": "internal:6379"
+}

@@ -1,0 +1,8 @@
+{
+  "type": "app",
+  "description": "PostgreSQL relational database (docker-library env contract)",
+  "license": "PostgreSQL",
+  "homepage": "https://www.postgresql.org",
+  "contract": "POSTGRES_PASSWORD=\nPOSTGRES_DB=\nPGPORT=5432",
+  "publish": "internal:5432"
+}

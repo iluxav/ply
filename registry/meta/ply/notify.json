@@ -1,0 +1,8 @@
+{
+  "type": "app",
+  "description": "Deploy/crash notifications: tails the events journal, posts to Discord/Slack/any webhook",
+  "license": "MIT",
+  "homepage": "https://plybox.sh/docs/deployments/",
+  "contract": "WEBHOOK_URL=\nNOTIFY_EVENTS=deploy,deploy-failed,instance-restart",
+  "grant_links": true
+}
