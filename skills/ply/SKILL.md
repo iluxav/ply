@@ -1,6 +1,6 @@
 ---
 name: ply
-description: Package, run, scale, wire and deploy applications with ply — the daemonless Linux container runtime where an app is a package, dependencies are declared in ply.toml, and an image is a resolved lockfile. Use this whenever the user mentions ply, ply.toml, `ply build`/`ply run`/`ply deploy`, plybox.sh, or a .img container image; when they want to containerize an app without Docker or a Dockerfile; when they ask about running services on a single VPS or droplet without Kubernetes; or when they are wiring several services together, publishing ports, adding TLS, or importing a Docker image into ply. Also use it when a ply command errored and they want it diagnosed.
+description: Package, run, scale, wire and deploy applications with ply — the daemonless Linux container runtime where an app is a package, dependencies are declared in ply.toml, and an image is a resolved lockfile. Use this whenever the user mentions ply, ply.toml, `ply build`/`ply run`/`ply deploy`, plybox.sh, or a .img container image; when they want to containerize an app without Docker or a Dockerfile; when they ask about running services on a single VPS or droplet without Kubernetes; or when they are wiring several services together, publishing ports, adding TLS, or importing a Docker image into ply. Also use it when a ply command errored and they want it diagnosed; and when operating a ply host or fleet — deploying via deployment files, checking deploy status, reading the events journal, scaling, rolling back, or diagnosing a failed build on a server.
 ---
 
 
@@ -209,9 +209,24 @@ Common failures and what they actually mean are in
 `EACCES` on mount (AppArmor), `EINVAL` on chown/setuid (rootless uid map),
 and `Address in use` (a stray parent still holding the port).
 
+## Operating a host (deployments, CD, diagnosis)
+
+On a server, apps are DEPLOYMENT FILES: write
+`/var/lib/ply/deployments/<name>.toml` naming a source (`app =` registry,
+`github =` release assets, `repo =` build-on-host, `image =` local file)
+and `ply reconcile` — inotify + a 1-minute timer — converges to it.
+Read the verdict at `deployments/.status/<name>.status`, the history at
+`/var/lib/ply/apps/events.log`, logs (dead builders included) at
+`/run/ply/logs/<app>.<n>.log`. Scale/restart are files under
+`<apps>/<app>/control/`. Touch the spec = deploy now; pin
+`version =`/`ref =` = rollback. The full file map, the diagnose loop and
+the cautions (atomic writes, fleet-managed hosts, secrets) are in
+`references/operating.md` — read it before operating a host.
+
 ## Reference files
 
 - `references/manifest.md` — every `ply.toml` field
 - `references/cli.md` — every command and flag
 - `references/edge-tls.md` — Caddy edge, ACME, certificate persistence
 - `references/troubleshooting.md` — error → cause → fix
+- `references/operating.md` — running a HOST: deployments, CD, fleet, diagnosis

@@ -15,6 +15,7 @@ pub fn exec() -> Result<()> {
     if !ply_core::paths::is_root() {
         bail!("ply reconcile writes systemd units — run as root");
     }
+    fleet_sync(); // fleet hosts: pull the repo first, then converge on it
     let specs = deployments::list()?;
     let mut desired: BTreeSet<String> = BTreeSet::new();
     let mut app_names: BTreeSet<String> = BTreeSet::new();
@@ -750,5 +751,173 @@ mod token_tests {
         assert_eq!(super::base64(b"a"), "YQ==");
         assert_eq!(super::base64(b"ab"), "YWI=");
         assert_eq!(super::base64(b"abc"), "YWJj");
+    }
+}
+
+// --- GitOps fleet: the deployments dir, synced from a repo ------------------
+//
+// /etc/ply/fleet.toml names a repo and this host's identity. Every
+// reconcile beat pulls it and applies shared/*.toml + hosts/<host>/*.toml
+// into the deployments dir. Content-compared: an unchanged file is never
+// rewritten, so mtime-as-intent (auto = false, deploy-now) keeps working.
+// A managed-list makes git own exactly the files it introduced — local
+// and dashboard-created deployments coexist untouched. Fail-open: a git
+// error leaves the host converging on what it already has.
+
+#[derive(serde::Deserialize)]
+struct FleetConfig {
+    repo: String,
+    #[serde(default)]
+    host: Option<String>,
+    #[serde(default, rename = "ref")]
+    reference: Option<String>,
+    #[serde(default)]
+    deploy_key: Option<String>,
+}
+
+const FLEET_CONFIG: &str = "/etc/ply/fleet.toml";
+const FLEET_CHECKOUT: &str = "/var/lib/ply/fleet";
+
+pub fn fleet_sync() {
+    let Ok(raw) = std::fs::read_to_string(FLEET_CONFIG) else {
+        return; // not a fleet host
+    };
+    let config: FleetConfig = match toml::from_str(&raw) {
+        Ok(c) => c,
+        Err(e) => {
+            fleet_status(false, &format!("{FLEET_CONFIG}: {e}"));
+            return;
+        }
+    };
+    let host = config.host.clone().unwrap_or_else(|| {
+        nix::unistd::gethostname()
+            .map(|h| h.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    });
+    match fleet_pull_apply(&config, &host) {
+        Ok(summary) => fleet_status(true, &summary),
+        Err(e) => {
+            eprintln!("ply: fleet sync: {e:#}");
+            fleet_status(false, &format!("{e:#}"));
+        }
+    }
+}
+
+fn fleet_pull_apply(config: &FleetConfig, host: &str) -> Result<String> {
+    let checkout = PathBuf::from(FLEET_CHECKOUT);
+    let git_ssh = config.deploy_key.as_deref().map(|key| {
+        format!(
+            "ssh -i {} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new",
+            resolve_secret(key)
+        )
+    });
+    let git = |args: &[&str], cwd: Option<&PathBuf>| -> Result<String> {
+        let mut cmd = std::process::Command::new("git");
+        cmd.args(args);
+        if let Some(dir) = cwd {
+            cmd.current_dir(dir);
+        }
+        if let Some(ssh) = &git_ssh {
+            cmd.env("GIT_SSH_COMMAND", ssh);
+        }
+        let out = cmd.output().context("running git — is it installed?")?;
+        if !out.status.success() {
+            bail!(
+                "git {} failed: {}",
+                args.join(" "),
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    };
+
+    let reference = config.reference.as_deref().unwrap_or("HEAD");
+    if !checkout.join(".git").exists() {
+        std::fs::create_dir_all(checkout.parent().unwrap())?;
+        git(
+            &[
+                "clone",
+                "--depth",
+                "1",
+                &config.repo,
+                checkout.to_str().unwrap(),
+            ],
+            None,
+        )?;
+    }
+    git(
+        &["fetch", "--depth", "1", "origin", reference],
+        Some(&checkout),
+    )?;
+    git(&["reset", "--hard", "FETCH_HEAD"], Some(&checkout))?;
+    let commit = git(&["rev-parse", "--short=12", "HEAD"], Some(&checkout))?;
+
+    // desired set: shared/ first, hosts/<host>/ wins on name conflicts
+    let mut desired: std::collections::BTreeMap<String, String> = Default::default();
+    for dir in [checkout.join("shared"), checkout.join("hosts").join(host)] {
+        for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let file = entry.file_name().to_string_lossy().into_owned();
+            let Some(name) = file.strip_suffix(".toml") else {
+                continue;
+            };
+            if !valid_name(name) {
+                continue;
+            }
+            if let Ok(content) = std::fs::read_to_string(entry.path()) {
+                desired.insert(name.to_string(), content);
+            }
+        }
+    }
+
+    let managed_path = deployments::status_dir().join(".fleet-managed");
+    let previously: std::collections::BTreeSet<String> = std::fs::read_to_string(&managed_path)
+        .unwrap_or_default()
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+
+    let mut changed = 0usize;
+    for (name, content) in &desired {
+        let target = deployments::spec_path(name);
+        if std::fs::read_to_string(&target).ok().as_deref() == Some(content) {
+            continue; // identical: no write, no mtime bump, no fake touch
+        }
+        let tmp = deployments::dir().join(format!(".{name}.toml.fleet"));
+        std::fs::write(&tmp, content)?;
+        std::fs::rename(&tmp, &target)?;
+        changed += 1;
+    }
+    let mut removed = 0usize;
+    for name in &previously {
+        if !desired.contains_key(name) {
+            // git introduced it, git dropped it: the app goes with it
+            if std::fs::remove_file(deployments::spec_path(name)).is_ok() {
+                removed += 1;
+            }
+        }
+    }
+    std::fs::create_dir_all(deployments::status_dir())?;
+    let list: Vec<&str> = desired.keys().map(|s| s.as_str()).collect();
+    std::fs::write(&managed_path, format!("{}\n", list.join("\n")))?;
+
+    Ok(format!(
+        "@ {commit} — {} managed, {changed} changed, {removed} removed",
+        desired.len()
+    ))
+}
+
+/// `.status/fleet.json`: the sync outcome, where the dashboard's existing
+/// deployments grant can read it.
+fn fleet_status(ok: bool, detail: &str) {
+    let dir = deployments::status_dir();
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let ts = now_unix();
+    let line = format!("{{\"ok\":{ok},\"detail\":{detail:?},\"ts\":{ts}}}\n");
+    let tmp = dir.join(".fleet.json.tmp");
+    if std::fs::write(&tmp, line).is_ok() {
+        let _ = std::fs::rename(&tmp, dir.join("fleet.json"));
     }
 }

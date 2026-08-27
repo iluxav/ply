@@ -52,6 +52,10 @@ they are actually needed.
 - **Importing** Docker images, and why a native package is usually better
 - **Debugging** — what `EINVAL` versus `EPERM` means on a rootless `chown`,
   why `Address in use` usually means a stray parent, and the rest
+- **Operating a host** — deployment files, deploy status and the events
+  journal, scaling and rollback through control files, the diagnose loop
+  for failed builds. The why and the file map live in
+  [Agent-native ops](/docs/agent-ops/).
 
 ## Keeping it honest
 

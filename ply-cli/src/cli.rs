@@ -740,4 +740,20 @@ pub struct SetupArgs {
     /// is all an app needs for a certificate and HTTPS serving.
     #[arg(long)]
     pub edge: bool,
+
+    /// GitOps fleet: sync this host's deployments from a git repo. Every
+    /// reconcile beat pulls the repo and applies `shared/*.toml` +
+    /// `hosts/<host>/*.toml` into the deployments dir (content-compared, so
+    /// only real changes count as touches; git-managed files are tracked —
+    /// local deployments coexist untouched).
+    #[arg(long, value_name = "GIT_URL")]
+    pub fleet: Option<String>,
+
+    /// Which hosts/<name>/ dir this host follows (default: the hostname).
+    #[arg(long, value_name = "NAME")]
+    pub fleet_host: Option<String>,
+
+    /// Read-only deploy key for a private fleet repo (ssh URLs).
+    #[arg(long, value_name = "PATH")]
+    pub fleet_key: Option<String>,
 }

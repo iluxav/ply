@@ -145,3 +145,48 @@ host without swap, and tells you the fix); Rust belongs in CI — use lane 3.
 | `grant_links` | mount the `[requests]` links the image asks for (dashboard-style apps) |
 | `auto` | `false` = converge only when the file is touched |
 | `source` | registry override for the `app` lane |
+
+## GitOps fleet
+
+One host is a deployments dir; a fleet is that dir **synced from git**:
+
+```sh
+sudo ply setup --fleet git@github.com:you/infra.git          # this host = $(hostname)
+sudo ply setup --fleet … --fleet-host web-2 --fleet-key /root/.ssh/fleet_ro
+```
+
+The repo's layout is the fleet's desired state:
+
+```
+infra/
+  shared/            # every host gets these
+    notify.toml
+  hosts/
+    web-1/
+      plybox-web.toml
+    web-2/
+      api.toml
+      postgres.toml
+```
+
+Every reconcile beat pulls the repo and applies `shared/` + `hosts/<host>/`
+into the deployments dir — content-compared, so an unchanged file is never
+rewritten and the mtime-is-intent rules (`auto = false`, deploy-now) keep
+working. Git manages exactly the files it introduced: deployments created
+locally or from the dashboard coexist untouched. Remove a file from the
+repo and the app retires on the next beat; sync state lands in
+`deployments/.status/fleet.json` and on the dashboard's deploy page.
+
+What falls out:
+
+- a fleet-wide change is a **pull request** — the diff you review is the
+  diff production executes
+- rollback is `git revert`; history is `git log`
+- a new server is three commands: create it, `install.sh`,
+  `setup --fleet` — it converges to its folder within a minute
+- there is **no control plane**: each host holds one read-only deploy key;
+  no machine anywhere can command the fleet
+- a git outage changes nothing: hosts keep converging on what they have
+
+Secrets never enter the repo: specs carry references
+(`token_file = ".keys/app.token"`), the keys live on the host.

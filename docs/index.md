@@ -49,6 +49,7 @@ process, and your app runs as an ordinary child process. `Ctrl-C` stops it.
 - [Quickstart](/docs/quickstart/) — running your first app in five minutes
 - [Using ply with AI agents](/docs/agents/) — a skill file so your agent stops writing Dockerfiles
 - [Deployments & CD](/docs/deployments/) — a deployment is a file; push code, the host converges itself
+- [Agent-native ops](/docs/agent-ops/) — the filesystem is the API, so every AI agent already has the SDK
 - [Dashboard](/docs/dashboard/) — the optional web UI, terminal into containers included
 - [Dependencies & lockfiles](/docs/dependencies/) — how resolution works
 - [Registries & publishing](/docs/registries/) — shipping images anywhere

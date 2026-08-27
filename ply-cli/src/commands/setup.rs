@@ -35,6 +35,9 @@ pub fn exec(args: SetupArgs) -> Result<()> {
     if args.edge {
         edge_step()?;
     }
+    if let Some(repo) = &args.fleet {
+        fleet_step(repo, args.fleet_host.as_deref(), args.fleet_key.as_deref())?;
+    }
     report_rootless_readiness(args.unprivileged_ports);
     Ok(())
 }
@@ -169,83 +172,7 @@ WantedBy=multi-user.target
             ply.display()
         ),
     )?;
-    // Declarative deployments: the dir is watched by systemd (inotify) and
-    // `ply reconcile` converges units to it. A deployment is a file.
-    std::fs::create_dir_all("/var/lib/ply/deployments")?;
-    write_unit(
-        "/etc/systemd/system/ply-deployments.path",
-        "[Unit]
-Description=ply deployments dir watcher (a deployment is a file)
-
-         [Path]
-PathModified=/var/lib/ply/deployments
-MakeDirectory=yes
-
-         [Install]
-WantedBy=multi-user.target
-",
-    )?;
-    write_unit(
-        "/etc/systemd/system/ply-deployments.service",
-        &format!(
-            "[Unit]
-Description=ply reconcile (converge systemd units to the deployments dir)
-
-             [Service]
-Type=oneshot
-ExecStart={} reconcile
-",
-            ply.display()
-        ),
-    )?;
-    // The cadence: follow-latest deployments converge on their own — push
-    // code or tag a release and the host self-updates within a minute,
-    // still zero resident processes (a timer is a clock, not a daemon).
-    write_unit(
-        "/etc/systemd/system/ply-reconcile.timer",
-        "[Unit]
-Description=ply reconcile cadence (follow-latest deployments self-update)
-
-         [Timer]
-OnBootSec=2min
-OnUnitActiveSec=1min
-Unit=ply-deployments.service
-
-         [Install]
-WantedBy=timers.target
-",
-    )?;
-    // The platform keeps itself current too: a daily, jittered
-    // self-update. Running apps are never restarted by it — `ply ps`
-    // marks stale supervisors, and each app's next roll absorbs the
-    // update.
-    write_unit(
-        "/etc/systemd/system/ply-selfupdate.service",
-        &format!(
-            "[Unit]
-Description=ply self-update (track the newest release)
-
-             [Service]
-Type=oneshot
-ExecStart={} self-update
-",
-            ply.display()
-        ),
-    )?;
-    write_unit(
-        "/etc/systemd/system/ply-selfupdate.timer",
-        "[Unit]
-Description=ply self-update cadence (daily, jittered)
-
-         [Timer]
-OnCalendar=daily
-RandomizedDelaySec=1h
-Persistent=true
-
-         [Install]
-WantedBy=timers.target
-",
-    )?;
+    automation_units(&ply)?;
     run_cmd("systemctl", &["daemon-reload"])?;
     run_cmd(
         "systemctl",
@@ -463,4 +390,125 @@ fn nix_is_root() -> bool {
 extern "C" {
     #[link_name = "geteuid"]
     fn libc_geteuid() -> u32;
+}
+
+/// The no-daemon automation stack shared by --edge and --fleet: the
+/// deployments watcher, the reconcile cadence, and platform self-update.
+fn automation_units(ply: &std::path::Path) -> Result<()> {
+    // Declarative deployments: the dir is watched by systemd (inotify) and
+    // `ply reconcile` converges units to it. A deployment is a file.
+    std::fs::create_dir_all("/var/lib/ply/deployments")?;
+    write_unit(
+        "/etc/systemd/system/ply-deployments.path",
+        "[Unit]
+Description=ply deployments dir watcher (a deployment is a file)
+
+         [Path]
+PathModified=/var/lib/ply/deployments
+MakeDirectory=yes
+
+         [Install]
+WantedBy=multi-user.target
+",
+    )?;
+    write_unit(
+        "/etc/systemd/system/ply-deployments.service",
+        &format!(
+            "[Unit]
+Description=ply reconcile (converge systemd units to the deployments dir)
+
+             [Service]
+Type=oneshot
+ExecStart={} reconcile
+",
+            ply.display()
+        ),
+    )?;
+    // The cadence: follow-latest deployments converge on their own — push
+    // code or tag a release and the host self-updates within a minute,
+    // still zero resident processes (a timer is a clock, not a daemon).
+    write_unit(
+        "/etc/systemd/system/ply-reconcile.timer",
+        "[Unit]
+Description=ply reconcile cadence (follow-latest deployments self-update)
+
+         [Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+Unit=ply-deployments.service
+
+         [Install]
+WantedBy=timers.target
+",
+    )?;
+    // The platform keeps itself current too: a daily, jittered
+    // self-update. Running apps are never restarted by it — `ply ps`
+    // marks stale supervisors, and each app's next roll absorbs the
+    // update.
+    write_unit(
+        "/etc/systemd/system/ply-selfupdate.service",
+        &format!(
+            "[Unit]
+Description=ply self-update (track the newest release)
+
+             [Service]
+Type=oneshot
+ExecStart={} self-update
+",
+            ply.display()
+        ),
+    )?;
+    write_unit(
+        "/etc/systemd/system/ply-selfupdate.timer",
+        "[Unit]
+Description=ply self-update cadence (daily, jittered)
+
+         [Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+
+         [Install]
+WantedBy=timers.target
+",
+    )?;
+    Ok(())
+}
+
+/// GitOps fleet: this host follows a git repo of deployment files.
+fn fleet_step(repo: &str, host: Option<&str>, key: Option<&str>) -> Result<()> {
+    let ply = std::env::current_exe()?;
+    let host = match host {
+        Some(h) => h.to_string(),
+        None => nix::unistd::gethostname()
+            .map(|h| h.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+    };
+    if host.is_empty() {
+        anyhow::bail!("cannot determine a hostname — pass --fleet-host");
+    }
+    std::fs::create_dir_all("/etc/ply")?;
+    let mut config = format!("repo = {repo:?}\nhost = {host:?}\n");
+    if let Some(key) = key {
+        config.push_str(&format!("deploy_key = {key:?}\n"));
+    }
+    std::fs::write("/etc/ply/fleet.toml", config)?;
+    automation_units(&ply)?;
+    run_cmd("systemctl", &["daemon-reload"])?;
+    run_cmd(
+        "systemctl",
+        &[
+            "enable",
+            "--now",
+            "ply-deployments.path",
+            "ply-reconcile.timer",
+            "ply-selfupdate.timer",
+        ],
+    )?;
+    // first sync now, not in a minute
+    run_cmd("systemctl", &["start", "ply-deployments.service"])?;
+    println!("fleet: this host follows {repo} (hosts/{host}/ + shared/)");
+    println!("fleet: git-managed deployments sync every reconcile beat; local files coexist");
+    println!("fleet: sync state lands in deployments/.status/fleet.json");
+    Ok(())
 }
