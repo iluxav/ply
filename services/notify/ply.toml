@@ -1,0 +1,24 @@
+# notify — deploy/crash notifications as a ply app: tails the events
+# journal (a file) and posts to a webhook. No daemon in ply itself.
+#
+#   deployment:  app = "notify"  +  grant_links = true
+#   [env] WEBHOOK_URL = "https://discord.com/api/webhooks/…"
+
+[package]
+name = "notify"
+version = "0.1.0"
+entrypoint = ["./notify"]
+include = ["notify"]
+base = "debian@13"
+
+[resources]
+mem = "32M"
+
+[restart]
+policy = "on-failure"
+
+[requests]
+links = ["/var/lib/ply/apps:/ply/host/apps"]
+
+[sources]
+default = "https://registry.plybox.sh/ply/{package}"

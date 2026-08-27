@@ -254,12 +254,12 @@ fn apply(name: &str, spec: &Spec, app_names: &mut BTreeSet<String>) -> Result<Ap
     let existing = std::fs::read_to_string(&unit_path).unwrap_or_default();
     if existing == unit_text {
         if force_restart {
-            // same unit, new bytes (a repo build): the restart IS the deploy
+            // same unit, new bytes (a repo rebuild): roll, don't restart
             run("systemctl", &["enable", &format!("ply-{name}")])?;
-            run("systemctl", &["restart", &format!("ply-{name}")])?;
+            let verb = roll_or_restart(name, &image);
             return Ok(Applied {
                 changed: false,
-                detail: format!("redeployed {shown}"),
+                detail: format!("{verb} {shown}"),
             });
         }
         // converged already; make sure it's on
@@ -269,15 +269,73 @@ fn apply(name: &str, spec: &Spec, app_names: &mut BTreeSet<String>) -> Result<Ap
             detail: format!("unchanged ({shown})"),
         });
     }
+    let image_only = image_only_change(&existing, &unit_text);
     std::fs::write(&unit_path, &unit_text)
         .with_context(|| format!("writing {}", unit_path.display()))?;
     run("systemctl", &["daemon-reload"])?;
     run("systemctl", &["enable", &format!("ply-{name}")])?;
-    run("systemctl", &["restart", &format!("ply-{name}")])?;
+    // A version bump changes only the image path in the unit: the running
+    // parent can roll onto the new image health-gated, zero-downtime at
+    // scale >= 2, while the rewritten unit covers the next boot. Any other
+    // unit change (env, publish, scale…) needs the parent restarted to
+    // take effect.
+    let verb = if image_only {
+        roll_or_restart(name, &image)
+    } else {
+        match run("systemctl", &["restart", &format!("ply-{name}")]) {
+            Ok(()) => "deployed",
+            Err(e) => return Err(e),
+        }
+    };
     Ok(Applied {
         changed: true,
-        detail: format!("deployed {shown}"),
+        detail: format!("{verb} {shown}"),
     })
+}
+
+/// Prefer the health-gated roll `ply deploy` does; fall back to a unit
+/// restart when there is nothing running to roll (first boot, crashed
+/// app) or the roll cannot start.
+fn roll_or_restart(name: &str, image: &std::path::Path) -> &'static str {
+    match ply_core::lifecycle::deploy(image, 120) {
+        Ok(report) if report.complete => "rolled",
+        Ok(_) => "rolling (health watch timed out; the roll continues)",
+        Err(_) => {
+            let _ = run("systemctl", &["restart", &format!("ply-{name}")]);
+            "redeployed"
+        }
+    }
+}
+
+/// True when the two unit texts differ ONLY in the image path — the last
+/// token of the ExecStart line. That is the version-bump shape; anything
+/// else means flags changed and a roll would not apply them.
+fn image_only_change(existing: &str, fresh: &str) -> bool {
+    if existing.is_empty() {
+        return false;
+    }
+    let old_lines: Vec<&str> = existing.lines().collect();
+    let new_lines: Vec<&str> = fresh.lines().collect();
+    if old_lines.len() != new_lines.len() {
+        return false;
+    }
+    for (old, new) in old_lines.iter().zip(&new_lines) {
+        if old == new {
+            continue;
+        }
+        let (Some(o), Some(n)) = (
+            old.strip_prefix("ExecStart="),
+            new.strip_prefix("ExecStart="),
+        ) else {
+            return false;
+        };
+        let (o_head, _) = o.rsplit_once(' ').unwrap_or(("", o));
+        let (n_head, _) = n.rsplit_once(' ').unwrap_or(("", n));
+        if o_head != n_head {
+            return false;
+        }
+    }
+    true
 }
 
 /// A relative secret path (deploy_key, token_file) resolves against the

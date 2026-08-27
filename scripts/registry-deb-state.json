@@ -198,5 +198,13 @@
   "upload_path": "apps/plybox-web/plybox-web-0.2.0-linux-x64.img",
   "bytes": 16736256,
   "pushed_at": "2026-08-27T03:35:23.589Z"
+ },
+ "manual:apps/notify/notify-0.1.0-linux-x64.img": {
+  "name": "notify",
+  "version": "0.1.0",
+  "img": "notify-0.1.0-linux-x64.img",
+  "upload_path": "apps/notify/notify-0.1.0-linux-x64.img",
+  "bytes": 2367488,
+  "pushed_at": "2026-08-27T04:23:57.456Z"
  }
 }
