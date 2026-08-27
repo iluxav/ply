@@ -185,10 +185,14 @@ pub fn deploy(image: &Path, timeout_secs: u64) -> Result<DeployReport> {
     }
 
     // Pointer file + signal. Clean the pointer up if signalling fails.
-    let image_abs = std::path::absolute(image).map_err(|source| Error::Io {
-        path: image.to_path_buf(),
-        source,
-    })?;
+    // Canonicalized (symlinks resolved): state records what actually runs,
+    // and the roll watcher compares against the same resolved path.
+    let image_abs = std::fs::canonicalize(image)
+        .or_else(|_| std::path::absolute(image))
+        .map_err(|source| Error::Io {
+            path: image.to_path_buf(),
+            source,
+        })?;
     let dir = crate::paths::apps_dir().join(&app);
     std::fs::create_dir_all(&dir).map_err(|source| Error::Io {
         path: dir.clone(),

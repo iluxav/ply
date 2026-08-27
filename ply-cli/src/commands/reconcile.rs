@@ -95,15 +95,7 @@ fn apply(name: &str, spec: &Spec, app_names: &mut BTreeSet<String>) -> Result<Ap
             (image, shown)
         }
         (None, None, Some(repo)) => {
-            let token = match &spec.token_file {
-                Some(file) => Some(
-                    std::fs::read_to_string(file)
-                        .with_context(|| format!("reading token_file {file}"))?
-                        .trim()
-                        .to_string(),
-                ),
-                None => None,
-            };
+            let token = read_token(spec)?;
             let asset_app = spec.asset.clone().unwrap_or_else(|| name.to_string());
             // exact x.y.z pins; anything else follows the latest release
             let version = match spec.version.as_deref() {
@@ -127,7 +119,24 @@ fn apply(name: &str, spec: &Spec, app_names: &mut BTreeSet<String>) -> Result<Ap
                     })?;
             println!("{name}: {resolved} (github:{repo})");
             let shown = resolved.to_string();
-            (path, shown)
+            // Every store path ends in pkg.img; give the unit a path whose
+            // basename is the image's real name so state (and any UI) can
+            // read the version. Hardlink into a per-deployment dir, older
+            // versions swept.
+            let dir = PathBuf::from("/var/lib/ply/deploys").join(name);
+            std::fs::create_dir_all(&dir)?;
+            let named = dir.join(&shown);
+            for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+                if entry.path() != named {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
+            if !named.exists() {
+                std::fs::hard_link(&path, &named)
+                    .or_else(|_| std::fs::copy(&path, &named).map(|_| ()))
+                    .with_context(|| format!("linking {} into {}", shown, dir.display()))?;
+            }
+            (named, shown)
         }
         (Some(app), None, None) => {
             let source = spec
@@ -201,6 +210,37 @@ fn apply(name: &str, spec: &Spec, app_names: &mut BTreeSet<String>) -> Result<Ap
     })
 }
 
+/// A relative secret path (deploy_key, token_file) resolves against the
+/// deployments dir — the one path a spec author (the dashboard included)
+/// always knows.
+fn resolve_secret(path: &str) -> String {
+    if path.starts_with('/') {
+        path.to_string()
+    } else {
+        ply_core::deployments::dir()
+            .join(path)
+            .display()
+            .to_string()
+    }
+}
+
+/// The fine-grained PAT from token_file, if the spec carries one. One
+/// credential covers both git lanes: https clones and release assets.
+fn read_token(spec: &Spec) -> Result<Option<String>> {
+    match &spec.token_file {
+        Some(file) => {
+            let path = resolve_secret(file);
+            Ok(Some(
+                std::fs::read_to_string(&path)
+                    .with_context(|| format!("reading token_file {path}"))?
+                    .trim()
+                    .to_string(),
+            ))
+        }
+        None => Ok(None),
+    }
+}
+
 /// Lane 2: clone/fetch, build in a fenced ply container, `ply build` the
 /// checkout. The checkout persists — node_modules and framework caches ARE
 /// the cache, so first build pays full price and the rest are incremental.
@@ -209,18 +249,25 @@ fn build_from_repo(name: &str, spec: &Spec) -> Result<(PathBuf, String, bool)> {
     let checkout = PathBuf::from("/var/lib/ply/builds").join(name);
     std::fs::create_dir_all(checkout.parent().unwrap())?;
 
-    // A relative deploy_key resolves against the deployments dir — that is
-    // the one path a spec author (the dashboard included) always knows.
     let git_ssh = spec.deploy_key.as_deref().map(|key| {
-        let key = if key.starts_with('/') {
-            key.to_string()
-        } else {
-            ply_core::deployments::dir().join(key).display().to_string()
-        };
-        format!("ssh -i {key} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new")
+        format!(
+            "ssh -i {} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new",
+            resolve_secret(key)
+        )
+    });
+    // PAT auth for https clones: a per-invocation header (the
+    // actions/checkout trick) — the token never lands in .git/config.
+    let token_header = read_token(spec)?.map(|token| {
+        format!(
+            "AUTHORIZATION: basic {}",
+            base64(format!("x-access-token:{token}").as_bytes())
+        )
     });
     let git = |args: &[&str], cwd: Option<&PathBuf>| -> Result<String> {
         let mut cmd = std::process::Command::new("git");
+        if let Some(header) = &token_header {
+            cmd.arg("-c").arg(format!("http.extraheader={header}"));
+        }
         cmd.args(args);
         if let Some(dir) = cwd {
             cmd.current_dir(dir);
@@ -494,4 +541,46 @@ fn run(cmd: &str, args: &[&str]) -> Result<()> {
         bail!("{cmd} {} exited with {status}", args.join(" "));
     }
     Ok(())
+}
+
+/// Standard base64 (padded) — one header's worth; a crate would be overkill.
+fn base64(data: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let bytes = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let n = u32::from_be_bytes([0, bytes[0], bytes[1], bytes[2]]);
+        out.push(ALPHABET[(n >> 18 & 63) as usize] as char);
+        out.push(ALPHABET[(n >> 12 & 63) as usize] as char);
+        out.push(if chunk.len() > 1 {
+            ALPHABET[(n >> 6 & 63) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            ALPHABET[(n & 63) as usize] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
+#[cfg(test)]
+mod token_tests {
+    #[test]
+    fn base64_matches_reference() {
+        assert_eq!(
+            super::base64(b"x-access-token:ghp_abc"),
+            "eC1hY2Nlc3MtdG9rZW46Z2hwX2FiYw=="
+        );
+        assert_eq!(super::base64(b""), "");
+        assert_eq!(super::base64(b"a"), "YQ==");
+        assert_eq!(super::base64(b"ab"), "YWI=");
+        assert_eq!(super::base64(b"abc"), "YWJj");
+    }
 }

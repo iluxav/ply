@@ -44,7 +44,9 @@ pub struct Spec {
     #[serde(default)]
     pub asset: Option<String>,
     /// Fine-grained PAT (Contents: read) for private repos — a root-owned
-    /// file, never the token itself.
+    /// file, never the token itself. One credential for both git lanes:
+    /// release-asset downloads (`github`) and https clones (`repo`).
+    /// Relative paths resolve against the deployments dir.
     #[serde(default)]
     pub token_file: Option<String>,
     /// …or a git repo to clone and BUILD ON THIS HOST (lane 2):

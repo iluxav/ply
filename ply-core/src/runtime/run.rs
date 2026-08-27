@@ -851,7 +851,9 @@ fn prepare_app(
     Ok(AppContext {
         entrypoint,
         env: env.into_iter().collect(),
-        image: image.to_path_buf(),
+        // symlinks resolved: instance state must record the file that is
+        // actually running, not a pointer that may move under it
+        image: std::fs::canonicalize(image).unwrap_or_else(|_| image.to_path_buf()),
         dep_images,
         manifest,
     })
