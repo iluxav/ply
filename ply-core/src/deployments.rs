@@ -101,6 +101,10 @@ pub struct Spec {
     /// Start after these apps are healthy.
     #[serde(default)]
     pub after: Vec<String>,
+    /// Grouping label: deployments sharing a stack render together in the
+    /// dashboard. Cosmetic — the wiring is `after` + discovery env.
+    #[serde(default)]
+    pub stack: Option<String>,
     /// Registry source override (any `[sources]` spec).
     #[serde(default)]
     pub source: Option<String>,

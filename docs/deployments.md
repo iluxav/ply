@@ -190,3 +190,31 @@ What falls out:
 
 Secrets never enter the repo: specs carry references
 (`token_file = ".keys/app.token"`), the keys live on the host.
+
+## Stacks
+
+An app plus its database plus its cache is not a special object — it is
+**several deployment files that reference each other**:
+
+```toml
+# shop-db.toml                      # shop.toml
+app = "postgres"                    repo = "https://github.com/you/shop"
+stack = "shop"                      stack = "shop"
+publish = ["internal:5432"]         after = ["postgres"]
+                                    publish = ["internal:3000"]
+[env]                               [env]
+POSTGRES_PASSWORD = "…"             POSTGRES_PASSWORD = "…"
+```
+
+`after` waits for the service to be healthy and injects the discovery
+variables — the app reads `POSTGRES_HOST` / `POSTGRES_PORT` from its
+environment, plus the shared password from `[env]`. `stack` is a label:
+members render grouped in the dashboard. Because a stack is just files,
+it inherits everything files already have: per-member rollback and
+freshness, fleet sync, git review.
+
+The dashboard's wizard does the wiring for you: a **"needs a database?"**
+step creates `<name>-db` / `<name>-cache` alongside your app, generates
+the shared password, and writes the `after` line. One pass, one running
+stack. (One instance of each service per host — two stacks wanting
+their own postgres is a planned refinement.)
