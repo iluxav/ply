@@ -118,10 +118,10 @@ ask_text() { # ask_text "question" -> echoes answer, whitespace-trimmed
 # for user-mode installs and CI.
 if is_root_like && { has_tty || [ -n "${PLY_EDGE:-}${PLY_DASHBOARD:-}${PLY_FLEET:-}" ]; } && [ "${PLY_WIZARD:-yes}" != "no" ]; then
     echo ""
-    # A host can follow a fleet repo (GitOps): its apps, domains and even
-    # the dashboard are files in git — the standalone questions below
-    # would only collide with what the repo declares.
-    fleet=$(ask_text "follow a fleet repo? (GitOps: apps sync from git; blank = standalone):" "${PLY_FLEET:-}")
+    # Fleet enrollment is NOT an install question — it happens in the
+    # dashboard (paste the infra repo URL) or via env for automation:
+    #   curl … | PLY_FLEET=git@github.com:you/infra.git sh
+    fleet="${PLY_FLEET:-}"
     if [ -n "$fleet" ]; then
         fleet_host=$(ask_text "fleet host name (hosts/<name>/ in the repo; blank = this hostname):" "${PLY_FLEET_HOST:-}")
         fleet_key=$(ask_text "deploy key path (private repo; blank = public):" "${PLY_FLEET_KEY:-}")
@@ -176,14 +176,21 @@ if is_root_like && { has_tty || [ -n "${PLY_EDGE:-}${PLY_DASHBOARD:-}${PLY_FLEET
 
             # Wait for it, then hand over the one secret that matters.
             echo "waiting for the dashboard to come up …"
-            probe="http://10.77.0.1:7070/healthz"
-            [ -n "$domain" ] && probe="https://$domain/healthz"
+            # probe locally: the domain may not even resolve yet, and the
+            # dashboard's readiness has nothing to do with DNS
             tries=0
-            until curl -fsk -m 3 "$probe" >/dev/null 2>&1 || [ $tries -ge 30 ]; do
-                tries=$((tries + 1)); sleep 3
+            until curl -fs -m 3 "http://10.77.0.1:7070/healthz" >/dev/null 2>&1 || [ $tries -ge 30 ]; do
+                tries=$((tries + 1)); sleep 2
             done
-            token=$(as_root journalctl -u ply-dashboard --no-pager 2>/dev/null \
-                | sed -n 's/.*setup token: \([A-Za-z0-9_-]*\).*/\1/p' | tail -1)
+            # the token is printed on the app's first boot; give journald a
+            # moment to flush before declaring it missing
+            token=""
+            tries=0
+            while [ -z "$token" ] && [ $tries -lt 10 ]; do
+                token=$(as_root journalctl -u ply-dashboard --no-pager 2>/dev/null \
+                    | sed -n 's/.*setup token: \([A-Za-z0-9_-]*\).*/\1/p' | tail -1)
+                [ -n "$token" ] || { tries=$((tries + 1)); sleep 1; }
+            done
             echo ""
             if [ -n "$domain" ]; then
                 echo "dashboard: https://$domain"
@@ -191,7 +198,11 @@ if is_root_like && { has_tty || [ -n "${PLY_EDGE:-}${PLY_DASHBOARD:-}${PLY_FLEET
                 echo "dashboard: http://10.77.0.1:7070 (on this host; tunnel in with:"
                 echo "           ssh -L 7070:10.77.0.1:7070 root@<this-host>)"
             fi
-            [ -n "$token" ] && echo "setup token: $token   (create your account with it)"
+            if [ -n "$token" ]; then
+                echo "setup token: $token   (create your account with it)"
+            else
+                echo "setup token: run \`ply logs dashboard | grep 'setup token'\` to read it"
+            fi
         fi
     fi
 fi

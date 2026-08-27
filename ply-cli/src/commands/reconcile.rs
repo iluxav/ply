@@ -773,13 +773,27 @@ struct FleetConfig {
     reference: Option<String>,
     #[serde(default)]
     deploy_key: Option<String>,
+    /// Fine-grained PAT for private https repos — the same one-credential
+    /// story the deployment lanes use. Relative paths resolve against the
+    /// deployments dir.
+    #[serde(default)]
+    token_file: Option<String>,
 }
 
 const FLEET_CONFIG: &str = "/etc/ply/fleet.toml";
 const FLEET_CHECKOUT: &str = "/var/lib/ply/fleet";
 
+/// Enrollment is a file. The dashboard (or anyone with the deployments
+/// grant) writes `.fleet.toml` beside the specs; `ply setup --fleet`
+/// writes the /etc/ply copy. The in-dir file wins.
+fn fleet_config_text() -> Option<String> {
+    std::fs::read_to_string(deployments::dir().join(".fleet.toml"))
+        .or_else(|_| std::fs::read_to_string(FLEET_CONFIG))
+        .ok()
+}
+
 pub fn fleet_sync() {
-    let Ok(raw) = std::fs::read_to_string(FLEET_CONFIG) else {
+    let Some(raw) = fleet_config_text() else {
         return; // not a fleet host
     };
     let config: FleetConfig = match toml::from_str(&raw) {
@@ -811,8 +825,23 @@ fn fleet_pull_apply(config: &FleetConfig, host: &str) -> Result<String> {
             resolve_secret(key)
         )
     });
+    let token_header = match &config.token_file {
+        Some(file) => {
+            let path = resolve_secret(file);
+            let token = std::fs::read_to_string(&path)
+                .with_context(|| format!("reading fleet token_file {path}"))?;
+            Some(format!(
+                "AUTHORIZATION: basic {}",
+                base64(format!("x-access-token:{}", token.trim()).as_bytes())
+            ))
+        }
+        None => None,
+    };
     let git = |args: &[&str], cwd: Option<&PathBuf>| -> Result<String> {
         let mut cmd = std::process::Command::new("git");
+        if let Some(header) = &token_header {
+            cmd.arg("-c").arg(format!("http.extraheader={header}"));
+        }
         cmd.args(args);
         if let Some(dir) = cwd {
             cmd.current_dir(dir);
