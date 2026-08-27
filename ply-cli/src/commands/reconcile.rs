@@ -103,7 +103,9 @@ fn named_image(name: &str, path: &std::path::Path, shown: &str) -> Result<PathBu
     std::fs::create_dir_all(&dir)?;
     let named = dir.join(shown);
     for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
-        if entry.path() != named {
+        // sweep superseded images only — dot-files (the releases ETag
+        // cache lives here) are not ours to clean
+        if entry.path() != named && !entry.file_name().to_string_lossy().starts_with('.') {
             let _ = std::fs::remove_file(entry.path());
         }
     }
@@ -156,11 +158,25 @@ fn apply(name: &str, spec: &Spec, app_names: &mut BTreeSet<String>) -> Result<Ap
         (None, None, Some(repo)) => {
             let token = read_token(spec)?;
             let asset_app = spec.asset.clone().unwrap_or_else(|| name.to_string());
-            // exact x.y.z pins; anything else follows the latest release
+            // exact x.y.z pins; anything else follows the latest release —
+            // the repo's `latest` marker, or the newest `tag_prefix` match
+            // for monorepos with several release streams
             let version = match spec.version.as_deref() {
                 Some(v) if v.split('.').count() == 3 => v.to_string(),
                 want => {
-                    let latest = ply_core::github::latest_version(repo, token.as_deref())?;
+                    let latest = match spec.tag_prefix.as_deref() {
+                        Some(prefix) => {
+                            let dir = PathBuf::from("/var/lib/ply/deploys").join(name);
+                            std::fs::create_dir_all(&dir)?;
+                            ply_core::github::latest_version_matching(
+                                repo,
+                                prefix,
+                                token.as_deref(),
+                                &dir.join(".releases-etag"),
+                            )?
+                        }
+                        None => ply_core::github::latest_version(repo, token.as_deref())?,
+                    };
                     if let Some(prefix) = want {
                         let matches = latest == prefix || latest.starts_with(&format!("{prefix}."));
                         if !matches {
@@ -170,12 +186,20 @@ fn apply(name: &str, spec: &Spec, app_names: &mut BTreeSet<String>) -> Result<Ap
                     latest
                 }
             };
+            let tag = match spec.tag_prefix.as_deref() {
+                Some(prefix) => format!("{prefix}{version}"),
+                None => format!("v{version}"),
+            };
             let store = ply_core::store::Store::open_default()?;
-            let (path, resolved) =
-                ply_core::github::fetch_asset(repo, &asset_app, &version, token.as_deref(), &store)
-                    .with_context(|| {
-                        format!("fetching {asset_app} v{version} from {repo} releases")
-                    })?;
+            let (path, resolved) = ply_core::github::fetch_asset(
+                repo,
+                &asset_app,
+                &version,
+                &tag,
+                token.as_deref(),
+                &store,
+            )
+            .with_context(|| format!("fetching {asset_app} {tag} from {repo} releases"))?;
             println!("{name}: {resolved} (github:{repo})");
             let shown = resolved.to_string();
             (named_image(name, &path, &shown)?, shown)

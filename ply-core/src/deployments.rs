@@ -43,6 +43,11 @@ pub struct Spec {
     /// `<name>-<ver>-linux-<arch>.img`); defaults to the deployment name.
     #[serde(default)]
     pub asset: Option<String>,
+    /// Release-stream filter for monorepos: `tag_prefix = "web-v"` follows
+    /// the newest `web-v<x.y.z>` release and leaves the repo's plain
+    /// `v<x.y.z>` stream (and its `latest` marker) alone.
+    #[serde(default)]
+    pub tag_prefix: Option<String>,
     /// Fine-grained PAT (Contents: read) for private repos — a root-owned
     /// file, never the token itself. One credential for both git lanes:
     /// release-asset downloads (`github`) and https clones (`repo`).

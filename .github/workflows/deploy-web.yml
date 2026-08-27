@@ -1,10 +1,13 @@
-# plybox.sh — build the site (app/ + docs/) and publish it to the registry.
-# Secrets: CLOUDFLARE_API_TOKEN (R2 write), CLOUDFLARE_ACCOUNT_ID.
+# plybox.sh — build the site (app/ + docs/) and publish it as a GitHub
+# release in the `web-v*` stream. No secrets beyond GITHUB_TOKEN.
 #
 # Pull-based: CI never touches the droplet. The prod host runs a
-# `plybox-web` deployment (app = "plybox-web") with the reconcile timer —
-# it notices the new registry version and rolls itself within a minute.
-# CI holds registry credentials only; nothing here can log into prod.
+# `plybox-web` deployment (github = "iluxav/ply", tag_prefix = "web-v")
+# with the reconcile timer — it notices the new release and rolls itself
+# within a minute. Nothing here can log into prod.
+#
+# `--latest=false` is load-bearing: the repo's `latest` marker belongs to
+# the CLI's `v*` releases (install.sh depends on it).
 #
 # Topology: caddy (deploy/edge, a ply app) owns :443 and reverse-proxies to
 # the app's published internal address. The edge is deployed by hand — it
@@ -21,6 +24,9 @@ on:
 concurrency:
   group: deploy-web
   cancel-in-progress: false
+
+permissions:
+  contents: write   # gh release create
 
 jobs:
   deploy:
@@ -52,39 +58,25 @@ jobs:
           dir: "app"
           upload: "false"
 
-      - name: publish to registry
+      - name: publish web release
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           IMG="${{ steps.img.outputs.image }}"
-          BASE=$(basename "$IMG")
-          npx wrangler r2 object put "ply-registry-deb/apps/plybox-web/$BASE" \
-            --file "$IMG" --remote \
-            --cache-control "public, max-age=31536000, immutable" \
-            --content-type application/octet-stream
-          # append to the version index (newest-matching resolution reads this)
-          curl -fsSL https://registry.plybox.sh/apps/plybox-web/index.json -o index.json || echo "[]" > index.json
-          node -e "const fs=require('fs');const i=JSON.parse(fs.readFileSync('index.json'));const b=process.argv[1];if(!i.includes(b))i.push(b);fs.writeFileSync('index.json',JSON.stringify(i))" "$BASE"
-          npx wrangler r2 object put "ply-registry-deb/apps/plybox-web/index.json" \
-            --file index.json --remote \
-            --cache-control "public, max-age=60" --content-type application/json
-          echo "published $BASE — prod pulls it within its next reconcile beat"
+          V="0.3.${{ github.run_number }}"
+          gh release create "web-v$V" "$IMG" --latest=false \
+            --title "plybox.sh $V" \
+            --notes "site image (web release stream — not a CLI release)"
+          echo "published web-v$V — prod pulls it within its next reconcile beat"
 
-      - name: verify from outside
+      - name: verify prod converged
         run: |
-          # The droplet's timer beats once a minute; a build + roll follows.
-          # Through the edge, over TLS — the app has no public port of its own.
-          BASE=$(basename "${{ steps.img.outputs.image }}")
-          WANT="0.3.${{ github.run_number }}"
+          # The droplet's timer beats once a minute; through the edge, over
+          # TLS. Serving is necessary; the site carries no version endpoint,
+          # so serving + the release existing is what we can honestly check.
           for i in $(seq 1 40); do
             sleep 6
-            if curl -fsS -m 5 "https://plybox.sh/" -o /dev/null; then
-              # serving is necessary; matching version is the real proof —
-              # but the site does not expose its version, so serving + the
-              # registry carrying $WANT is what we can honestly check.
-              curl -fsS "https://registry.plybox.sh/apps/plybox-web/index.json" | grep -q "$WANT" && exit 0
-            fi
+            curl -fsS -m 5 "https://plybox.sh/" -o /dev/null && exit 0
           done
-          echo "::error::plybox.sh did not converge on $WANT"
+          echo "::error::plybox.sh stopped serving after the publish"
           exit 1

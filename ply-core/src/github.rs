@@ -80,13 +80,79 @@ fn tag_from_json(body: &str) -> Option<String> {
     Some(tag.strip_prefix('v').unwrap_or(tag).to_string())
 }
 
-/// Download `<app>-<version>-linux-<arch>.img` from the release into the
-/// store (sha256-addressed). Public via the direct asset URL; with a token
-/// via the API (asset id + octet-stream), which private repos require.
+/// The newest release whose tag starts with `prefix` — monorepos carry
+/// several release streams in one repo (`web-v0.3.4` beside `v0.1.37`).
+/// Conditional requests keep anonymous polling free: a 304 answer does not
+/// count against GitHub's rate limit, and the steady state is all 304s.
+/// `cache_file` holds two lines: the ETag and the last answer.
+pub fn latest_version_matching(
+    repo: &str,
+    prefix: &str,
+    token: Option<&str>,
+    cache_file: &std::path::Path,
+) -> Result<String> {
+    let url = format!("https://api.github.com/repos/{repo}/releases?per_page=30");
+    let cached = std::fs::read_to_string(cache_file).ok();
+    let (cached_etag, cached_version) = match cached.as_deref().and_then(|s| s.split_once('\n')) {
+        Some((e, v)) if !v.trim().is_empty() => {
+            (Some(e.trim().to_string()), Some(v.trim().to_string()))
+        }
+        _ => (None, None),
+    };
+
+    let mut request = ureq::get(&url).header("User-Agent", "ply");
+    if let Some(token) = token {
+        request = request.header("Authorization", &format!("Bearer {token}"));
+    }
+    if let Some(etag) = &cached_etag {
+        request = request.header("If-None-Match", etag);
+    }
+    let mut response = match request.call() {
+        Ok(r) => r,
+        Err(ureq::Error::StatusCode(304)) => {
+            return cached_version
+                .ok_or_else(|| Error::Source(format!("{url}: 304 with an empty cache")));
+        }
+        Err(e) => return Err(Error::Source(format!("GET {url}: {e}"))),
+    };
+    let etag = response
+        .headers()
+        .get("etag")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    let body = response
+        .body_mut()
+        .read_to_string()
+        .map_err(|e| Error::Source(format!("{url}: {e}")))?;
+    let releases: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| Error::Source(format!("{url}: invalid JSON: {e}")))?;
+    let version = releases
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|r| r.get("tag_name")?.as_str()?.strip_prefix(prefix))
+        .filter_map(|v| semver::Version::parse(v).ok())
+        .max()
+        .ok_or_else(|| {
+            Error::Source(format!(
+                "{repo}: no release tagged `{prefix}<x.y.z>` among the newest 30"
+            ))
+        })?
+        .to_string();
+    let _ = std::fs::write(cache_file, format!("{etag}\n{version}\n"));
+    Ok(version)
+}
+
+/// Download `<app>-<version>-linux-<arch>.img` from the release named by
+/// `tag` into the store (sha256-addressed). Public via the direct asset
+/// URL; with a token via the API (asset id + octet-stream), which private
+/// repos require.
 pub fn fetch_asset(
     repo: &str,
     app: &str,
     version: &str,
+    tag: &str,
     token: Option<&str>,
     store: &Store,
 ) -> Result<(PathBuf, ImageName)> {
@@ -102,13 +168,12 @@ pub fn fetch_asset(
     let result = (|| -> Result<()> {
         match token {
             None => {
-                let url =
-                    format!("https://github.com/{repo}/releases/download/v{version}/{filename}");
+                let url = format!("https://github.com/{repo}/releases/download/{tag}/{filename}");
                 stream_to_file(ureq::get(&url).header("User-Agent", "ply"), &url, &tmp)
             }
             Some(token) => {
                 // resolve the asset id, then download as octet-stream
-                let url = format!("https://api.github.com/repos/{repo}/releases/tags/v{version}");
+                let url = format!("https://api.github.com/repos/{repo}/releases/tags/{tag}");
                 let body = ureq::get(&url)
                     .header("Authorization", &format!("Bearer {token}"))
                     .header("User-Agent", "ply")
@@ -118,7 +183,7 @@ pub fn fetch_asset(
                     .read_to_string()
                     .map_err(|e| Error::Source(format!("{url}: {e}")))?;
                 let id = asset_id(&body, &filename).ok_or_else(|| {
-                    Error::Source(format!("release v{version} has no asset `{filename}`"))
+                    Error::Source(format!("release {tag} has no asset `{filename}`"))
                 })?;
                 let url = format!("https://api.github.com/repos/{repo}/releases/assets/{id}");
                 stream_to_file(
