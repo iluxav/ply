@@ -29,9 +29,16 @@ pub fn exec(args: PsArgs) -> Result<()> {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
+    let mut any_stale = false;
     for s in &states {
         let ports: Vec<String> = s.ports.iter().map(|(k, v)| format!("{k}:{v}")).collect();
-        let status = if s.alive() { "up" } else { "dead" };
+        let stale = s.alive() && supervisor_stale(s.pid);
+        any_stale |= stale;
+        let status = match (s.alive(), stale) {
+            (true, true) => "up*",
+            (true, false) => "up",
+            _ => "dead",
+        };
         println!(
             "{:<24} {:>8} {:<14} {:<20} {:>8} {:>8} {}",
             format!("{}.{}", s.app, s.n),
@@ -57,7 +64,31 @@ pub fn exec(args: PsArgs) -> Result<()> {
             w.after.join(", ")
         );
     }
+    if any_stale {
+        println!("* supervisor predates the installed ply — restart the unit to pick it up");
+    }
     Ok(())
+}
+
+/// After a binary replace, a still-running parent's /proc/<pid>/exe points
+/// at a deleted inode — the honest tell that its code is stale.
+fn supervisor_stale(instance_pid: i32) -> bool {
+    let Some(ppid) = parent_pid(instance_pid) else {
+        return false;
+    };
+    std::fs::read_link(format!("/proc/{ppid}/exe"))
+        .map(|p| p.to_string_lossy().ends_with(" (deleted)"))
+        .unwrap_or(false)
+}
+
+fn parent_pid(pid: i32) -> Option<i32> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    stat.rsplit_once(')')?
+        .1
+        .split_whitespace()
+        .nth(1)?
+        .parse()
+        .ok()
 }
 
 fn human_duration(secs: u64) -> String {

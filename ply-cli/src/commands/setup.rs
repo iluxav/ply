@@ -215,6 +215,37 @@ Unit=ply-deployments.service
 WantedBy=timers.target
 ",
     )?;
+    // The platform keeps itself current too: a daily, jittered
+    // self-update. Running apps are never restarted by it — `ply ps`
+    // marks stale supervisors, and each app's next roll absorbs the
+    // update.
+    write_unit(
+        "/etc/systemd/system/ply-selfupdate.service",
+        &format!(
+            "[Unit]
+Description=ply self-update (track the newest release)
+
+             [Service]
+Type=oneshot
+ExecStart={} self-update
+",
+            ply.display()
+        ),
+    )?;
+    write_unit(
+        "/etc/systemd/system/ply-selfupdate.timer",
+        "[Unit]
+Description=ply self-update cadence (daily, jittered)
+
+         [Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+
+         [Install]
+WantedBy=timers.target
+",
+    )?;
     run_cmd("systemctl", &["daemon-reload"])?;
     run_cmd(
         "systemctl",
@@ -225,6 +256,7 @@ WantedBy=timers.target
             "ply-proxy",
             "ply-deployments.path",
             "ply-reconcile.timer",
+            "ply-selfupdate.timer",
         ],
     )?;
 

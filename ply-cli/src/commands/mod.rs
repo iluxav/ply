@@ -14,6 +14,7 @@ mod ps;
 mod reconcile;
 mod run;
 mod search;
+mod self_update;
 mod setup;
 mod stats;
 mod up;
@@ -46,6 +47,7 @@ pub fn dispatch(command: Command) -> Result<()> {
         Command::Systemd(args) => lifecycle::systemd(args),
         Command::Proxy(args) => lb::proxy(args),
         Command::Setup(args) => setup::exec(args),
+        Command::SelfUpdate(args) => self_update::exec(args),
         Command::Sync(args) => lifecycle::sync(args),
         Command::Gc(args) => lifecycle::gc(args),
         Command::Rm(args) => lifecycle::rm(args),

@@ -115,6 +115,12 @@ pub fn latest_version_matching(
         }
         Err(e) => return Err(Error::Source(format!("GET {url}: {e}"))),
     };
+    // 3xx is not an error to ureq — a Not Modified lands here with an
+    // empty body, and the cache is the answer
+    if response.status() == 304 {
+        return cached_version
+            .ok_or_else(|| Error::Source(format!("{url}: 304 with an empty cache")));
+    }
     let etag = response
         .headers()
         .get("etag")
@@ -220,6 +226,12 @@ fn asset_id(body: &str, filename: &str) -> Option<u64> {
         .take_while(|c| c.is_ascii_digit())
         .collect();
     digits.parse().ok()
+}
+
+/// Plain download to a file — releases assets outside the image store
+/// (the self-update binary, notably).
+pub fn download(url: &str, dest: &std::path::Path) -> Result<()> {
+    stream_to_file(ureq::get(url).header("User-Agent", "ply"), url, dest)
 }
 
 fn stream_to_file(

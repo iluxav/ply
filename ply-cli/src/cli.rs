@@ -127,6 +127,8 @@ pub enum Command {
     /// reports what else rootless still needs (subuid range, newuidmap,
     /// privileged ports). Safe to re-run.
     Setup(SetupArgs),
+    /// Update ply itself to the newest release
+    SelfUpdate(SelfUpdateArgs),
 
     /// Pre-fetch every package in the host policy into the store
     ///
@@ -711,6 +713,13 @@ mod tests {
 }
 
 #[derive(Args)]
+pub struct SelfUpdateArgs {
+    /// Only report whether a newer release exists
+    #[arg(long)]
+    pub check: bool,
+}
+
+#[derive(clap::Args, Debug)]
 pub struct SetupArgs {
     /// Lower net.ipv4.ip_unprivileged_port_start so rootless instances can
     /// bind privileged ports (default 80: nginx, httpd, caddy and traefik all

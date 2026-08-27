@@ -58,6 +58,10 @@ pub fn exec() -> Result<()> {
                 }
             }
             Err(e) => {
+                // A failed attempt is NOT a deleted spec: the deployment
+                // stays desired, its current unit stays untouched. Only a
+                // removed FILE may orphan a unit.
+                desired.insert(name.clone());
                 deployments::write_status(&name, false, &format!("{e:#}"));
                 ply_core::runtime::events::emit(&name, "deploy-failed", &format!("{e:#}"));
                 eprintln!("ply: reconcile {name}: {e:#}");
