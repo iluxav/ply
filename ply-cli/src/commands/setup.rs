@@ -198,6 +198,23 @@ ExecStart={} reconcile
             ply.display()
         ),
     )?;
+    // The cadence: follow-latest deployments converge on their own — push
+    // code or tag a release and the host self-updates within a minute,
+    // still zero resident processes (a timer is a clock, not a daemon).
+    write_unit(
+        "/etc/systemd/system/ply-reconcile.timer",
+        "[Unit]
+Description=ply reconcile cadence (follow-latest deployments self-update)
+
+         [Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+Unit=ply-deployments.service
+
+         [Install]
+WantedBy=timers.target
+",
+    )?;
     run_cmd("systemctl", &["daemon-reload"])?;
     run_cmd(
         "systemctl",
@@ -207,6 +224,7 @@ ExecStart={} reconcile
             "ply-edge",
             "ply-proxy",
             "ply-deployments.path",
+            "ply-reconcile.timer",
         ],
     )?;
 

@@ -99,6 +99,15 @@ pub struct Spec {
     /// Registry source override (any `[sources]` spec).
     #[serde(default)]
     pub source: Option<String>,
+    /// Follow the source automatically on background reconcile runs
+    /// (the timer). `auto = false` = manual only: the spec converges only
+    /// when the FILE is touched — an edit, or the dashboard's deploy-now.
+    #[serde(default = "default_true")]
+    pub auto: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Spec {
@@ -171,6 +180,18 @@ pub fn write_status(name: &str, ok: bool, detail: &str) {
     if std::fs::write(&tmp, line).is_ok() {
         let _ = std::fs::rename(&tmp, dir.join(format!("{name}.status")));
     }
+}
+
+/// The spec file itself — mtime on this is how reconcile reads intent.
+pub fn spec_path(name: &str) -> PathBuf {
+    dir().join(format!("{name}.toml"))
+}
+
+/// Last reconcile outcome: (ok, unix ts). None = never reconciled.
+pub fn read_status(name: &str) -> Option<(bool, u64)> {
+    let raw = std::fs::read_to_string(status_path(name)).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    Some((v.get("ok")?.as_bool()?, v.get("ts")?.as_u64()?))
 }
 
 /// Deployment specs on this host: (name, parse result).

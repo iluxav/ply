@@ -32,6 +32,21 @@ pub fn exec() -> Result<()> {
                 continue;
             }
         };
+        // Cadence discipline. A spec file touched at/after its last status
+        // is an explicit order — converge it. Untouched specs on a
+        // background beat (the timer, another app's change): auto = false
+        // holds at the current artifact, and a recent failure backs off
+        // instead of re-running an expensive build every minute.
+        if !touched_since_status(&name) {
+            if let Some((ok, ts)) = deployments::read_status(&name) {
+                let hold_manual = !spec.auto;
+                let hold_backoff = !ok && now_unix().saturating_sub(ts) < FAIL_BACKOFF_SECS;
+                if hold_manual || hold_backoff {
+                    desired.insert(name.clone());
+                    continue;
+                }
+            }
+        }
         match apply(&name, &spec, &mut app_names) {
             Ok(applied) => {
                 changed_units |= applied.changed;
@@ -98,6 +113,30 @@ fn named_image(name: &str, path: &std::path::Path, shown: &str) -> Result<PathBu
             .with_context(|| format!("linking {shown} into {}", dir.display()))?;
     }
     Ok(named)
+}
+
+const FAIL_BACKOFF_SECS: u64 = 600;
+
+fn now_unix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Was the spec file modified at/after its last status write? No status
+/// at all also counts as touched — a first deploy must converge.
+fn touched_since_status(name: &str) -> bool {
+    let Some((_, ts)) = deployments::read_status(name) else {
+        return true;
+    };
+    let mtime = std::fs::metadata(deployments::spec_path(name))
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(u64::MAX);
+    mtime >= ts
 }
 
 struct Applied {
