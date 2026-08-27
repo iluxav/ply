@@ -13,3 +13,4 @@ pub mod publish;
 pub mod run;
 pub mod security;
 pub mod state;
+pub mod term;

@@ -80,6 +80,26 @@ pub fn exec() -> Result<()> {
     Ok(())
 }
 
+/// Every store path ends in pkg.img; give the unit a path whose basename
+/// is the image's real name so state (and any UI) can read the version.
+/// Hardlink into a per-deployment dir, older versions swept.
+fn named_image(name: &str, path: &std::path::Path, shown: &str) -> Result<PathBuf> {
+    let dir = PathBuf::from("/var/lib/ply/deploys").join(name);
+    std::fs::create_dir_all(&dir)?;
+    let named = dir.join(shown);
+    for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+        if entry.path() != named {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+    if !named.exists() {
+        std::fs::hard_link(path, &named)
+            .or_else(|_| std::fs::copy(path, &named).map(|_| ()))
+            .with_context(|| format!("linking {shown} into {}", dir.display()))?;
+    }
+    Ok(named)
+}
+
 struct Applied {
     changed: bool,
     detail: String,
@@ -119,24 +139,7 @@ fn apply(name: &str, spec: &Spec, app_names: &mut BTreeSet<String>) -> Result<Ap
                     })?;
             println!("{name}: {resolved} (github:{repo})");
             let shown = resolved.to_string();
-            // Every store path ends in pkg.img; give the unit a path whose
-            // basename is the image's real name so state (and any UI) can
-            // read the version. Hardlink into a per-deployment dir, older
-            // versions swept.
-            let dir = PathBuf::from("/var/lib/ply/deploys").join(name);
-            std::fs::create_dir_all(&dir)?;
-            let named = dir.join(&shown);
-            for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
-                if entry.path() != named {
-                    let _ = std::fs::remove_file(entry.path());
-                }
-            }
-            if !named.exists() {
-                std::fs::hard_link(&path, &named)
-                    .or_else(|_| std::fs::copy(&path, &named).map(|_| ()))
-                    .with_context(|| format!("linking {} into {}", shown, dir.display()))?;
-            }
-            (named, shown)
+            (named_image(name, &path, &shown)?, shown)
         }
         (Some(app), None, None) => {
             let source = spec
@@ -148,7 +151,7 @@ fn apply(name: &str, spec: &Spec, app_names: &mut BTreeSet<String>) -> Result<Ap
                     .with_context(|| format!("fetching `{app}` from the registry"))?;
             println!("{name}: {resolved}");
             let shown = resolved.to_string();
-            (path, shown)
+            (named_image(name, &path, &shown)?, shown)
         }
         (None, Some(path), None) => {
             let path = PathBuf::from(path);
@@ -323,13 +326,14 @@ fn build_from_repo(name: &str, spec: &Spec) -> Result<(PathBuf, String, bool)> {
         Some(&checkout),
     )?;
     let commit = git(&["rev-parse", "--short=12", "HEAD"], Some(&checkout))?;
+    let version = repo_version(&checkout, spec);
 
     // Nothing new to build? (same commit, same spec, image exists) — skip:
     // reconcile fires for every dir change including OTHER deployments'.
     let spec_fingerprint = format!("{commit} {}", spec_hash(spec));
     let marker = checkout.join(".ply-build/built");
     let canonical = checkout.join(format!(
-        "{name}-0.1.0-linux-{}.img",
+        "{name}-{version}-linux-{}.img",
         ply_core::image::name::Arch::host().as_str()
     ));
     if std::fs::read_to_string(&marker).unwrap_or_default() == spec_fingerprint
@@ -366,6 +370,9 @@ fn build_from_repo(name: &str, spec: &Spec) -> Result<(PathBuf, String, bool)> {
         })
         .context("building the builder image")?;
 
+        // Builds take minutes; the status file is the dashboard's only
+        // window in — say what is happening before going quiet.
+        deployments::write_status(name, true, &format!("building @ {commit}…"));
         println!("{name}: build `{build}` (fenced at {mem_max}, {runtime})");
         let mut cli_env: Vec<(String, String)> = spec
             .env
@@ -421,7 +428,7 @@ fn build_from_repo(name: &str, spec: &Spec) -> Result<(PathBuf, String, bool)> {
             );
         }
         let mut manifest = format!(
-            "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nentrypoint = {}\nbase = \"debian@13\"\n",
+            "[package]\nname = \"{name}\"\nversion = \"{version}\"\nentrypoint = {}\nbase = \"debian@13\"\n",
             toml_array(&spec.entrypoint)
         );
         if !spec.include.is_empty() {
@@ -583,4 +590,40 @@ mod token_tests {
         assert_eq!(super::base64(b"ab"), "YWI=");
         assert_eq!(super::base64(b"abc"), "YWJj");
     }
+}
+
+/// The app's version, read from what the repo itself declares: its own
+/// ply.toml when that manifest is in charge, else package.json, else
+/// Cargo.toml — so images carry the project's version, not a made-up one.
+/// Strict x.y.z or the 0.1.0 fallback (image names must parse as semver).
+fn repo_version(checkout: &std::path::Path, spec: &Spec) -> String {
+    let fallback = "0.1.0".to_string();
+    let strict = |v: &str| -> Option<String> {
+        let v = v.trim();
+        semver::Version::parse(v).ok().map(|_| v.to_string())
+    };
+    if spec.entrypoint.is_empty() && checkout.join("ply.toml").exists() {
+        if let Ok(raw) = std::fs::read_to_string(checkout.join("ply.toml")) {
+            if let Ok(manifest) = ply_core::manifest::Manifest::parse(&raw) {
+                return strict(&manifest.package.version.to_string()).unwrap_or(fallback);
+            }
+        }
+    }
+    if let Ok(raw) = std::fs::read_to_string(checkout.join("package.json")) {
+        if let Ok(pkg) = serde_json::from_str::<serde_json::Value>(&raw) {
+            if let Some(v) = pkg.get("version").and_then(|v| v.as_str()).and_then(strict) {
+                return v;
+            }
+        }
+    }
+    if let Ok(raw) = std::fs::read_to_string(checkout.join("Cargo.toml")) {
+        for line in raw.lines().take(20) {
+            if let Some(rest) = line.trim().strip_prefix("version") {
+                if let Some(v) = rest.split('"').nth(1).and_then(strict) {
+                    return v;
+                }
+            }
+        }
+    }
+    fallback
 }

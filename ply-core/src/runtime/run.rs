@@ -552,6 +552,29 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                             );
                         }
                     }
+                    crate::runtime::control::Command::Exec { slot, nonce } => {
+                        if !slots.contains_key(&slot) {
+                            crate::runtime::control::write_result(
+                                &app_name,
+                                "exec",
+                                false,
+                                &format!("no instance .{slot}"),
+                            );
+                        } else {
+                            crate::runtime::events::emit(
+                                &app_name,
+                                "terminal",
+                                &format!("shell opened into {app_name}.{slot}"),
+                            );
+                            crate::runtime::term::spawn(&app_name, slot, &nonce);
+                            crate::runtime::control::write_result(
+                                &app_name,
+                                "exec",
+                                true,
+                                &format!("terminal serving at term-{nonce}.sock"),
+                            );
+                        }
+                    }
                 }
             }
         }

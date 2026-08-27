@@ -27,6 +27,9 @@ pub fn dir(app: &str) -> PathBuf {
 pub enum Command {
     Scale(u32),
     Restart,
+    /// Open a terminal into a slot: the parent answers with a PTY served
+    /// on `control/term-<nonce>.sock`.
+    Exec { slot: u32, nonce: String },
 }
 
 /// Read and CONSUME pending commands (files are removed; half-written
@@ -54,6 +57,23 @@ pub fn poll(app: &str) -> Vec<Command> {
     if restart.exists() {
         let _ = std::fs::remove_file(&restart);
         out.push(Command::Restart);
+    }
+
+    let exec = dir.join("exec");
+    if let Ok(text) = std::fs::read_to_string(&exec) {
+        let _ = std::fs::remove_file(&exec);
+        let mut parts = text.split_whitespace();
+        let slot = parts.next().and_then(|s| s.parse::<u32>().ok());
+        let nonce = parts.next().filter(|n| {
+            (8..=64).contains(&n.len()) && n.chars().all(|c| c.is_ascii_hexdigit())
+        });
+        match (slot, nonce) {
+            (Some(slot), Some(nonce)) => out.push(Command::Exec {
+                slot,
+                nonce: nonce.to_string(),
+            }),
+            _ => write_result(app, "exec", false, "exec wants `<slot> <hex-nonce>`"),
+        }
     }
 
     out

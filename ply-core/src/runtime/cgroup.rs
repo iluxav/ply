@@ -16,6 +16,16 @@ pub struct Cgroup {
 impl Cgroup {
     /// Create `/sys/fs/cgroup/ply-<instance>` and apply limits.
     pub fn create(instance: &str, resources: Option<&Resources>) -> Result<Cgroup> {
+        // Enable the controllers we are about to use, don't trust the
+        // inherited set: systemd recomputes root subtree_control around
+        // daemon-reloads, and `cpu` in particular comes and goes — writing
+        // cpu.weight then fails on a file that does not exist. Idempotent,
+        // best-effort (rootless has no business writing here; the limit
+        // write's error message stays the honest failure).
+        let _ = std::fs::write(
+            Path::new(CGROUP_ROOT).join("cgroup.subtree_control"),
+            "+cpu +memory +pids",
+        );
         let dir = Path::new(CGROUP_ROOT).join(format!("ply-{instance}"));
         std::fs::create_dir_all(&dir).map_err(|source| Error::Io {
             path: dir.clone(),
