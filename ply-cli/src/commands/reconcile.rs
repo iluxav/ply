@@ -577,21 +577,6 @@ fn base64(data: &[u8]) -> String {
     out
 }
 
-#[cfg(test)]
-mod token_tests {
-    #[test]
-    fn base64_matches_reference() {
-        assert_eq!(
-            super::base64(b"x-access-token:ghp_abc"),
-            "eC1hY2Nlc3MtdG9rZW46Z2hwX2FiYw=="
-        );
-        assert_eq!(super::base64(b""), "");
-        assert_eq!(super::base64(b"a"), "YQ==");
-        assert_eq!(super::base64(b"ab"), "YWI=");
-        assert_eq!(super::base64(b"abc"), "YWJj");
-    }
-}
-
 /// The app's version, read from what the repo itself declares: its own
 /// ply.toml when that manifest is in charge, else package.json, else
 /// Cargo.toml — so images carry the project's version, not a made-up one.
@@ -626,4 +611,19 @@ fn repo_version(checkout: &std::path::Path, spec: &Spec) -> String {
         }
     }
     fallback
+}
+
+#[cfg(test)]
+mod token_tests {
+    #[test]
+    fn base64_matches_reference() {
+        assert_eq!(
+            super::base64(b"x-access-token:ghp_abc"),
+            "eC1hY2Nlc3MtdG9rZW46Z2hwX2FiYw=="
+        );
+        assert_eq!(super::base64(b""), "");
+        assert_eq!(super::base64(b"a"), "YQ==");
+        assert_eq!(super::base64(b"ab"), "YWI=");
+        assert_eq!(super::base64(b"abc"), "YWJj");
+    }
 }
