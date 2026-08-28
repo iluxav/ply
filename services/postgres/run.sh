@@ -21,6 +21,12 @@ PGDATA=/var/lib/postgresql/data
 SOCK=/tmp
 PGUSER="${POSTGRES_USER:-postgres}"
 export RCLONE_CONFIG="${RCLONE_CONFIG:-/dev/null}"
+# the keg closure ships no system CA store (ca-certificates builds its
+# bundle in a maintainer script ply never runs) — rclone verifies TLS
+# against the Mozilla bundle vendored with this app
+export SSL_CERT_FILE="${SSL_CERT_FILE:-$PWD/cacert.pem}"
+# bucket-scoped tokens may not HeadBucket/CreateBucket — skip the check
+export RCLONE_S3_NO_CHECK_BUCKET="${RCLONE_S3_NO_CHECK_BUCKET:-true}"
 [ -n "${POSTGRES_PASSWORD:-}" ] && export PGPASSWORD="$POSTGRES_PASSWORD"
 
 fresh=""
@@ -75,12 +81,17 @@ if [ -n "${BACKUP_DEST:-}" ]; then
     i=0; until $PGBIN/pg_isready -h "$SOCK" -q || [ $i -ge 60 ]; do i=$((i+1)); sleep 1; done
     while :; do
       name="${POSTGRES_DB:-$PGUSER}-$(date -u +%Y%m%d-%H%M%S).sql.gz"
-      if $PGBIN/pg_dump -h "$SOCK" -U "$PGUSER" "${POSTGRES_DB:-$PGUSER}" | gzip | rclone rcat "$BACKUP_DEST/$name"; then
+      # dump to a file first: a known-size upload is one plain PUT, which
+      # every S3 implementation accepts (R2 501s rclone's streaming mode)
+      tmp="/tmp/.backup.sql.gz"
+      if $PGBIN/pg_dump -h "$SOCK" -U "$PGUSER" "${POSTGRES_DB:-$PGUSER}" | gzip > "$tmp" \
+         && rclone copyto "$tmp" "$BACKUP_DEST/$name"; then
         rclone delete --min-age "${BACKUP_KEEP_DAYS:-14}d" "$BACKUP_DEST" 2>/dev/null || true
         echo "postgres: backup ok ($name); next in ${BACKUP_INTERVAL:-86400}s"
       else
         echo "postgres: backup FAILED ($name); retrying in ${BACKUP_INTERVAL:-86400}s"
       fi
+      rm -f "$tmp"
       sleep "${BACKUP_INTERVAL:-86400}"
     done
   ) &

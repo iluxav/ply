@@ -29,6 +29,8 @@ export PGPASSWORD="$POSTGRES_PASSWORD"
 # no config file — everything arrives via RCLONE_* env; this silences the
 # "config not found" notice on every run
 export RCLONE_CONFIG="${RCLONE_CONFIG:-/dev/null}"
+export SSL_CERT_FILE="${SSL_CERT_FILE:-$PWD/cacert.pem}"
+export RCLONE_S3_NO_CHECK_BUCKET="${RCLONE_S3_NO_CHECK_BUCKET:-true}"
 
 if [ "${BACKUP_CHECK:-}" = "1" ]; then
   pg_dump --version && rclone version --check=false | head -1
@@ -39,7 +41,8 @@ while :; do
   name="$POSTGRES_DB-$(date -u +%Y%m%d-%H%M%S).sql.gz"
   echo "pg-backup: $POSTGRES_DB@$POSTGRES_HOST:$POSTGRES_PORT -> $BACKUP_DEST/$name"
   pg_dump -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -U "$POSTGRES_USER" "$POSTGRES_DB" \
-    | gzip | rclone rcat "$BACKUP_DEST/$name"
+    | gzip > /tmp/.backup.sql.gz
+  rclone copyto /tmp/.backup.sql.gz "$BACKUP_DEST/$name" && rm -f /tmp/.backup.sql.gz
   rclone delete --min-age "${BACKUP_KEEP_DAYS}d" "$BACKUP_DEST" 2>/dev/null || true
   echo "pg-backup: ok ($name); next in ${BACKUP_INTERVAL}s"
   sleep "$BACKUP_INTERVAL"

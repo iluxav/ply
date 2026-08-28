@@ -757,8 +757,10 @@ mod tests {
 
 #[derive(Args)]
 pub struct PushArgs {
-    /// The image to publish (<name>-<x.y.z>-linux-<arch>.img)
-    pub image: std::path::PathBuf,
+    /// The image to publish: a local .img file, or an https:// URL where
+    /// the image already lives (GitHub release asset, any static host) —
+    /// the registry then records and verifies it without storing bytes
+    pub image: String,
 }
 
 #[derive(clap::Args, Debug)]

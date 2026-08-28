@@ -10,10 +10,10 @@
 
 [package]
 name = "postgres"
-version = "17.10.1"
+version = "17.10.3"
 user = "postgres:70:70"
 entrypoint = ["./run.sh"]
-include = ["run.sh", "restore.sh"]
+include = ["run.sh", "restore.sh", "cacert.pem"]
 base = "debian@13"
 
 [dependencies]

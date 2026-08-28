@@ -181,7 +181,15 @@ ply sync                          # pre-fetch the host policy's packages
 ply login                         # GitHub device flow — your username is your namespace
 ply whoami                        # who the stored token says you are
 ply push myapp-1.0.0-linux-x64.img   # publish under <you>/ (append-only)
+ply push https://github.com/you/app/releases/download/v1.0.0/myapp-1.0.0-linux-x64.img
 ```
+
+The URL form registers an image where it already lives — the registry
+fetches it once, verifies the squashfs magic, and pins the sha256, but
+never stores the bytes. Your CI keeps publishing to GitHub Releases;
+the registry stays a catalog. URLs must be https, carry no query string
+(signed links expire), and end in the canonical
+`<name>-<x.y.z>-linux-<arch>.img` filename.
 
 Installing needs no account — reads are public files. Signing out is
 deleting `~/.config/ply/credentials`; revoke tokens at plybox.sh/account/.

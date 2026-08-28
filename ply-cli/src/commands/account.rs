@@ -122,10 +122,14 @@ pub fn whoami() -> Result<()> {
     Ok(())
 }
 
-pub fn push(image: &std::path::Path) -> Result<()> {
+pub fn push(image: &str) -> Result<()> {
     let Some((token, login)) = saved() else {
         bail!("not logged in — run `ply login` first");
     };
+    if image.starts_with("https://") {
+        return push_url(image, &token, &login);
+    }
+    let image = std::path::Path::new(image);
     let filename = image
         .file_name()
         .and_then(|f| f.to_str())
@@ -163,6 +167,38 @@ pub fn push(image: &std::path::Path) -> Result<()> {
                     println!("  {line}");
                 }
             }
+        }
+        None => bail!(
+            "push failed: {}",
+            body["error"].as_str().unwrap_or("unknown error")
+        ),
+    }
+    Ok(())
+}
+
+/// URL mode: the registry records where the bytes live and verifies them
+/// server-side (fetch + hash) — it never stores them. The catalog stays
+/// a catalog; the publisher's host stays the host.
+fn push_url(url: &str, token: &str, login: &str) -> Result<()> {
+    println!("registering {url} under {login}/… (the registry fetches and hashes it — no upload)");
+    let body = serde_json::json!({ "url": url }).to_string();
+    let result = ureq::post(&format!("{}/api/push/", api_base()))
+        .header("Authorization", &format!("Bearer {token}"))
+        .header("Content-Type", "application/json")
+        .send(body.as_bytes());
+    let mut resp = match result {
+        Ok(r) => r,
+        Err(ureq::Error::StatusCode(code)) => {
+            bail!("registry answered {code} — check the URL (https, no query string, canonical <name>-<x.y.z>-linux-<arch>.img basename)");
+        }
+        Err(e) => return Err(e).context("reaching the registry"),
+    };
+    let body: serde_json::Value = serde_json::from_str(&resp.body_mut().read_to_string()?)?;
+    match body["published"].as_str() {
+        Some(published) => {
+            println!("published {published} (bytes stay at the origin)");
+            println!("  sha256: {}", body["sha256"].as_str().unwrap_or(""));
+            println!("  origin: {}", body["url"].as_str().unwrap_or(""));
         }
         None => bail!(
             "push failed: {}",

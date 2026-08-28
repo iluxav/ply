@@ -7,9 +7,9 @@
 
 [package]
 name = "pg-backup"
-version = "0.1.0"
+version = "0.1.2"
 entrypoint = ["./backup.sh"]
-include = ["backup.sh"]
+include = ["backup.sh", "cacert.pem"]
 base = "debian@13"
 
 [dependencies]
