@@ -683,9 +683,8 @@ mod tests {
     #[test]
     fn hints_only_cover_nonexistent_subcommands() {
         for verb in [
-            "pull", "tag", "logout", "compose", "stop", "kill", "start",
-            "restart", "inspect", "cp", "save", "load", "export", "network", "volume", "commit",
-            "rmi",
+            "pull", "tag", "logout", "compose", "stop", "kill", "start", "restart", "inspect",
+            "cp", "save", "load", "export", "network", "volume", "commit", "rmi",
         ] {
             assert!(
                 docker_hint(verb).is_some(),
