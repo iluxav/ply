@@ -12,7 +12,7 @@ use crate::cli::InitArgs;
 /// Latest `major.minor` ranges for the packages `init` suggests.
 #[derive(Debug, Clone)]
 pub(crate) struct Latest {
-    pub alpine: String,
+    pub debian: String,
     pub python3: String,
     pub node: String,
 }
@@ -20,9 +20,9 @@ pub(crate) struct Latest {
 impl Latest {
     pub(crate) fn builtin() -> Self {
         Latest {
-            alpine: "3.20".into(),
+            debian: "13".into(),
             python3: "3.12".into(),
-            node: "22".into(),
+            node: "24".into(),
         }
     }
 
@@ -34,7 +34,7 @@ impl Latest {
                 .unwrap_or(fallback)
         };
         Latest {
-            alpine: pick("alpine", b.alpine),
+            debian: pick("debian", b.debian),
             python3: pick("python3", b.python3),
             node: pick("node", b.node),
         }
@@ -164,7 +164,7 @@ pub(crate) fn prompt(
     latest: &Latest,
     yes: bool,
 ) -> Result<Answers> {
-    let base_default = format!("alpine@{}", latest.alpine);
+    let base_default = format!("debian@{}", latest.debian);
     if yes {
         return Ok(Answers {
             name: d.name.clone(),
@@ -326,7 +326,7 @@ mod tests {
         )
         .unwrap();
         let d = detect(dir.path(), &latest());
-        assert_eq!(d.runtime, Some(("node".into(), "22".into())));
+        assert_eq!(d.runtime, Some(("node".into(), "24".into())));
         assert_eq!(d.entrypoint, vec!["node", "dist/index.js"]);
         assert_eq!(d.port, Some(3000));
     }
@@ -390,7 +390,7 @@ mod tests {
         let a = prompt(&mut input, &mut out, &defaults(), &latest(), true).unwrap();
         assert_eq!(a.name, "myapp");
         assert_eq!(a.version, "0.1.0");
-        assert_eq!(a.base, "alpine@3.20");
+        assert_eq!(a.base, "debian@13");
         assert_eq!(a.runtime, Some(("python3".into(), "3.12".into())));
         assert_eq!(a.port, Some(8000));
         assert_eq!(input.position(), 0);
@@ -404,7 +404,7 @@ mod tests {
         assert_eq!(a.name, "myapp");
         assert_eq!(a.version, "1.2.3");
         assert_eq!(a.entrypoint, vec!["node", "server.js"]);
-        assert_eq!(a.base, "alpine@3.20");
+        assert_eq!(a.base, "debian@13");
         assert_eq!(a.runtime, Some(("python3".into(), "3.11".into())));
         assert_eq!(a.port, Some(8000));
         let shown = String::from_utf8(out).unwrap();
@@ -428,7 +428,7 @@ mod tests {
             name: "myapp".into(),
             version: "0.1.0".into(),
             entrypoint: vec!["python3".into(), "app.py".into()],
-            base: "alpine@3.20".into(),
+            base: "debian@13".into(),
             runtime: Some(("python3".into(), "3.12".into())),
             port: Some(8000),
         };
@@ -451,7 +451,7 @@ mod tests {
             name: "bare".into(),
             version: "0.1.0".into(),
             entrypoint: vec!["/bin/sh".into(), "-c".into(), "echo hi".into()],
-            base: "alpine@3.20".into(),
+            base: "debian@13".into(),
             runtime: None,
             port: None,
         };

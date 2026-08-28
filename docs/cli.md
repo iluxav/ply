@@ -175,12 +175,41 @@ ply setup [--unprivileged-ports [PORT]] [--edge]
 ply sync                          # pre-fetch the host policy's packages
 ```
 
+## Registry account
+
+```sh
+ply login                         # GitHub device flow — your username is your namespace
+ply whoami                        # who the stored token says you are
+ply push myapp-1.0.0-linux-x64.img   # publish under <you>/ (append-only)
+```
+
+Installing needs no account — reads are public files. Signing out is
+deleting `~/.config/ply/credentials`; revoke tokens at plybox.sh/account/.
+
+## Keeping ply current
+
+```sh
+ply self-update                   # fetch + verify + atomically replace this binary
+ply self-update --check           # just report what's newer
+```
+
+Hosts prepared by `ply setup --edge` run this daily on a jittered timer;
+`ply ps` marks instances whose supervisor predates the installed binary
+with `up*`.
+
 ## Fleet hygiene
 
 ```sh
 ply audit                         # shared volumes, deprecated runtimes, risk surface
 ply outdated                      # dependencies with newer versions available
+ply volume ls                     # every data volume: size, in use / idle / orphaned
+ply volume rm myapp/data.1        # delete one (refused while its instance runs)
+ply volume rm --orphans           # sweep volumes no installed app claims
 ```
+
+Volumes survive `ply rm` and deleted deployments on purpose — `volume ls`
+is where you see what survived, and `volume rm` is the deliberate act.
+Wiping a database volume before a `BACKUP_RESTORE` redeploy lives here too.
 
 ## Conventions
 

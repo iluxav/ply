@@ -53,9 +53,11 @@ pub enum Command {
     Exec(ExecArgs),
 
     /// Make systemd agree with /var/lib/ply/deployments/ (a deployment is
-    /// a file: `<name>.toml` naming a registry app or an image, plus env,
-    /// publish, domains). Fired automatically by ply-deployments.path when
-    /// the dir changes; safe to run by hand. Root only.
+    /// a file: `<name>.toml` naming a registry app, an image, a GitHub
+    /// release stream, or a repo to build — plus env, publish, domains).
+    /// Fleet hosts sync the dir from git first. Fired automatically by
+    /// ply-deployments.path and the 1-minute timer; safe to run by hand.
+    /// Root only.
     Reconcile,
 
     /// Set an app's instance count (the run parent grows/shrinks the pool)
@@ -147,6 +149,14 @@ pub enum Command {
 
     /// Remove an app (volumes are kept unless --volumes)
     Rm(RmArgs),
+
+    /// List and delete app data volumes (plain host directories)
+    ///
+    /// Volumes survive `ply rm` and deleted deployments on purpose — this
+    /// is where you see what survived and, deliberately, delete it.
+    /// Wiping a database volume before a BACKUP_RESTORE redeploy lives here.
+    #[command(subcommand)]
+    Volume(VolumeCommand),
 
     /// Report shared volumes, deprecated runtimes, and other risk surface
     Audit(AuditArgs),
@@ -443,11 +453,11 @@ pub struct CraftNewArgs {
     #[arg(value_name = "NAME")]
     pub name: String,
 
-    /// Base to build on, as pkg@constraint (e.g. alpine@3.20)
+    /// Base to build on, as pkg@constraint (e.g. debian@13)
     #[arg(long, value_name = "PKG@CONSTRAINT")]
     pub from: String,
 
-    /// Where to fetch the base from (e.g. http://127.0.0.1:8321)
+    /// Where to fetch the base from (default: the official registry)
     #[arg(long, value_name = "URL")]
     pub source: Option<String>,
 
@@ -637,6 +647,36 @@ pub struct RmArgs {
 #[derive(Args)]
 pub struct AuditArgs {}
 
+#[derive(Subcommand)]
+pub enum VolumeCommand {
+    /// List volumes: app, size, in use / idle / orphaned
+    Ls(VolumeLsArgs),
+    /// Delete a volume (refused while its instance runs)
+    Rm(VolumeRmArgs),
+}
+
+#[derive(Args)]
+pub struct VolumeLsArgs {
+    /// Machine-readable output
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args)]
+pub struct VolumeRmArgs {
+    /// Exactly as `ply volume ls` shows it: <app>/<name>.<slot>
+    #[arg(value_name = "APP/VOLUME.SLOT")]
+    pub target: Option<String>,
+
+    /// Delete every volume no installed app claims (lists first, confirms)
+    #[arg(long)]
+    pub orphans: bool,
+
+    /// Skip the confirmation (for scripts)
+    #[arg(short = 'y', long)]
+    pub yes: bool,
+}
+
 #[derive(Args)]
 pub struct OutdatedArgs {}
 
@@ -655,7 +695,6 @@ pub fn docker_hint(cmd: &str) -> Option<&'static str> {
         "cp" => "volumes are plain host directories (ply.toml [volumes]); dev mode: `ply run --link HOST:CONTAINER`.",
         "save" | "load" | "export" => "an image already IS a single file — scp it; `ply run app.img` on the other side.",
         "network" => "every instance gets its own IP and a `<app>.ply` name on the bridge — no port mappings, no network objects.",
-        "volume" => "declare [volumes] in ply.toml; data lives as plain directories under the volumes dir.\n(docs: https://plybox.sh/docs/volumes/)",
         "commit" => "turning a live session into an image is `ply craft` (new → commit).\n(docs: https://plybox.sh/docs/packages/)",
         "rmi" => "`ply gc` deletes store entries no app references; `rm -rf /var/lib/ply` is the factory reset.",
         // `ply lb` was a second name for the same thing: emit reverse-proxy
@@ -684,7 +723,7 @@ mod tests {
     fn hints_only_cover_nonexistent_subcommands() {
         for verb in [
             "pull", "tag", "logout", "compose", "stop", "kill", "start", "restart", "inspect",
-            "cp", "save", "load", "export", "network", "volume", "commit", "rmi",
+            "cp", "save", "load", "export", "network", "commit", "rmi",
         ] {
             assert!(
                 docker_hint(verb).is_some(),

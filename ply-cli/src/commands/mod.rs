@@ -19,6 +19,7 @@ mod self_update;
 mod setup;
 mod stats;
 mod up;
+mod volume;
 
 use anyhow::Result;
 
@@ -54,6 +55,10 @@ pub fn dispatch(command: Command) -> Result<()> {
         Command::Push(args) => account::push(&args.image),
         Command::Sync(args) => lifecycle::sync(args),
         Command::Gc(args) => lifecycle::gc(args),
+        Command::Volume(cmd) => match cmd {
+            crate::cli::VolumeCommand::Ls(args) => volume::ls(&args),
+            crate::cli::VolumeCommand::Rm(args) => volume::rm(&args),
+        },
         Command::Rm(args) => lifecycle::rm(args),
         Command::Audit(args) => lifecycle::audit(args),
         Command::Outdated(args) => lifecycle::outdated(args),
