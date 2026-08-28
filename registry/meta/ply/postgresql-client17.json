@@ -1,0 +1,5 @@
+{
+  "type": "layer",
+  "description": "PostgreSQL 17 client tools (pg_dump, pg_restore, psql) \u2014 Debian trixie build",
+  "license": "PostgreSQL"
+}

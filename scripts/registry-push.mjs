@@ -248,12 +248,12 @@ for (const p of manualPushes) {
 // One failed upload must not abort the rest; failures are reported and the
 // repo is picked up by the next `--reindex`.
 const reposToIndex = args.reindex
-  ? new Set(Object.values(state).map((e) => dirname(e.upload_path)))
+  ? new Set(Object.values(state).filter((e) => e.upload_path).map((e) => dirname(e.upload_path)))
   : touchedRepos;
 let indexFailed = 0;
 for (const repoDir of reposToIndex) {
   const imgs = Object.values(state)
-    .filter((e) => dirname(e.upload_path) === repoDir).map((e) => e.img).sort();
+    .filter((e) => e.upload_path && dirname(e.upload_path) === repoDir).map((e) => e.img).sort();
   const indexFile = join(workdir, `index-${repoDir.replaceAll("/", "-")}.json`);
   writeFileSync(indexFile, JSON.stringify(imgs));
   try {
@@ -381,8 +381,21 @@ async function publishState() {
     console.log(`${key} published (${obj.package_count} packages, ${obj.image_count} images)`);
   };
 
-  // Root: the website's view of everything.
-  publish("state.json", snapshot(packages));
+  // Root: the website's view of everything. Community namespaces are
+  // pushed through the site's /api/push/ and own their slice of this
+  // file — preserve every namespace the ledger doesn't know. The
+  // cache-buster query skips the CDN so a minutes-old push can't be lost.
+  let foreign = [];
+  try {
+    const cur = await (await fetch(`https://registry.plybox.sh/state.json?t=${Date.now()}`)).json();
+    const mine = new Set(packages.map((p) => p.namespace));
+    foreign = (cur.packages ?? []).filter((p) => p.namespace && !mine.has(p.namespace));
+  } catch (e) {
+    console.log(`WARN: could not read current state.json (${e.message}) — community entries may be dropped this publish`);
+  }
+  const everything = [...packages, ...foreign].sort((a, b) =>
+    a.namespace === b.namespace ? a.name.localeCompare(b.name) : a.namespace.localeCompare(b.namespace));
+  publish("state.json", snapshot(everything));
   // Per namespace: the catalog `ply search` / `ply add` read at the source
   // prefix (https://registry.plybox.sh/<ns>/state.json).
   for (const ns of new Set(packages.map((p) => p.namespace)))

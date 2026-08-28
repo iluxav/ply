@@ -1,0 +1,26 @@
+# pg-backup — database backups as a composed ply app: this package is one
+# shell script; pg_dump and rclone arrive as layer dependencies. The first
+# curated app that exercises composition in production, on purpose.
+#
+#   deployment:  app = "pg-backup"  +  after = ["<your-db-deployment>"]
+#   env: POSTGRES_* + BACKUP_DEST + RCLONE_S3_* (see backup.sh)
+
+[package]
+name = "pg-backup"
+version = "0.1.0"
+entrypoint = ["./backup.sh"]
+include = ["backup.sh"]
+base = "debian@13"
+
+[dependencies]
+postgresql-client17 = "17.10"
+rclone = "1.60"
+
+[resources]
+mem = "128M"
+
+[restart]
+policy = "on-failure"
+
+[sources]
+default = "https://registry.plybox.sh/ply/{package}"

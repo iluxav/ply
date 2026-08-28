@@ -3,6 +3,6 @@
   "description": "PostgreSQL relational database (docker-library env contract)",
   "license": "PostgreSQL",
   "homepage": "https://www.postgresql.org",
-  "contract": "POSTGRES_PASSWORD=\nPOSTGRES_DB=\nPGPORT=5432",
+  "contract": "POSTGRES_PASSWORD=\nPOSTGRES_DB=\nPGPORT=5432\n# optional self-backup (rclone is a layer of this app):\nBACKUP_DEST=\nRCLONE_S3_PROVIDER=Cloudflare\nRCLONE_S3_ENDPOINT=\nRCLONE_S3_ACCESS_KEY_ID=\nRCLONE_S3_SECRET_ACCESS_KEY=\nBACKUP_KEEP_DAYS=14\n# disaster recovery on an empty volume:\nBACKUP_RESTORE=",
   "publish": "internal:5432"
 }

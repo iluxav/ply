@@ -1,0 +1,5 @@
+{
+  "type": "layer",
+  "description": "rsync for cloud storage \u2014 S3/R2/GCS/SFTP and 40 more backends \u2014 Debian trixie build",
+  "license": "MIT"
+}
