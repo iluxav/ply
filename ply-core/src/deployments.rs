@@ -358,7 +358,9 @@ REDIS_PASSWORD = "s3cret"
         assert!(Spec::parse("app = \"redis\"\nimage = \"/x.img\"\n").is_err());
         assert!(Spec::parse("version = \"8\"\n").is_err());
         assert!(Spec::parse("app = \"redis\"\ntypo = 1\n").is_err());
-        assert!(Spec::parse("app = \"redis\"\nurl = \"https://x/a-1.0.0-linux-x64.img\"\n").is_err());
+        assert!(
+            Spec::parse("app = \"redis\"\nurl = \"https://x/a-1.0.0-linux-x64.img\"\n").is_err()
+        );
     }
 
     #[test]

@@ -378,9 +378,8 @@ mod tests {
             fetch_url_image(&format!("https://x.example/a-1.0.0-linux-{other}.img")).unwrap_err();
         assert!(err.to_string().contains("this host"), "{err}");
         // plain http on a public host is refused
-        let err =
-            fetch_url_image(&format!("http://x.example/a-1.0.0-linux-{host_arch}.img"))
-                .unwrap_err();
+        let err = fetch_url_image(&format!("http://x.example/a-1.0.0-linux-{host_arch}.img"))
+            .unwrap_err();
         assert!(err.to_string().contains("use https"), "{err}");
         // query strings don't confuse the basename
         let err = fetch_url_image("https://x.example/dir/?download=1").unwrap_err();
