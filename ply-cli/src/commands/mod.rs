@@ -53,7 +53,12 @@ pub fn dispatch(command: Command) -> Result<()> {
         Command::SelfUpdate(args) => self_update::exec(args),
         Command::Login => account::login(),
         Command::Whoami => account::whoami(),
-        Command::Push(args) => account::push(&args.image),
+        Command::Key(cmd) => match cmd {
+            crate::cli::KeyCommand::New(args) => account::key_new(args.note.as_deref()),
+            crate::cli::KeyCommand::Ls => account::key_ls(),
+            crate::cli::KeyCommand::Rm(args) => account::key_rm(args.id),
+        },
+        Command::Push(args) => account::push(&args.image, args.as_namespace.as_deref()),
         Command::Sync(args) => lifecycle::sync(args),
         Command::Gc(args) => lifecycle::gc(args),
         Command::Volume(cmd) => match cmd {

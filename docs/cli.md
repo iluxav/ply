@@ -178,11 +178,80 @@ ply sync                          # pre-fetch the host policy's packages
 ## Registry account
 
 ```sh
-ply login                         # GitHub device flow — your username is your namespace
-ply whoami                        # who the stored token says you are
+ply login                         # GitHub device flow; first sign-in chooses a username
+ply whoami                        # your namespace, and any others you may publish to
 ply push myapp-1.0.0-linux-x64.img   # publish under <you>/ (append-only)
 ply push https://github.com/you/app/releases/download/v1.0.0/myapp-1.0.0-linux-x64.img
 ```
+
+### Publishing from CI
+
+A runner has no browser, so it cannot do the device flow. It publishes
+with a **key** instead: mint one where you *are* logged in, store it as a
+repository secret, and set `PLY_TOKEN` in the workflow. `PLY_TOKEN` wins
+over `~/.config/ply/credentials`, and the registry derives the owner from
+the key itself — a key can only ever publish to its own namespace.
+
+```sh
+ply key new --note "ci: myapp"    # printed once; only its hash is stored
+ply key ls                        # ids, notes, last use — never the keys
+ply key rm 3                      # revoke; anything using it stops now
+```
+
+```yaml
+- run: ply push myapp-${{ github.ref_name }}-linux-x64.img
+  env:
+    PLY_TOKEN: ${{ secrets.PLY_TOKEN }}
+```
+
+Keys are also minted (and revoked) on
+[plybox.sh/account](https://plybox.sh/account/) — the lane to use when no
+machine is logged in yet.
+
+### Publishing without ply installed
+
+`ply push` is a convenience over one HTTP request. A pipeline that never
+installs ply publishes with curl:
+
+```sh
+# bytes — the registry stores them
+curl -fsS -X POST \
+  -H "Authorization: Bearer $PLY_TOKEN" \
+  --data-binary @myapp-1.2.0-linux-x64.img \
+  https://plybox.sh/api/push/<namespace>/myapp-1.2.0-linux-x64.img
+
+# a URL — the registry fetches it once, hashes it, and stores no bytes
+curl -fsS -X POST \
+  -H "Authorization: Bearer $PLY_TOKEN" -H "Content-Type: application/json" \
+  -d '{"url":"https://github.com/you/app/releases/download/v1.2.0/myapp-1.2.0-linux-x64.img"}' \
+  https://plybox.sh/api/push/<namespace>
+```
+
+The namespace in the path must be one your key may publish to; omit the
+path entirely (`/api/push` with an `X-Ply-Filename` header) and it defaults
+to your login. What the CLI adds is the derived catalog metadata — the
+`X-Ply-Meta` header carrying the image's volumes, links and dependencies,
+read out of its own manifest. Curl-published packages simply catalog
+without it.
+
+### Namespaces
+
+Your namespace is a **username you choose once** on first sign-in — not
+your GitHub handle. The account itself is keyed on your verified email, so
+renaming on GitHub never moves your namespace, a freed handle never hands
+it to someone else, and signing in later through another provider with the
+same verified address reaches the same account. Until you have chosen one,
+`ply push` says so and publishes nothing.
+
+Anything beyond your own username is an explicit grant: the official `ply`
+and `apps` shelves are reserved (never claimable by registering a matching
+name), and a shared org namespace is a row in `namespace_grants`. Your
+account page lists everything you may publish to; `ply whoami` and
+`GET /api/cli/whoami` report the same list.
+
+Operators grant the official shelves declaratively — `PLY_ADMIN_LOGINS` on
+the site deployment (comma-separated GitHub logins) grants them on that
+user's next sign-in.
 
 The URL form registers an image where it already lives — the registry
 fetches it once, verifies the squashfs magic, and pins the sha256, but
@@ -192,7 +261,8 @@ the registry stays a catalog. URLs must be https, carry no query string
 `<name>-<x.y.z>-linux-<arch>.img` filename.
 
 Installing needs no account — reads are public files. Signing out is
-deleting `~/.config/ply/credentials`; revoke tokens at plybox.sh/account/.
+deleting `~/.config/ply/credentials`; revoke keys with `ply key rm` or at
+plybox.sh/account/.
 
 ## Keeping ply current
 

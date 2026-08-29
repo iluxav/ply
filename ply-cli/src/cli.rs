@@ -139,6 +139,14 @@ pub enum Command {
     Login,
     /// Show who you are logged in as
     Whoami,
+
+    /// Registry keys: mint one for CI, list them, revoke one
+    ///
+    /// A CI runner cannot do the GitHub device flow, so it publishes with a
+    /// key: mint one here (or on the account page), store it as a secret,
+    /// and set PLY_TOKEN in the workflow.
+    #[command(subcommand)]
+    Key(KeyCommand),
     /// Publish an image to the registry under your namespace
     Push(PushArgs),
 
@@ -682,6 +690,29 @@ pub struct RmArgs {
 pub struct AuditArgs {}
 
 #[derive(Subcommand)]
+pub enum KeyCommand {
+    /// Mint a key and print it once (CI: store it as PLY_TOKEN)
+    New(KeyNewArgs),
+    /// List this account's keys — ids and last use, never the keys
+    Ls,
+    /// Revoke a key by id; anything using it stops immediately
+    Rm(KeyRmArgs),
+}
+
+#[derive(Args)]
+pub struct KeyNewArgs {
+    /// What it is for, e.g. "ci: ply-web" — shown in `ply key ls`
+    #[arg(long)]
+    pub note: Option<String>,
+}
+
+#[derive(Args)]
+pub struct KeyRmArgs {
+    /// Key id from `ply key ls`
+    pub id: i64,
+}
+
+#[derive(Subcommand)]
 pub enum VolumeCommand {
     /// List volumes: app, size, in use / idle / orphaned
     Ls(VolumeLsArgs),
@@ -795,6 +826,12 @@ pub struct PushArgs {
     /// the image already lives (GitHub release asset, any static host) —
     /// the registry then records and verifies it without storing bytes
     pub image: String,
+
+    /// Publish under a granted namespace instead of your own login
+    /// (the official `ply`/`apps` shelves, a shared org). `ply whoami`
+    /// lists what your key may publish to.
+    #[arg(long = "as", value_name = "NAMESPACE")]
+    pub as_namespace: Option<String>,
 }
 
 #[derive(clap::Args, Debug)]
