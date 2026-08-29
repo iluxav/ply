@@ -427,5 +427,105 @@
     "version": "13.6.0"
    }
   ]
+ },
+ "manual:apps/dashboard/dashboard-0.1.24-linux-x64.img": {
+  "name": "dashboard",
+  "version": "0.1.24",
+  "img": "dashboard-0.1.24-linux-x64.img",
+  "upload_path": "apps/dashboard/dashboard-0.1.24-linux-x64.img",
+  "bytes": 3776512,
+  "pushed_at": "2026-08-29T20:17:07.979Z",
+  "type": "app",
+  "volumes": [
+   "/data"
+  ],
+  "links": [
+   "/run/ply:/ply/host/run",
+   "/var/lib/ply/apps:/ply/host/apps",
+   "/var/lib/ply/deployments:/ply/host/deployments",
+   "/sys/fs/cgroup:/ply/host/cgroup",
+   "/proc:/ply/host/proc"
+  ],
+  "dependencies": [
+   {
+    "name": "debian",
+    "version": "13.6.0"
+   }
+  ]
+ },
+ "manual:apps/dashboard/dashboard-0.1.25-linux-x64.img": {
+  "name": "dashboard",
+  "version": "0.1.25",
+  "img": "dashboard-0.1.25-linux-x64.img",
+  "upload_path": "apps/dashboard/dashboard-0.1.25-linux-x64.img",
+  "bytes": 3846144,
+  "pushed_at": "2026-08-29T20:38:47.647Z",
+  "type": "app",
+  "volumes": [
+   "/data"
+  ],
+  "links": [
+   "/run/ply:/ply/host/run",
+   "/var/lib/ply/apps:/ply/host/apps",
+   "/var/lib/ply/deployments:/ply/host/deployments",
+   "/sys/fs/cgroup:/ply/host/cgroup",
+   "/proc:/ply/host/proc"
+  ],
+  "dependencies": [
+   {
+    "name": "debian",
+    "version": "13.6.0"
+   }
+  ]
+ },
+ "manual:apps/dashboard/dashboard-0.1.26-linux-x64.img": {
+  "name": "dashboard",
+  "version": "0.1.26",
+  "img": "dashboard-0.1.26-linux-x64.img",
+  "upload_path": "apps/dashboard/dashboard-0.1.26-linux-x64.img",
+  "bytes": 3862528,
+  "pushed_at": "2026-08-29T20:58:36.799Z",
+  "type": "app",
+  "volumes": [
+   "/data"
+  ],
+  "links": [
+   "/run/ply:/ply/host/run",
+   "/var/lib/ply/apps:/ply/host/apps",
+   "/var/lib/ply/deployments:/ply/host/deployments",
+   "/sys/fs/cgroup:/ply/host/cgroup",
+   "/proc:/ply/host/proc"
+  ],
+  "dependencies": [
+   {
+    "name": "debian",
+    "version": "13.6.0"
+   }
+  ]
+ },
+ "manual:apps/dashboard/dashboard-0.1.26-linux-arm64.img": {
+  "name": "dashboard",
+  "version": "0.1.26",
+  "img": "dashboard-0.1.26-linux-arm64.img",
+  "upload_path": "apps/dashboard/dashboard-0.1.26-linux-arm64.img",
+  "bytes": 3862528,
+  "pushed_at": "2026-08-29T20:58:39.096Z",
+  "type": "app",
+  "volumes": [
+   "/data"
+  ],
+  "links": [
+   "/run/ply:/ply/host/run",
+   "/var/lib/ply/apps:/ply/host/apps",
+   "/var/lib/ply/deployments:/ply/host/deployments",
+   "/sys/fs/cgroup:/ply/host/cgroup",
+   "/proc:/ply/host/proc"
+  ],
+  "dependencies": [
+   {
+    "name": "debian",
+    "version": "13.6.0"
+   }
+  ]
  }
 }
