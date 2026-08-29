@@ -125,12 +125,24 @@ pub fn exec(args: RunArgs) -> Result<()> {
         }
         image.to_string_lossy().into_owned()
     } else if !args.image.starts_with("docker://") && !image_path.exists() {
-        match ply_core::catalog::parse_run_ref(&args.image) {
+        match ply_core::catalog::parse_namespaced_ref(&args.image) {
             Some((name, want)) => {
-                let (path, resolved, _digest) =
-                    ply_core::catalog::fetch_app_image(&name, want.as_deref(), &args.source)?;
-                eprintln!("ply: resolved {} -> {resolved}", args.image);
-                path.to_string_lossy().into_owned()
+                match ply_core::catalog::fetch_app_image(&name, want.as_deref(), &args.source) {
+                    Ok((path, resolved, _digest)) => {
+                        eprintln!("ply: resolved {} -> {resolved}", args.image);
+                        path.to_string_lossy().into_owned()
+                    }
+                    // Only once the app lookup has failed is it worth a
+                    // second round trip to ask whether it's a stack.
+                    Err(e) => {
+                        if args.image.contains('/')
+                            && ply_core::catalog::fetch_stack(&args.image, &args.source).is_ok()
+                        {
+                            bail!("{0} is a stack — run it with `ply up {0}`", args.image);
+                        }
+                        return Err(e.into());
+                    }
+                }
             }
             None => {
                 // A `namespace/name` ref that resolves to a stack → `ply up`.

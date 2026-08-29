@@ -360,6 +360,25 @@ impl Catalog {
     }
 }
 
+/// `postgres` / `iluxav/myapp@1.2` — the reference grammar for registry
+/// lookups, with an optional namespace. Returns (reference, version), the
+/// reference keeping its namespace so `fetch_app_image` knows where to
+/// look. A namespaced ref is how a deployment or a stack member follows a
+/// published app: the newest matching version wins on every resolve, which
+/// is what makes "push a version, the host converges" work without a URL
+/// to bump by hand.
+pub fn parse_namespaced_ref(spec: &str) -> Option<(String, Option<String>)> {
+    match spec.split_once('/') {
+        Some((ns, rest)) => {
+            // both halves obey the package-name grammar; no nesting
+            let (name, want) = parse_run_ref(rest)?;
+            let (ns_ok, _) = parse_run_ref(ns)?;
+            Some((format!("{ns_ok}/{name}"), want))
+        }
+        None => parse_run_ref(spec),
+    }
+}
+
 /// `postgres` / `myapp@1.2` — the reference grammar `ply run` accepts for
 /// registry lookups. Returns (name, version prefix). Anything with a path
 /// separator or an `.img` suffix is not a reference (it's a file path).
@@ -564,6 +583,18 @@ pub fn fetch_app_image(
 ) -> Result<(PathBuf, crate::image::name::ImageName, String)> {
     use crate::image::name::{Arch, ImageName, Os};
 
+    // `<namespace>/<name>` looks in that namespace's catalog; a bare name
+    // uses the caller's source. One resolution point, so every caller —
+    // `ply run`, a deployment's `app =`, a stack member's `run =` — gets
+    // namespaced refs for free.
+    let (source_spec, name) = match name.split_once('/') {
+        Some((ns, rest)) => (
+            format!("https://registry.plybox.sh/{ns}/{{package}}"),
+            rest.to_string(),
+        ),
+        None => (source_spec.to_string(), name.to_string()),
+    };
+    let (source_spec, name) = (source_spec.as_str(), name.as_str());
     let source = Source::parse(source_spec, false)?;
     let store = crate::store::Store::open_default()?;
     let (os, arch) = (Os::Linux, Arch::host());
@@ -946,6 +977,32 @@ mod tests {
         assert_eq!(parse_run_ref("postgres@17.x"), None);
         assert_eq!(parse_run_ref("postgres@1.2.3.4"), None);
         assert_eq!(parse_run_ref(""), None);
+    }
+
+    #[test]
+    fn namespaced_ref_grammar() {
+        // a bare name still resolves, unchanged
+        assert_eq!(
+            parse_namespaced_ref("postgres@17"),
+            Some(("postgres".into(), Some("17".into())))
+        );
+        // the namespace rides along in the returned reference
+        assert_eq!(
+            parse_namespaced_ref("ply/ply-web"),
+            Some(("ply/ply-web".into(), None))
+        );
+        assert_eq!(
+            parse_namespaced_ref("iluxav/myapp@1.2"),
+            Some(("iluxav/myapp".into(), Some("1.2".into())))
+        );
+        // an image filename is still a path, not a reference
+        assert_eq!(parse_namespaced_ref("db/labs-db-0.1.0-linux-x64.img"), None);
+        assert_eq!(parse_namespaced_ref("./web"), None);
+        // no nesting, no empty halves, same grammar on both sides
+        assert_eq!(parse_namespaced_ref("a/b/c"), None);
+        assert_eq!(parse_namespaced_ref("/web"), None);
+        assert_eq!(parse_namespaced_ref("ply/"), None);
+        assert_eq!(parse_namespaced_ref("Ply/web"), None);
     }
 
     #[test]

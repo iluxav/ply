@@ -292,14 +292,20 @@ fn classify_run(run: &str, path: &Path, index: usize) -> Result<(MemberSource, O
             .map(str::to_string);
         return Ok((MemberSource::Path(PathBuf::from(run)), stem));
     }
-    match crate::catalog::parse_run_ref(run) {
-        Some((name, version)) => Ok((
-            MemberSource::Run {
-                name: name.clone(),
-                version,
-            },
-            Some(name),
-        )),
+    match crate::catalog::parse_namespaced_ref(run) {
+        Some((name, version)) => {
+            // The member's default name is the package, without its
+            // namespace: `ply/ply-web` runs as `ply-web`, which is what
+            // `after`, the `<member>.ply` bridge name and `ply ps` show.
+            let member = name.rsplit('/').next().unwrap_or(&name).to_string();
+            Ok((
+                MemberSource::Run {
+                    name: name.clone(),
+                    version,
+                },
+                Some(member),
+            ))
+        }
         None => Err(Error::Manifest(format!(
             "{}: [[app]] #{}: `run = \"{run}\"` is not a package reference, path, or URL",
             path.display(),
@@ -882,6 +888,23 @@ scale = 2
         assert_eq!(pin.digests.get("arm64"), Some(&"sha256:def".to_string()));
         assert!(loaded.pinned("db", "postgres@18").is_none());
         assert!(loaded.pinned("other", "postgres@17").is_none());
+    }
+
+    /// A namespaced member follows a published app: the ref keeps its
+    /// namespace (that is where the catalog lives), while the member's
+    /// identity on the host is the bare package name.
+    #[test]
+    fn namespaced_member_ref() {
+        let stack = stack_of("[[app]]\nrun = \"ply/ply-web\"\npublish = [\"internal:3000\"]\n");
+        let m = &stack.members[0];
+        assert_eq!(m.name, "ply-web");
+        assert_eq!(
+            m.source,
+            MemberSource::Run {
+                name: "ply/ply-web".into(),
+                version: None,
+            }
+        );
     }
 
     #[test]

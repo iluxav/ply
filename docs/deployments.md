@@ -26,7 +26,9 @@ sudo ply setup --swap 2G     # small hosts that will build JS on-droplet
 Exactly one of five sources per file:
 
 ```toml
-# 1 · registry — a runnable app from your registry, newest matching version
+# 1 · registry — a runnable app from your registry, newest matching version.
+#     `app = "<namespace>/<name>"` looks in that namespace instead of the
+#     default one, which is how CI publishing becomes deployment.
 app = "redis"
 version = "8.0"
 publish = ["internal:6379"]
@@ -72,8 +74,12 @@ fields — `repo` plus a `build` command is enough; the repo's manifest rules.
 
 ## Continuous deployment is a pull
 
-Both git-backed lanes re-resolve on every reconcile run:
+Every following lane re-resolves on each reconcile run:
 
+- `app =` (and a stack member's `run =`) resolves the newest matching
+  version in the registry, including a namespaced ref like
+  `ply/ply-web` — CI publishes, the host converges, nothing on the host
+  names a version.
 - `github =` resolves the **latest release** (a `version = "1.2"` prefix
   follows patch releases; an exact `"1.2.3"` pins).
 - `repo =` fetches the branch tip (`ref = "main"`, default: remote HEAD)

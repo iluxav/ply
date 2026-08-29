@@ -74,7 +74,7 @@ fn saved() -> Option<(String, String)> {
 /// Resolve a key's login at the registry. Best-effort: a network hiccup
 /// must not fail a push whose authority is the key, not the name.
 fn remote_login(token: &str) -> Option<String> {
-    let mut resp = ureq::get(format!("{}/api/cli/whoami", api_base()))
+    let mut resp = ureq::get(format!("{}/api/cli/whoami/", api_base()))
         .header("Authorization", &format!("Bearer {token}"))
         .call()
         .ok()?;
@@ -181,7 +181,7 @@ pub fn whoami() -> Result<()> {
 
 /// Namespaces this key may publish to, straight from the registry.
 fn granted_namespaces(token: &str) -> Option<Vec<String>> {
-    let mut resp = ureq::get(format!("{}/api/cli/whoami", api_base()))
+    let mut resp = ureq::get(format!("{}/api/cli/whoami/", api_base()))
         .header("Authorization", &format!("Bearer {token}"))
         .call()
         .ok()?;
@@ -202,7 +202,7 @@ fn granted_namespaces(token: &str) -> Option<Vec<String>> {
 pub fn key_new(note: Option<&str>) -> Result<()> {
     let (token, _) = saved().context("not logged in — run `ply login` first")?;
     let note = note.unwrap_or("");
-    let mut resp = ureq::post(format!("{}/api/auth/tokens", api_base()))
+    let mut resp = ureq::post(format!("{}/api/auth/tokens/", api_base()))
         .header("Authorization", &format!("Bearer {token}"))
         .header("Content-Type", "application/json")
         .send(format!("{{\"note\":{note:?}}}"))
@@ -220,7 +220,7 @@ pub fn key_new(note: Option<&str>) -> Result<()> {
 /// themselves: the registry keeps only hashes.
 pub fn key_ls() -> Result<()> {
     let (token, _) = saved().context("not logged in — run `ply login` first")?;
-    let mut resp = ureq::get(format!("{}/api/auth/tokens", api_base()))
+    let mut resp = ureq::get(format!("{}/api/auth/tokens/", api_base()))
         .header("Authorization", &format!("Bearer {token}"))
         .call()
         .map_err(|e| anyhow::anyhow!("listing keys: {e}"))?;
@@ -247,7 +247,7 @@ pub fn key_ls() -> Result<()> {
 /// `ply key rm <id>` — revoke immediately; anything using it stops.
 pub fn key_rm(id: i64) -> Result<()> {
     let (token, _) = saved().context("not logged in — run `ply login` first")?;
-    ureq::post(format!("{}/api/auth/tokens/revoke", api_base()))
+    ureq::post(format!("{}/api/auth/tokens/revoke/", api_base()))
         .header("Authorization", &format!("Bearer {token}"))
         .header("Content-Type", "application/json")
         .send(format!("{{\"id\":{id}}}"))
@@ -260,10 +260,15 @@ pub fn key_rm(id: i64) -> Result<()> {
 /// the default namespace, so a CI key whose login we could not resolve
 /// still lands in the right place. With it, the path form the REST API
 /// advertises — `/api/push/<namespace>/<filename>`.
+///
+/// The trailing slashes are load-bearing: the site normalizes to them and
+/// answers a slashless POST with a 308, which a request carrying a body
+/// must not chase. A last segment that looks like a file is the exception
+/// — those keep no slash, or the normalizer redirects the other way.
 fn push_endpoint(as_namespace: Option<&str>, filename: Option<&str>) -> String {
     match (as_namespace, filename) {
         (Some(ns), Some(file)) => format!("{}/api/push/{ns}/{file}", api_base()),
-        (Some(ns), None) => format!("{}/api/push/{ns}", api_base()),
+        (Some(ns), None) => format!("{}/api/push/{ns}/", api_base()),
         _ => format!("{}/api/push/", api_base()),
     }
 }
