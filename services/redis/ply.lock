@@ -3,10 +3,10 @@
 name = "redis"
 version = "8.0.2"
 source = "https://registry.plybox.sh/ply/{package}"
-sha256 = "sha256:8fd2226d368aa7553c3e6e5669b468ca5d940fd7da4fe5da83e5e24c2aaa2f7a"
+sha256 = "sha256:20eeb873a3943823302f3edc027d49f51f3994c9eebd3502cd867299c61f06ac"
 
 [[package]]
 name = "debian"
 version = "13.6.0"
 source = "https://registry.plybox.sh/ply/{package}"
-sha256 = "sha256:066bba3cbdfa7f0ec35e6b61bf94d05db68b540a75b39f9739d97b59e708f8bc"
+sha256 = "sha256:d32d410e6e5c143922c0000121e9a34f4b534649395e59bfd722f27118770846"

@@ -80,12 +80,15 @@ pub fn load(dir: &Path) -> Result<Option<Stack>> {
     parse(&text, &path)
 }
 
-/// Parse a stack file at `path`. `Ok(None)` when there is no `[[app]]` array.
+/// Parse a stack file at `path`. `Ok(None)` when there is no `[[app]]` array
+/// — including `app = "name"` as a plain string, which is the single-app
+/// DEPLOYMENT lane's registry key, not a malformed stack. Only an array of
+/// `[[app]]` tables makes a file a stack.
 pub fn parse(text: &str, path: &Path) -> Result<Option<Stack>> {
     let doc: toml::Value = text
         .parse()
         .map_err(|e| Error::Manifest(format!("{}: {e}", path.display())))?;
-    let Some(apps) = doc.get("app") else {
+    let Some(apps) = doc.get("app").and_then(|a| a.as_array()) else {
         return Ok(None);
     };
     if doc.get("package").is_some() {
@@ -94,12 +97,6 @@ pub fn parse(text: &str, path: &Path) -> Result<Option<Stack>> {
             path.display()
         )));
     }
-    let apps = apps.as_array().ok_or_else(|| {
-        Error::Manifest(format!(
-            "{}: [[app]] must be an array of tables (each block is one `ply run`)",
-            path.display()
-        ))
-    })?;
     if apps.is_empty() {
         return Err(Error::Manifest(format!(
             "{}: [[app]] has no entries",
@@ -679,6 +676,15 @@ run   = "./web"
 after = ["server"]
 scale = 2
 "#;
+
+    /// `app = "name"` (a string) is the registry DEPLOYMENT lane — the
+    /// classifier must pass it through, not die on "must be an array".
+    /// Regression: 0.1.50 broke every registry-lane deployment on a host.
+    #[test]
+    fn plain_app_key_is_not_a_stack() {
+        let spec = "app = \"dashboard\"\ngrant_links = true\npublish = [\"internal:7070\"]\n";
+        assert!(parse(spec, Path::new("dashboard.toml")).unwrap().is_none());
+    }
 
     #[test]
     fn parses_and_orders_the_lab_stack() {

@@ -225,5 +225,207 @@
   "volumes": [],
   "links": [],
   "dependencies": []
+ },
+ "manual:ply/debian/debian-13.6.0-linux-arm64.img": {
+  "name": "debian",
+  "version": "13.6.0",
+  "img": "debian-13.6.0-linux-arm64.img",
+  "upload_path": "ply/debian/debian-13.6.0-linux-arm64.img",
+  "bytes": 27615232,
+  "pushed_at": "2026-08-29T19:44:30.163Z",
+  "type": "layer",
+  "volumes": [],
+  "links": [],
+  "dependencies": []
+ },
+ "manual:ply/git/git-2.47.3-linux-arm64.img": {
+  "name": "git",
+  "version": "2.47.3",
+  "img": "git-2.47.3-linux-arm64.img",
+  "upload_path": "ply/git/git-2.47.3-linux-arm64.img",
+  "bytes": 23425024,
+  "pushed_at": "2026-08-29T19:49:33.189Z",
+  "type": "layer",
+  "volumes": [],
+  "links": [],
+  "dependencies": []
+ },
+ "manual:ply/caddy/caddy-2.6.2-linux-arm64.img": {
+  "name": "caddy",
+  "version": "2.6.2",
+  "img": "caddy-2.6.2-linux-arm64.img",
+  "upload_path": "ply/caddy/caddy-2.6.2-linux-arm64.img",
+  "bytes": 11272192,
+  "pushed_at": "2026-08-29T19:49:37.786Z",
+  "type": "layer",
+  "volumes": [],
+  "links": [],
+  "dependencies": []
+ },
+ "manual:ply/redis/redis-8.0.2-linux-arm64.img": {
+  "name": "redis",
+  "version": "8.0.2",
+  "img": "redis-8.0.2-linux-arm64.img",
+  "upload_path": "ply/redis/redis-8.0.2-linux-arm64.img",
+  "bytes": 1875968,
+  "pushed_at": "2026-08-29T19:49:39.928Z",
+  "type": "layer",
+  "volumes": [],
+  "links": [],
+  "dependencies": []
+ },
+ "manual:ply/postgresql17/postgresql17-17.10.0-linux-arm64.img": {
+  "name": "postgresql17",
+  "version": "17.10.0",
+  "img": "postgresql17-17.10.0-linux-arm64.img",
+  "upload_path": "ply/postgresql17/postgresql17-17.10.0-linux-arm64.img",
+  "bytes": 42516480,
+  "pushed_at": "2026-08-29T19:49:52.546Z",
+  "type": "layer",
+  "volumes": [],
+  "links": [],
+  "dependencies": []
+ },
+ "manual:ply/postgresql-client17/postgresql-client17-17.10.0-linux-arm64.img": {
+  "name": "postgresql-client17",
+  "version": "17.10.0",
+  "img": "postgresql-client17-17.10.0-linux-arm64.img",
+  "upload_path": "ply/postgresql-client17/postgresql-client17-17.10.0-linux-arm64.img",
+  "bytes": 5033984,
+  "pushed_at": "2026-08-29T19:49:54.997Z",
+  "type": "layer",
+  "volumes": [],
+  "links": [],
+  "dependencies": []
+ },
+ "manual:ply/rclone/rclone-1.60.1-linux-arm64.img": {
+  "name": "rclone",
+  "version": "1.60.1",
+  "img": "rclone-1.60.1-linux-arm64.img",
+  "upload_path": "ply/rclone/rclone-1.60.1-linux-arm64.img",
+  "bytes": 17256448,
+  "pushed_at": "2026-08-29T19:50:00.612Z",
+  "type": "layer",
+  "volumes": [],
+  "links": [],
+  "dependencies": []
+ },
+ "manual:ply/node/node-22.23.2-linux-arm64.img": {
+  "name": "node",
+  "version": "22.23.2",
+  "img": "node-22.23.2-linux-arm64.img",
+  "upload_path": "ply/node/node-22.23.2-linux-arm64.img",
+  "bytes": 52088832,
+  "pushed_at": "2026-08-29T19:50:14.081Z",
+  "type": "layer",
+  "volumes": [],
+  "links": [],
+  "dependencies": []
+ },
+ "manual:ply/node/node-24.18.1-linux-arm64.img": {
+  "name": "node",
+  "version": "24.18.1",
+  "img": "node-24.18.1-linux-arm64.img",
+  "upload_path": "ply/node/node-24.18.1-linux-arm64.img",
+  "bytes": 52125696,
+  "pushed_at": "2026-08-29T19:50:27.376Z",
+  "type": "layer",
+  "volumes": [],
+  "links": [],
+  "dependencies": []
+ },
+ "manual:apps/postgres/postgres-17.10.3-linux-arm64.img": {
+  "name": "postgres",
+  "version": "17.10.3",
+  "img": "postgres-17.10.3-linux-arm64.img",
+  "upload_path": "apps/postgres/postgres-17.10.3-linux-arm64.img",
+  "bytes": 110592,
+  "pushed_at": "2026-08-29T19:51:02.917Z",
+  "type": "app",
+  "volumes": [
+   "/var/lib/postgresql/data"
+  ],
+  "links": [],
+  "dependencies": [
+   {
+    "name": "postgresql17",
+    "version": "17.10.0"
+   },
+   {
+    "name": "rclone",
+    "version": "1.60.1"
+   },
+   {
+    "name": "debian",
+    "version": "13.6.0"
+   }
+  ]
+ },
+ "manual:apps/redis/redis-8.0.2-linux-arm64.img": {
+  "name": "redis",
+  "version": "8.0.2",
+  "img": "redis-8.0.2-linux-arm64.img",
+  "upload_path": "apps/redis/redis-8.0.2-linux-arm64.img",
+  "bytes": 4096,
+  "pushed_at": "2026-08-29T19:51:04.425Z",
+  "type": "app",
+  "volumes": [
+   "/data"
+  ],
+  "links": [],
+  "dependencies": [
+   {
+    "name": "redis",
+    "version": "8.0.2"
+   },
+   {
+    "name": "debian",
+    "version": "13.6.0"
+   }
+  ]
+ },
+ "manual:apps/pg-backup/pg-backup-0.1.2-linux-arm64.img": {
+  "name": "pg-backup",
+  "version": "0.1.2",
+  "img": "pg-backup-0.1.2-linux-arm64.img",
+  "upload_path": "apps/pg-backup/pg-backup-0.1.2-linux-arm64.img",
+  "bytes": 110592,
+  "pushed_at": "2026-08-29T19:51:05.830Z",
+  "type": "app",
+  "volumes": [],
+  "links": [],
+  "dependencies": [
+   {
+    "name": "rclone",
+    "version": "1.60.1"
+   },
+   {
+    "name": "postgresql-client17",
+    "version": "17.10.0"
+   },
+   {
+    "name": "debian",
+    "version": "13.6.0"
+   }
+  ]
+ },
+ "manual:apps/notify/notify-0.1.0-linux-arm64.img": {
+  "name": "notify",
+  "version": "0.1.0",
+  "img": "notify-0.1.0-linux-arm64.img",
+  "upload_path": "apps/notify/notify-0.1.0-linux-arm64.img",
+  "bytes": 4247552,
+  "pushed_at": "2026-08-29T19:51:08.077Z",
+  "type": "app",
+  "volumes": [],
+  "links": [
+   "/var/lib/ply/apps:/ply/host/apps"
+  ],
+  "dependencies": [
+   {
+    "name": "debian",
+    "version": "13.6.0"
+   }
+  ]
  }
 }

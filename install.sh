@@ -151,58 +151,53 @@ if is_root_like && { has_tty || [ -n "${PLY_EDGE:-}${PLY_DASHBOARD:-}${PLY_FLEET
     fi
 
     if [ "$(ask "install the ply dashboard? (web UI, runs as a ply app)" yes "${PLY_DASHBOARD:-}")" = "yes" ]; then
-        dash_arch=$target
-        dash_tag=$(curl -fsSL "https://api.github.com/repos/iluxav/ply-dashboard/releases/latest" \
-            | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
-        if [ -z "$dash_tag" ]; then
-            echo "! cannot reach the dashboard release — install later: https://github.com/iluxav/ply-dashboard"
+        # A deployment FILE, not a hand unit: the dashboard then shows up on
+        # its own /deploy page, follows the registry (newest apps/dashboard
+        # wins on every reconcile beat — updates ship themselves), and is
+        # retired by deleting the file, like every other app on the host.
+        dash_spec=/var/lib/ply/deployments/dashboard.toml
+        as_root mkdir -p /var/lib/ply/deployments
+        {
+            echo 'app = "dashboard"'
+            echo 'grant_links = true'
+            echo 'publish = ["internal:7070"]'
+            if [ -n "$domain" ]; then echo "domain = [\"$domain\"]"; fi
+        } | as_root sh -c "cat > '$dash_spec'"
+        echo "deploying the dashboard from the registry (deployments/dashboard.toml)"
+        as_root "$PLY_BIN" reconcile || true
+
+        # Wait for it, then hand over the one secret that matters.
+        echo "waiting for the dashboard to come up …"
+        # probe locally: the domain may not even resolve yet, and the
+        # dashboard's readiness has nothing to do with DNS
+        tries=0
+        until curl -fs -m 3 "http://10.77.0.1:7070/healthz" >/dev/null 2>&1 || [ $tries -ge 30 ]; do
+            tries=$((tries + 1)); sleep 2
+        done
+        if ! curl -fs -m 3 "http://10.77.0.1:7070/healthz" >/dev/null 2>&1; then
+            echo "! dashboard not up yet — the reconcile verdict is in:"
+            echo "  cat /var/lib/ply/deployments/.status/dashboard.status"
+        fi
+        # the token is printed on the app's first boot; give journald a
+        # moment to flush before declaring it missing
+        token=""
+        tries=0
+        while [ -z "$token" ] && [ $tries -lt 10 ]; do
+            token=$(as_root journalctl -u ply-dashboard --no-pager 2>/dev/null \
+                | sed -n 's/.*setup token: \([A-Za-z0-9_-]*\).*/\1/p' | tail -1)
+            [ -n "$token" ] || { tries=$((tries + 1)); sleep 1; }
+        done
+        echo ""
+        if [ -n "$domain" ]; then
+            echo "dashboard: https://$domain"
         else
-            dash_ver=${dash_tag#v}
-            dash_img="dashboard-$dash_ver-linux-$dash_arch.img"
-            as_root mkdir -p /srv/ply-dashboard
-            echo "downloading $dash_img ($dash_tag)"
-            curl -fsSL -o "$tmp/$dash_img" \
-                "https://github.com/iluxav/ply-dashboard/releases/download/$dash_tag/$dash_img"
-            as_root install -m 644 "$tmp/$dash_img" "/srv/ply-dashboard/$dash_img"
-            # stable symlink: an update is download + re-link + restart
-            as_root ln -sfn "/srv/ply-dashboard/$dash_img" /srv/ply-dashboard/current.img
-
-            set -- --grant-links --publish internal:7070
-            [ -n "$domain" ] && set -- "$@" --domain "$domain"
-            as_root sh -c "'$PLY_BIN' systemd /srv/ply-dashboard/current.img $* \
-                > /etc/systemd/system/ply-dashboard.service"
-            as_root systemctl daemon-reload
-            as_root systemctl enable --now ply-dashboard
-
-            # Wait for it, then hand over the one secret that matters.
-            echo "waiting for the dashboard to come up …"
-            # probe locally: the domain may not even resolve yet, and the
-            # dashboard's readiness has nothing to do with DNS
-            tries=0
-            until curl -fs -m 3 "http://10.77.0.1:7070/healthz" >/dev/null 2>&1 || [ $tries -ge 30 ]; do
-                tries=$((tries + 1)); sleep 2
-            done
-            # the token is printed on the app's first boot; give journald a
-            # moment to flush before declaring it missing
-            token=""
-            tries=0
-            while [ -z "$token" ] && [ $tries -lt 10 ]; do
-                token=$(as_root journalctl -u ply-dashboard --no-pager 2>/dev/null \
-                    | sed -n 's/.*setup token: \([A-Za-z0-9_-]*\).*/\1/p' | tail -1)
-                [ -n "$token" ] || { tries=$((tries + 1)); sleep 1; }
-            done
-            echo ""
-            if [ -n "$domain" ]; then
-                echo "dashboard: https://$domain"
-            else
-                echo "dashboard: http://10.77.0.1:7070 (on this host; tunnel in with:"
-                echo "           ssh -L 7070:10.77.0.1:7070 root@<this-host>)"
-            fi
-            if [ -n "$token" ]; then
-                echo "setup token: $token   (create your account with it)"
-            else
-                echo "setup token: run \`ply logs dashboard | grep 'setup token'\` to read it"
-            fi
+            echo "dashboard: http://10.77.0.1:7070 (on this host; tunnel in with:"
+            echo "           ssh -L 7070:10.77.0.1:7070 root@<this-host>)"
+        fi
+        if [ -n "$token" ]; then
+            echo "setup token: $token   (create your account with it)"
+        else
+            echo "setup token: run \`ply logs dashboard | grep 'setup token'\` to read it"
         fi
     fi
 fi
