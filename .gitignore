@@ -22,3 +22,5 @@ go-to-market.md
 ply-dashboard/
 registry-population.md
 /app/
+/plybox.env
+/devex-test.md
