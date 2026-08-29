@@ -1,7 +1,7 @@
 {
   "type": "app",
-  "description": "Postgres backups on a schedule: pg_dump + rclone to any S3/R2, pruned by age \u2014 composed entirely from layers",
+  "description": "Postgres backups on a schedule: pg_dump + rclone to any S3/R2, pruned by age — composed entirely from layers",
   "license": "MIT",
   "homepage": "https://plybox.sh/docs/deployments/",
-  "contract": "POSTGRES_HOST=\nPOSTGRES_PASSWORD=\nPOSTGRES_DB=\nBACKUP_DEST=:s3:my-bucket/pg\nRCLONE_S3_PROVIDER=Cloudflare\nRCLONE_S3_ENDPOINT=\nRCLONE_S3_ACCESS_KEY_ID=\nRCLONE_S3_SECRET_ACCESS_KEY=\nBACKUP_KEEP_DAYS=14"
+  "contract": "# in a stack, after = [\"<db>\"] injects POSTGRES_ADDR — else set host/port:\nPOSTGRES_HOST=\nPOSTGRES_PORT=5432\nPOSTGRES_USER=postgres\nPOSTGRES_DB=\nPOSTGRES_PASSWORD=\nBACKUP_DEST=:s3:my-bucket/pg\nRCLONE_S3_PROVIDER=Cloudflare\nRCLONE_S3_ENDPOINT=\nRCLONE_S3_ACCESS_KEY_ID=\nRCLONE_S3_SECRET_ACCESS_KEY=\nBACKUP_INTERVAL=86400\nBACKUP_KEEP_DAYS=14"
 }

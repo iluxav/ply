@@ -90,6 +90,10 @@ pub struct Spec {
     pub publish: Vec<String>,
     #[serde(default)]
     pub domain: Vec<String>,
+    /// Extra managed volumes at these container paths (for imported apps
+    /// whose image doesn't declare a VOLUME but writes a data dir).
+    #[serde(default)]
+    pub volumes: Vec<String>,
     #[serde(default)]
     pub env: BTreeMap<String, String>,
     /// Secrets that should not live in this file: a root-owned env file.
@@ -162,6 +166,9 @@ impl Spec {
         }
         for domain in &self.domain {
             flags.extend(["--domain".into(), domain.clone()]);
+        }
+        for volume in &self.volumes {
+            flags.extend(["--volume".into(), volume.clone()]);
         }
         for app in &self.after {
             flags.extend(["--after".into(), app.clone()]);

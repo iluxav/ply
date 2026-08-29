@@ -114,6 +114,12 @@ struct OciConfig {
     /// How the image asks to be shut down: nginx "SIGQUIT", httpd "SIGWINCH".
     #[serde(rename = "StopSignal", default)]
     stop_signal: Option<String>,
+    /// Paths the image declares must be writable (Docker `VOLUME`). Without
+    /// a real volume behind them, an app that runs as a non-root user can't
+    /// write its data dir (n8n's /home/node/.n8n) and crashes. We turn each
+    /// into a ply volume so the runtime creates and chowns it.
+    #[serde(rename = "Volumes", default)]
+    volumes: Option<std::collections::BTreeMap<String, serde_json::Value>>,
 }
 
 const ACCEPT: &str = "application/vnd.docker.distribution.manifest.v2+json, \
@@ -350,8 +356,16 @@ pub fn import(spec: &str, output: &Path) -> Result<ImportOutcome> {
         );
         let response = client.get(&format!("blobs/{}", layer.digest), "*/*")?;
         let reader = response.into_body().into_reader();
-        let gz = layer.media_type.ends_with("gzip") || layer.media_type.is_empty();
-        apply_layer_tar(reader, gz, &rootfs, &mut deferred_dir_modes)?;
+        // Modern registries ship layers gzip'd, zstd'd, or bare. Pick the
+        // decoder by media type; an empty type means the legacy gzip default.
+        let comp = if layer.media_type.ends_with("zstd") {
+            LayerComp::Zstd
+        } else if layer.media_type.ends_with("gzip") || layer.media_type.is_empty() {
+            LayerComp::Gzip
+        } else {
+            LayerComp::None
+        };
+        apply_layer_tar(reader, comp, &rootfs, &mut deferred_dir_modes)?;
     }
     restore_dir_modes(&deferred_dir_modes);
 
@@ -400,6 +414,35 @@ pub fn import(spec: &str, output: &Path) -> Result<ImportOutcome> {
             }
         }
     }
+    // Declared VOLUMEs become ply volumes: named from the path, created and
+    // chowned to the app's user at run time (the fix for imported apps that
+    // write a data dir as a non-root user).
+    let mut volumes = std::collections::BTreeMap::new();
+    if let Some(declared) = &config.volumes {
+        for (i, path) in declared.keys().enumerate() {
+            let base = path
+                .trim_end_matches('/')
+                .rsplit('/')
+                .next()
+                .unwrap_or("")
+                .trim_start_matches('.');
+            let mut vname: String = base
+                .chars()
+                .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+                .collect();
+            vname = vname.trim_matches('-').to_string();
+            if vname.is_empty() {
+                vname = format!("vol{i}");
+            }
+            volumes
+                .entry(vname)
+                .or_insert_with(|| crate::manifest::Volume {
+                    path: path.clone(),
+                    scope: "instance".into(),
+                    ephemeral: false,
+                });
+        }
+    }
     let manifest = Manifest {
         package: Package {
             name: name.clone(),
@@ -421,7 +464,7 @@ pub fn import(spec: &str, output: &Path) -> Result<ImportOutcome> {
         dependencies: Default::default(),
         env,
         ports,
-        volumes: Default::default(),
+        volumes,
         resources: None,
         requires: None,
         health: None,
@@ -483,16 +526,26 @@ fn restore_dir_modes(modes: &std::collections::BTreeMap<PathBuf, u32>) {
 /// collected in `deferred` and restored by the caller once EVERY layer has
 /// been applied, since a later layer may still add files to an earlier
 /// layer's directory.
-fn apply_layer_tar(
-    reader: impl Read,
-    gzipped: bool,
+#[derive(Clone, Copy)]
+enum LayerComp {
+    Gzip,
+    Zstd,
+    None,
+}
+
+fn apply_layer_tar<'a>(
+    reader: impl Read + 'a,
+    comp: LayerComp,
     rootfs: &Path,
     deferred: &mut std::collections::BTreeMap<PathBuf, u32>,
 ) -> Result<()> {
-    let reader: Box<dyn Read> = if gzipped {
-        Box::new(flate2::read::GzDecoder::new(reader))
-    } else {
-        Box::new(reader)
+    let reader: Box<dyn Read + 'a> = match comp {
+        LayerComp::Gzip => Box::new(flate2::read::GzDecoder::new(reader)),
+        LayerComp::Zstd => Box::new(
+            zstd::stream::read::Decoder::new(reader)
+                .map_err(|e| Error::Runtime(format!("zstd layer decode: {e}")))?,
+        ),
+        LayerComp::None => Box::new(reader),
     };
     let mut archive = tar::Archive::new(reader);
     archive.set_preserve_permissions(true);
@@ -696,7 +749,7 @@ mod layer_tests {
 
         apply_layer_tar(
             &readonly_dir_then_child()[..],
-            false,
+            LayerComp::None,
             &rootfs,
             &mut deferred,
         )

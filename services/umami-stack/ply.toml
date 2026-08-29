@@ -1,0 +1,13 @@
+# umami — self-hosted, privacy-first web analytics — as a ply stack.
+# The whole product is this one file: an app + its database, wired.
+#
+#   ply up                      # run the stack locally
+#
+# umami is a Next.js app that needs Postgres. `after` gates its start on
+# the database being healthy; the DATABASE_URL points at the db member by
+# its bridge name (`umami-db.ply`). Change the two passwords/secret before
+# anything real.
+
+[stack]
+umami-db = { run = "postgres@17", env = { POSTGRES_PASSWORD = "change-me", POSTGRES_DB = "umami" } }
+umami = { run = "umami@3", after = "umami-db", publish = "internal:3000", env = { DATABASE_URL = "postgresql://postgres:change-me@umami-db.ply:5432/umami", DATABASE_TYPE = "postgresql", APP_SECRET = "change-me-to-a-random-string" } }

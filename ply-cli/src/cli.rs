@@ -233,6 +233,12 @@ pub struct RunArgs {
     #[arg(value_name = "IMAGE")]
     pub image: String,
 
+    /// Name this running app instead of using the image's own name. Sets its
+    /// state pool, its `<name>.ply` address, and what `--after` waits on — so
+    /// two runs of one image (two databases, say) don't collide.
+    #[arg(long, value_name = "NAME")]
+    pub name: Option<String>,
+
     /// Registry source for name references (any `[sources]` spec)
     #[arg(long, value_name = "SPEC", default_value = ply_core::catalog::OFFICIAL_RUN_SOURCE)]
     pub source: String,
@@ -306,6 +312,12 @@ pub struct RunArgs {
     /// obtains the certificate. Point the domain's DNS at this host first.
     #[arg(long, value_name = "HOST")]
     pub domain: Vec<String>,
+
+    /// Back a container path with a managed, chowned volume (repeatable).
+    /// For imported apps that write a data dir as a non-root user but whose
+    /// image never declared a VOLUME (n8n's /home/node/.n8n).
+    #[arg(long, value_name = "PATH")]
+    pub volume: Vec<String>,
 }
 
 #[derive(Args)]

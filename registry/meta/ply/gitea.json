@@ -1,0 +1,8 @@
+{
+  "type": "app",
+  "description": "Gitea \u2014 lightweight self-hosted Git service (issues, PRs, CI). Composes the git layer; pairs with Postgres in a stack.",
+  "license": "MIT",
+  "homepage": "https://gitea.io",
+  "contract": "DB_HOST=<db>.ply:5432\nDB_NAME=gitea\nDB_USER=postgres\nDB_PASSWD=\nGITEA_ADMIN_USER=admin\nGITEA_ADMIN_PASSWORD=\nGITEA_ADMIN_EMAIL=\nGITEA_ROOT_URL=",
+  "publish": "internal:3000"
+}

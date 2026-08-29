@@ -1,0 +1,12 @@
+# umami analytics. Reaches its database at umami-db.ply (the bridge name of
+# the umami-db deployment). Serve it at a hostname via the edge with a
+# `domain` line, e.g. domain = ["analytics.example.com"].
+app = "umami"
+stack = "umami"
+after = ["umami-db"]
+publish = ["internal:3000"]
+
+[env]
+DATABASE_URL = "postgresql://postgres:change-me@umami-db.ply:5432/umami"
+DATABASE_TYPE = "postgresql"
+APP_SECRET = "change-me-to-a-random-string"

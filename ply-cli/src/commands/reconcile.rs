@@ -232,17 +232,17 @@ fn apply(name: &str, spec: &Spec, app_names: &mut BTreeSet<String>) -> Result<Ap
         _ => unreachable!("Spec::parse enforces exactly one"),
     };
 
-    // Instance state is keyed by the app name INSIDE the image — two
-    // deployments of one app would fight over a single pool.
-    let manifest = ply_core::image::read::read_manifest(&image)?;
-    if !app_names.insert(manifest.package.name.clone()) {
-        bail!(
-            "another deployment already runs app `{}` — one deployment per app name",
-            manifest.package.name
-        );
+    // The deployment name is the running app's identity (passed as --name):
+    // its state pool, its `.ply` DNS name, its `--after` target. Keying on
+    // the file name lets two deployments of one image (two postgres, say)
+    // coexist — each addressable as <name>.ply.
+    if !app_names.insert(name.to_string()) {
+        bail!("two deployments named `{name}` — names must be unique");
     }
 
     let mut flags = spec.flags();
+    flags.push("--name".into());
+    flags.push(name.to_string());
     if spec.grant_links {
         flags.push("--grant-links".into());
     }
@@ -529,6 +529,7 @@ fn build_from_repo(name: &str, spec: &Spec) -> Result<(PathBuf, String, bool)> {
         std::fs::create_dir_all(checkout.join(".tmp"))?;
         let code = ply_core::runtime::run::run(&ply_core::runtime::run::RunOptions {
             image: outcome.image_path,
+            name: None,
             cli_env,
             allow_insecure: true,
             scale: 1,
@@ -539,6 +540,7 @@ fn build_from_repo(name: &str, spec: &Spec) -> Result<(PathBuf, String, bool)> {
             privileged: false,
             entrypoint: None,
             domains: vec![],
+            volumes: vec![],
         })
         .context("running the build container")?;
         if code != 0 {

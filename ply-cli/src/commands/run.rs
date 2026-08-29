@@ -165,6 +165,7 @@ pub fn exec(args: RunArgs) -> Result<()> {
 
     let code = run(&RunOptions {
         image,
+        name: args.name.clone(),
         cli_env,
         allow_insecure: true, // lockfile digests pin content; run never resolves
         scale: args.scale,
@@ -176,6 +177,7 @@ pub fn exec(args: RunArgs) -> Result<()> {
         privileged: args.privileged,
         entrypoint: dev_entrypoint,
         domains: args.domain.clone(),
+        volumes: args.volume.clone(),
     })?;
     std::process::exit(code);
 }

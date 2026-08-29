@@ -1,0 +1,5 @@
+{
+  "type": "layer",
+  "description": "git \u2014 the version control system, for apps that shell out to it (gitea, etc). Debian trixie build.",
+  "license": "GPL-2.0"
+}

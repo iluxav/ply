@@ -24,6 +24,11 @@ use crate::store::Store;
 
 pub struct RunOptions {
     pub image: PathBuf,
+    /// `--name`: override the app's identity (state pool, `.ply` DNS name,
+    /// `--after` target, control dir). Defaults to the image's own name.
+    /// A deployment passes its file name so two deployments of one image
+    /// (two postgres, say) get distinct identities instead of colliding.
+    pub name: Option<String>,
     /// CLI -e KEY=VALUE overrides (highest precedence).
     pub cli_env: Vec<(String, String)>,
     pub allow_insecure: bool,
@@ -52,6 +57,11 @@ pub struct RunOptions {
     /// `--domain` hostnames for the edge (recorded in instance state; the
     /// proxy watcher renders them into vhost config). TLS is Caddy's job.
     pub domains: Vec<String>,
+    /// `--volume`: extra container paths to back with managed, chowned
+    /// volumes, added to whatever the manifest declares. For imported apps
+    /// whose image doesn't declare a VOLUME but still writes a data dir as a
+    /// non-root user (n8n's ~/.n8n).
+    pub volumes: Vec<String>,
 }
 
 /// Live wiring for a published pool, threaded through instance launches.
@@ -105,6 +115,14 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
         opts.entrypoint.as_deref(),
         &store,
     )?;
+    // The app's runtime identity: what its state pool, `.ply` name, control
+    // dir, and `--after` matching key on. Defaults to the image's name;
+    // `--name` overrides it (so two runs of one image get distinct
+    // identities) WITHOUT changing the filesystem prefix `/opt/<name>`.
+    let identity = opts
+        .name
+        .clone()
+        .unwrap_or_else(|| ctx.manifest.package.name.clone());
 
     // Only apps that need a second uid to exist care about the subid range:
     // a declared [package] user, or an import whose entrypoint will gosu down.
@@ -168,7 +186,7 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
     // after --publish so a taken port still fails fast, before any launch so
     // the wait happens exactly once per parent.
     if !opts.after.is_empty() {
-        let me = &ctx.manifest.package.name;
+        let me = &identity;
         if opts.after.iter().any(|a| a == me) {
             return Err(Error::Runtime(format!(
                 "--after {me}: an app cannot wait for itself"
@@ -199,13 +217,12 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
     // side) — but say so, and point at deploy for the replace case.
     let already_running = state::list()?
         .iter()
-        .filter(|s| s.app == ctx.manifest.package.name && s.alive())
+        .filter(|s| s.app == identity && s.alive())
         .count();
     if already_running > 0 {
         eprintln!(
-            "ply: note: {} already has {already_running} running instance(s) — this run ADDS instances (canary).\n\
+            "ply: note: {identity} already has {already_running} running instance(s) — this run ADDS instances (canary).\n\
              ply:       to replace the running version instead: ply deploy {}",
-            ctx.manifest.package.name,
             opts.image.display()
         );
     }
@@ -423,7 +440,7 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
         // proxy watcher; the parent is already awake every 150ms.
         if !shutting_down && last_control_poll.elapsed() >= std::time::Duration::from_secs(2) {
             last_control_poll = std::time::Instant::now();
-            let app_name = ctx.manifest.package.name.clone();
+            let app_name = identity.clone();
             // a pointer file alone is a deploy request (file-only protocol)
             if crate::paths::apps_dir()
                 .join(&app_name)
@@ -904,6 +921,27 @@ impl Drop for Instance {
     }
 }
 
+/// A stable, filesystem-safe volume name from a container path
+/// (`/home/node/.n8n` -> `n8n`), for CLI-added volumes.
+fn volume_name_from_path(path: &str) -> String {
+    let base = path
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or("")
+        .trim_start_matches('.');
+    let name: String = base
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let name = name.trim_matches('-').to_string();
+    if name.is_empty() {
+        "data".into()
+    } else {
+        name
+    }
+}
+
 fn launch_instance(
     ctx: &AppContext,
     opts: &RunOptions,
@@ -918,8 +956,13 @@ fn launch_instance(
     let env = &ctx.env;
     let app_image = &ctx.image;
     let dep_images = &ctx.dep_images;
-    let app = &manifest.package.name;
-    let (instance_dir, n) = allocate_instance(app, slot)?;
+    // Identity (state pool, .ply name, volumes, control) comes from --name
+    // when given; the image's own name still drives the /opt/<name> prefix.
+    let app: String = opts
+        .name
+        .clone()
+        .unwrap_or_else(|| manifest.package.name.clone());
+    let (instance_dir, n) = allocate_instance(&app, slot)?;
     let run_user = manifest
         .package
         .user
@@ -933,14 +976,27 @@ fn launch_instance(
     // Declared volumes only — never --link, whose source is the user's own
     // working tree and must not have its ownership rewritten.
     let mut volume_targets: Vec<String> = Vec::new();
-    for (name, volume) in &manifest.volumes {
+    // Manifest volumes plus any added with --volume: a deployment can give an
+    // imported app a writable data dir its image never declared.
+    let mut all_volumes = manifest.volumes.clone();
+    for path in &opts.volumes {
+        let vname = volume_name_from_path(path);
+        all_volumes
+            .entry(vname)
+            .or_insert_with(|| crate::manifest::Volume {
+                path: path.clone(),
+                scope: "instance".into(),
+                ephemeral: false,
+            });
+    }
+    for (name, volume) in &all_volumes {
         let suffix = if volume.scope == "shared" {
             "shared".to_string()
         } else {
             n.to_string()
         };
         let host_dir = crate::paths::volumes_dir()
-            .join(app)
+            .join(&app)
             .join(format!("{name}.{suffix}"));
         std::fs::create_dir_all(&host_dir).map_err(|source| Error::Io {
             path: host_dir.clone(),
@@ -1064,7 +1120,7 @@ fn launch_instance(
             .workdir
             .clone()
             .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(format!("/opt/{app}"))),
+            .unwrap_or_else(|| PathBuf::from(format!("/opt/{}", manifest.package.name))),
         env: spec_env,
         argv: entrypoint.to_vec(),
         binds,
@@ -1166,14 +1222,14 @@ fn launch_instance(
     };
     state.save()?;
     if !rootless {
-        hosts::add_entry(app, n, ip)?; // /etc/hosts needs root
+        hosts::add_entry(&app, n, ip)?; // /etc/hosts needs root
     }
 
     // Parent half of the log tee: our copy of the write end must close or
     // the copier would never see EOF when the instance dies.
     drop(spec.log_fd);
     {
-        let mut ring = crate::runtime::logring::RingWriter::create(app, n)?;
+        let mut ring = crate::runtime::logring::RingWriter::create(&app, n)?;
         let log_rx = log_rx;
         std::thread::spawn(move || {
             use std::io::{Read, Write};

@@ -1,0 +1,6 @@
+{
+  "type": "layer",
+  "description": "The plyvm microVM kernel \u2014 Linux 6.12 tinyconfig + virtio/squashfs/overlay builtin, 4.5 MiB. Loaded directly by plyvm on Apple Silicon.",
+  "license": "GPL-2.0",
+  "homepage": "https://github.com/iluxav/plyvm"
+}

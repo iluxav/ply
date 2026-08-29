@@ -1,0 +1,6 @@
+app = "postgres"
+stack = "gitea"
+publish = ["internal:5432"]
+[env]
+POSTGRES_PASSWORD = "change-me"
+POSTGRES_DB = "gitea"

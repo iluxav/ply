@@ -1,0 +1,9 @@
+# umami's database — the self-backing postgres keg. Set BACKUP_DEST +
+# RCLONE_S3_* (or via a shared env_file) to turn on daily backups.
+app = "postgres"
+stack = "umami"
+publish = ["internal:5432"]
+
+[env]
+POSTGRES_PASSWORD = "change-me"
+POSTGRES_DB = "umami"
