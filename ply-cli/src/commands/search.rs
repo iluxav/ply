@@ -206,7 +206,7 @@ mod tests {
                 .iter()
                 .map(|(v, img, b)| ImageVersion {
                     version: (*v).into(),
-                    img: (*img).into(),
+                    img: Some((*img).into()),
                     bytes: *b,
                     ..Default::default()
                 })

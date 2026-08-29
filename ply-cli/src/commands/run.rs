@@ -77,7 +77,7 @@ pub fn exec(args: RunArgs) -> Result<()> {
         let dir = image_path.to_path_buf();
         if ply_core::stack::load(&dir)?.is_some() {
             bail!(
-                "{} is a [stack] — `ply up` starts stacks; `ply run` runs one app",
+                "{} is a stack (it has [[app]]) — `ply up` starts stacks; `ply run` runs one app",
                 dir.join("ply.toml").display()
             );
         }
@@ -127,7 +127,16 @@ pub fn exec(args: RunArgs) -> Result<()> {
                 eprintln!("ply: resolved {} -> {resolved}", args.image);
                 path.to_string_lossy().into_owned()
             }
-            None => args.image.clone(),
+            None => {
+                // A `namespace/name` ref that resolves to a stack → `ply up`.
+                if args.image.contains('/')
+                    && !args.image.contains("://")
+                    && ply_core::catalog::fetch_stack(&args.image, &args.source).is_ok()
+                {
+                    bail!("{0} is a stack — run it with `ply up {0}`", args.image);
+                }
+                args.image.clone()
+            }
         }
     } else {
         args.image.clone()

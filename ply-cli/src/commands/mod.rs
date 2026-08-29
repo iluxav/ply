@@ -41,6 +41,7 @@ pub fn dispatch(command: Command) -> Result<()> {
         Command::Ps(args) => ps::exec(args),
         Command::Stats(args) => stats::exec(args),
         Command::Check(args) => lifecycle::check(args),
+        Command::Inspect(args) => images::inspect(args),
         Command::Import(args) => images::import(args),
         Command::Bundle(args) => images::bundle(args),
         Command::Craft(command) => craft::dispatch(command),

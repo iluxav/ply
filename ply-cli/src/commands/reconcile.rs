@@ -16,56 +16,85 @@ pub fn exec() -> Result<()> {
         bail!("ply reconcile writes systemd units — run as root");
     }
     fleet_sync(); // fleet hosts: pull the repo first, then converge on it
-    let specs = deployments::list()?;
+    let files = deployments::list_files()?;
     let mut desired: BTreeSet<String> = BTreeSet::new();
     let mut app_names: BTreeSet<String> = BTreeSet::new();
     let mut changed_units = false;
 
-    for (name, spec) in specs {
+    for (name, path) in files {
         if !valid_name(&name) {
             deployments::write_status(&name, false, "deployment names are [a-z0-9-]");
             continue;
         }
-        let spec = match spec {
-            Ok(spec) => spec,
+        let text = match std::fs::read_to_string(&path) {
+            Ok(t) => t,
             Err(e) => {
-                deployments::write_status(&name, false, &format!("spec: {e}"));
+                deployments::write_status(&name, false, &format!("read: {e}"));
                 continue;
             }
         };
-        // Cadence discipline. A spec file touched at/after its last status
-        // is an explicit order — converge it. Untouched specs on a
-        // background beat (the timer, another app's change): auto = false
-        // holds at the current artifact, and a recent failure backs off
-        // instead of re-running an expensive build every minute.
-        if !touched_since_status(&name) {
-            if let Some((ok, ts)) = deployments::read_status(&name) {
-                let hold_manual = !spec.auto;
-                let hold_backoff = !ok && now_unix().saturating_sub(ts) < FAIL_BACKOFF_SECS;
-                if hold_manual || hold_backoff {
+        // A file with [[app]] is a stack — expand into one unit per member;
+        // otherwise it's a single-app deployment.
+        match ply_core::stack::parse(&text, &path) {
+            Ok(Some(stack)) => {
+                // Cadence at the stack-file granularity; held → keep the
+                // member units alive but don't re-converge this beat.
+                if held(&name, true) {
+                    for m in &stack.members {
+                        desired.insert(m.name.clone());
+                    }
+                    continue;
+                }
+                converge_stack(
+                    &name,
+                    stack,
+                    &mut desired,
+                    &mut app_names,
+                    &mut changed_units,
+                );
+            }
+            Ok(None) => {
+                let spec = match Spec::parse(&text) {
+                    Ok(spec) => spec,
+                    Err(e) => {
+                        deployments::write_status(&name, false, &format!("spec: {e}"));
+                        continue;
+                    }
+                };
+                // Cadence discipline. A spec file touched at/after its last
+                // status is an explicit order — converge it. Untouched specs
+                // on a background beat (the timer, another app's change):
+                // auto = false holds at the current artifact, and a recent
+                // failure backs off instead of rebuilding every minute.
+                if held(&name, spec.auto) {
                     desired.insert(name.clone());
                     continue;
                 }
-            }
-        }
-        match apply(&name, &spec, &mut app_names) {
-            Ok(applied) => {
-                changed_units |= applied.changed;
-                desired.insert(name.clone());
-                deployments::write_status(&name, true, &applied.detail);
-                // journal state changes only — "unchanged" runs are silence
-                if !applied.detail.starts_with("unchanged") {
-                    ply_core::runtime::events::emit(&name, "deploy", &applied.detail);
+                match apply(&name, &spec, &mut app_names) {
+                    Ok(applied) => {
+                        changed_units |= applied.changed;
+                        desired.insert(name.clone());
+                        deployments::write_status(&name, true, &applied.detail);
+                        // journal state changes only — "unchanged" is silence
+                        if !applied.detail.starts_with("unchanged") {
+                            ply_core::runtime::events::emit(&name, "deploy", &applied.detail);
+                        }
+                    }
+                    Err(e) => {
+                        // A failed attempt is NOT a deleted spec: the
+                        // deployment stays desired, its unit untouched. Only a
+                        // removed FILE may orphan a unit.
+                        desired.insert(name.clone());
+                        deployments::write_status(&name, false, &format!("{e:#}"));
+                        ply_core::runtime::events::emit(&name, "deploy-failed", &format!("{e:#}"));
+                        eprintln!("ply: reconcile {name}: {e:#}");
+                    }
                 }
             }
             Err(e) => {
-                // A failed attempt is NOT a deleted spec: the deployment
-                // stays desired, its current unit stays untouched. Only a
-                // removed FILE may orphan a unit.
-                desired.insert(name.clone());
+                // has [[app]] but malformed, or the file is not valid TOML
                 deployments::write_status(&name, false, &format!("{e:#}"));
-                ply_core::runtime::events::emit(&name, "deploy-failed", &format!("{e:#}"));
-                eprintln!("ply: reconcile {name}: {e:#}");
+                continue;
             }
         }
     }
@@ -149,6 +178,97 @@ fn touched_since_status(name: &str) -> bool {
 struct Applied {
     changed: bool,
     detail: String,
+}
+
+/// Cadence: hold at the current artifact when the file wasn't touched since
+/// its last status and either it's manual (`auto = false`) or a recent
+/// failure is still backing off. A stack file is always `auto = true` (its
+/// members are registry apps that follow the latest, like an `app=` spec).
+fn held(name: &str, auto: bool) -> bool {
+    if touched_since_status(name) {
+        return false;
+    }
+    match deployments::read_status(name) {
+        Some((ok, ts)) => !auto || (!ok && now_unix().saturating_sub(ts) < FAIL_BACKOFF_SECS),
+        None => false,
+    }
+}
+
+/// Expand a stack file into one managed unit per member. Each member runs
+/// under `--name <member>` (its `.ply` name, its `--after` target), so the
+/// members wire to each other exactly as they do under `ply up`. `$VAR`
+/// holes fill from the stack's `env_file` (root-owned, resolved against the
+/// deployments dir) plus the process environment. A member that fails leaves
+/// its unit in place (desired), like any single deployment.
+fn converge_stack(
+    name: &str,
+    stack: ply_core::stack::Stack,
+    desired: &mut BTreeSet<String>,
+    app_names: &mut BTreeSet<String>,
+    changed_units: &mut bool,
+) {
+    let mut file_env: std::collections::BTreeMap<String, String> = Default::default();
+    if let Some(ef) = &stack.env_file {
+        let path = resolve_secret(ef);
+        match ply_core::runtime::run::parse_env_file(std::path::Path::new(&path)) {
+            Ok(pairs) => file_env = pairs.into_iter().collect(),
+            Err(e) => {
+                deployments::write_status(name, false, &format!("env_file {path}: {e:#}"));
+                // keep the members' units alive despite the missing secrets
+                for m in &stack.members {
+                    desired.insert(m.name.clone());
+                }
+                return;
+            }
+        }
+    }
+    let lookup = |k: &str| file_env.get(k).cloned().or_else(|| std::env::var(k).ok());
+    let stack_label = stack.name.as_deref();
+
+    let mut oks = 0usize;
+    let mut errs: Vec<String> = Vec::new();
+    for member in &stack.members {
+        // reserve the unit first: a failed beat must not orphan it
+        desired.insert(member.name.clone());
+        let spec = match Spec::from_stack_member(member, stack_label, &lookup) {
+            Ok(s) => s,
+            Err(e) => {
+                deployments::write_status(&member.name, false, &format!("{e:#}"));
+                errs.push(format!("{}: {e}", member.name));
+                continue;
+            }
+        };
+        match apply(&member.name, &spec, app_names) {
+            Ok(applied) => {
+                *changed_units |= applied.changed;
+                deployments::write_status(&member.name, true, &applied.detail);
+                if !applied.detail.starts_with("unchanged") {
+                    ply_core::runtime::events::emit(&member.name, "deploy", &applied.detail);
+                }
+                oks += 1;
+            }
+            Err(e) => {
+                deployments::write_status(&member.name, false, &format!("{e:#}"));
+                ply_core::runtime::events::emit(&member.name, "deploy-failed", &format!("{e:#}"));
+                eprintln!("ply: reconcile {}: {e:#}", member.name);
+                errs.push(format!("{}: {e}", member.name));
+            }
+        }
+    }
+    // aggregate status on the stack file itself — the deploy screen's row
+    if errs.is_empty() {
+        deployments::write_status(name, true, &format!("stack: {oks} member(s) ok"));
+    } else {
+        deployments::write_status(
+            name,
+            false,
+            &format!(
+                "stack: {oks} ok, {} failed — {}",
+                errs.len(),
+                errs.join("; ")
+            ),
+        );
+    }
 }
 
 fn apply(name: &str, spec: &Spec, app_names: &mut BTreeSet<String>) -> Result<Applied> {

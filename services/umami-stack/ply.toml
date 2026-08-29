@@ -1,13 +1,30 @@
-# umami — self-hosted, privacy-first web analytics — as a ply stack.
+# umami — privacy-first web analytics — as a ply stack.
 # The whole product is this one file: an app + its database, wired.
 #
-#   ply up                      # run the stack locally
+#   PW=s3cret APP_SECRET=$(openssl rand -hex 16) ply up
 #
-# umami is a Next.js app that needs Postgres. `after` gates its start on
-# the database being healthy; the DATABASE_URL points at the db member by
-# its bridge name (`umami-db.ply`). Change the two passwords/secret before
-# anything real.
+# Each [[app]] block is one `ply run`. umami is a Next.js app that needs
+# Postgres; `after` gates its start on the database. DATABASE_URL points at
+# the db member by its bridge name (umami-db.ply). `$PW`/`$APP_SECRET` are
+# holes filled from the environment (or an --env-file) at launch — an
+# undefined one is a hard error, never a silent empty value.
 
 [stack]
-umami-db = { run = "postgres@17", env = { POSTGRES_PASSWORD = "change-me", POSTGRES_DB = "umami" } }
-umami = { run = "umami@3", after = "umami-db", publish = "internal:3000", env = { DATABASE_URL = "postgresql://postgres:change-me@umami-db.ply:5432/umami", DATABASE_TYPE = "postgresql", APP_SECRET = "change-me-to-a-random-string" } }
+name = "umami"
+version = "1.0.0"
+description = "Privacy-first, self-hosted web analytics."
+
+[[app]]
+run  = "postgres@17"
+name = "umami-db"
+e    = ["POSTGRES_PASSWORD=$PW", "POSTGRES_DB=umami"]
+
+[[app]]
+run     = "umami@3"
+after   = ["umami-db"]
+publish = ["internal:3000"]
+e = [
+  "DATABASE_URL=postgresql://postgres:$PW@umami-db.ply:5432/umami",
+  "DATABASE_TYPE=postgresql",
+  "APP_SECRET=$APP_SECRET",
+]

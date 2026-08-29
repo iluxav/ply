@@ -22,11 +22,25 @@ pub struct Catalog {
     pub packages: Vec<Package>,
 }
 
+/// What a package IS. `app` = one runnable image; `layer` = a keg consumed
+/// via `[dependencies]`; `stack` = no image of its own, a list of runs.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PackageKind {
+    #[default]
+    App,
+    Layer,
+    Stack,
+}
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Package {
     #[serde(default)]
     pub namespace: String,
     pub name: String,
+    /// Always emitted, so consumers can filter without guessing.
+    #[serde(rename = "type", default)]
+    pub kind: PackageKind,
     #[serde(default)]
     pub description: String,
     #[serde(default)]
@@ -37,18 +51,92 @@ pub struct Package {
     pub versions: Vec<ImageVersion>,
 }
 
+/// A dependency a version was built on, as recorded in the catalog (derived
+/// from the image's lockfile at push).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+pub struct Dep {
+    pub name: String,
+    #[serde(default)]
+    pub version: String,
+}
+
+/// One member of a `stack` version — the catalog serialization of a `[[app]]`
+/// block. Mirrors the stack file verbatim so a consumer can display or deploy
+/// a stack without fetching anything.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+pub struct StackApp {
+    pub run: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub e: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub after: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub publish: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub volume: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub domain: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale: Option<u32>,
+}
+
+impl StackApp {
+    /// Serialize a parsed stack member into its catalog form.
+    pub fn from_member(m: &crate::stack::Member) -> StackApp {
+        use crate::stack::MemberSource;
+        let run = match &m.source {
+            MemberSource::Run { name, version } => match version {
+                Some(v) => format!("{name}@{v}"),
+                None => name.clone(),
+            },
+            MemberSource::Path(p) => p.display().to_string(),
+            MemberSource::Url(u) => u.clone(),
+        };
+        StackApp {
+            run,
+            name: Some(m.name.clone()),
+            e: m.env.iter().map(|(k, v)| format!("{k}={v}")).collect(),
+            after: m.after.clone(),
+            publish: m.publish.clone(),
+            volume: m.volume.clone(),
+            domain: m.domain.clone(),
+            scale: m.scale,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct ImageVersion {
     pub version: String,
-    pub img: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arch: Option<String>,
+    /// Canonical location: a full, http-fetchable URL to the artifact
+    /// (image, or the stack toml for a `stack`). Always present in v2.
     #[serde(default)]
+    pub src: String,
+    /// Image filename; serialized as `null` for a stack (no image of its
+    /// own) — the key is always present so consumers never guess.
+    #[serde(default)]
+    pub img: Option<String>,
+    /// Legacy pre-v2 field: a bare path. Read-tolerated, never written.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub path: String,
     #[serde(default)]
     pub bytes: u64,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub pushed_at: String,
+    /// Derived from the image manifest at push (never hand-authored).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub volumes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dependencies: Vec<Dep>,
+    /// For a `stack` version: the run sequence, mirroring the `[[app]]` array.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub apps: Vec<StackApp>,
 }
 
 impl ImageVersion {
@@ -57,7 +145,13 @@ impl ImageVersion {
     pub fn arch(&self) -> &str {
         match self.arch.as_deref() {
             Some(a) if !a.is_empty() => a,
-            _ if self.img.ends_with("-arm64.img") => "arm64",
+            _ if self
+                .img
+                .as_deref()
+                .is_some_and(|i| i.ends_with("-arm64.img")) =>
+            {
+                "arm64"
+            }
             _ => "x64",
         }
     }
@@ -310,6 +404,153 @@ fn version_matches(version: &semver::Version, want: &str) -> bool {
     parts.iter().zip(actual.iter()).all(|(w, a)| w == a)
 }
 
+/// The catalog metadata a push carries, derived on the client from the
+/// image's own embedded manifest + lockfile (client-derives, server-stores).
+/// The server records these verbatim — the bytes' sha256 is what it proves;
+/// this is descriptive, and keeping the one squashfs reader (Rust) is why it
+/// is derived here and not in the push Worker.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PushMeta {
+    #[serde(rename = "type")]
+    pub kind: PackageKind,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub volumes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dependencies: Vec<Dep>,
+    /// For a `stack` push: the run sequence, mirroring the `[[app]]` array.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub apps: Vec<StackApp>,
+}
+
+/// Read a stack file and derive the catalog metadata a stack push carries:
+/// `type = stack` and `apps[]` (the `[[app]]` sequence, holes intact — the
+/// registry stores the template; consumers fill `$VAR` at deploy).
+pub fn derive_stack_meta(stack: &crate::stack::Stack) -> PushMeta {
+    PushMeta {
+        kind: PackageKind::Stack,
+        apps: stack.members.iter().map(StackApp::from_member).collect(),
+        ..Default::default()
+    }
+}
+
+/// Read an image's embedded manifest + lockfile and derive its catalog
+/// metadata. `type` is app (has an entrypoint) or layer; `volumes` are the
+/// declared mount paths; `links` the `[requests]` host mounts; `dependencies`
+/// the resolved lockfile closure (what it was built on).
+pub fn derive_push_meta(image: &std::path::Path) -> Result<PushMeta> {
+    let manifest = crate::image::read::read_manifest(image)?;
+    let kind = if manifest.is_app() {
+        PackageKind::App
+    } else {
+        PackageKind::Layer
+    };
+    let mut volumes: Vec<String> = manifest.volumes.values().map(|v| v.path.clone()).collect();
+    volumes.sort();
+    volumes.dedup();
+    let links = manifest
+        .requests
+        .as_ref()
+        .map(|r| r.links.clone())
+        .unwrap_or_default();
+    let dependencies = crate::image::read::read_lockfile(image)?
+        .map(|lf| {
+            lf.packages
+                .iter()
+                .map(|p| Dep {
+                    name: p.name.clone(),
+                    version: p.version.to_string(),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(PushMeta {
+        kind,
+        volumes,
+        links,
+        dependencies,
+        apps: Vec::new(),
+    })
+}
+
+fn split_ref_version(s: &str) -> (&str, Option<String>) {
+    match s.split_once('@') {
+        Some((n, v)) => (n, Some(v.to_string())),
+        None => (s, None),
+    }
+}
+
+fn pick_stack_version<'a>(pkg: &'a Package, want: Option<&str>) -> Option<&'a ImageVersion> {
+    pkg.versions
+        .iter()
+        .filter(|v| match want {
+            Some(w) => semver::Version::parse(&v.version)
+                .map(|sv| version_matches(&sv, w))
+                .unwrap_or(false),
+            None => true,
+        })
+        .max_by_key(|v| version_key(&v.version))
+}
+
+/// Resolve a registry stack reference to its parsed Stack: load the namespace
+/// catalog, confirm the package is a stack, fetch the version's `src` (the
+/// stack toml, holes intact), and parse it. `reference` is `namespace/name`
+/// (optionally `@version`) or a bare `name` resolved via `default_source`.
+pub fn fetch_stack(reference: &str, default_source: &str) -> Result<crate::stack::Stack> {
+    let (source_spec, name, want) = match reference.split_once('/') {
+        Some((ns, rest)) => {
+            let (name, want) = split_ref_version(rest);
+            (
+                format!("https://registry.plybox.sh/{ns}/{{package}}"),
+                name.to_string(),
+                want,
+            )
+        }
+        None => {
+            let (name, want) = split_ref_version(reference);
+            (default_source.to_string(), name.to_string(), want)
+        }
+    };
+    let source = Source::parse(&source_spec, false)?;
+    let catalog = Catalog::load(&source)?;
+    let pkg = catalog.get(&name).ok_or_else(|| {
+        Error::Source(format!(
+            "no `{reference}` in the registry — `ply search {name}` lists what exists"
+        ))
+    })?;
+    if pkg.kind != PackageKind::Stack {
+        let what = match pkg.kind {
+            PackageKind::App => "an app",
+            PackageKind::Layer => "a layer",
+            PackageKind::Stack => "a stack",
+        };
+        return Err(Error::Source(format!(
+            "`{reference}` is {what}, not a stack — `ply run {reference}` runs an app"
+        )));
+    }
+    let version = pick_stack_version(pkg, want.as_deref()).ok_or_else(|| {
+        Error::Source(format!(
+            "no published `{reference}`{}",
+            want.map(|w| format!("@{w}")).unwrap_or_default()
+        ))
+    })?;
+    if version.src.is_empty() {
+        return Err(Error::Source(format!(
+            "`{reference}` {}: the catalog entry has no src URL to fetch",
+            version.version
+        )));
+    }
+    let text = http_get_string(&version.src)
+        .map_err(|e| Error::Source(format!("fetching {} failed ({e})", version.src)))?;
+    crate::stack::parse(&text, std::path::Path::new(reference))?.ok_or_else(|| {
+        Error::Source(format!(
+            "`{reference}` src is not a stack file (no [[app]]): {}",
+            version.src
+        ))
+    })
+}
+
 /// Resolve a name reference against a source, fetch the newest matching app
 /// image into the store, and return its path.
 ///
@@ -451,7 +692,7 @@ mod tests {
         let ffmpeg = cat.get("ffmpeg").expect("ffmpeg in fixture");
         assert_eq!(ffmpeg.namespace, "ply");
         assert!(!ffmpeg.versions.is_empty());
-        assert!(ffmpeg.versions[0].img.ends_with(".img"));
+        assert!(ffmpeg.versions[0].img.as_deref().unwrap().ends_with(".img"));
         assert!(cat.get("nope").is_none());
     }
 
@@ -476,13 +717,105 @@ mod tests {
     fn explicit_arch_wins_over_filename() {
         let v = ImageVersion {
             version: "1.0.0".into(),
-            img: "x-1.0.0-linux-arm64.img".into(),
+            img: Some("x-1.0.0-linux-arm64.img".into()),
             arch: Some("x64".into()),
-            path: String::new(),
-            bytes: 0,
-            pushed_at: String::new(),
+            ..Default::default()
         };
         assert_eq!(v.arch(), "x64");
+    }
+
+    #[test]
+    fn derive_stack_meta_mirrors_members() {
+        let stack = crate::stack::parse(
+            "[stack]\nname=\"umami\"\nversion=\"1.0.0\"\n\n[[app]]\nrun=\"postgres@17\"\nname=\"db\"\ne=[\"POSTGRES_PASSWORD=$PW\"]\n\n[[app]]\nrun=\"umami@3\"\nafter=[\"db\"]\n",
+            std::path::Path::new("p"),
+        )
+        .unwrap()
+        .unwrap();
+        let meta = super::derive_stack_meta(&stack);
+        assert_eq!(meta.kind, PackageKind::Stack);
+        assert_eq!(meta.apps.len(), 2);
+        assert_eq!(meta.apps[0].run, "postgres@17");
+        assert_eq!(meta.apps[0].name.as_deref(), Some("db"));
+        assert_eq!(meta.apps[1].after, vec!["db"]);
+        // `$VAR` holes are preserved verbatim — the registry stores the template
+        assert_eq!(meta.apps[0].e, vec!["POSTGRES_PASSWORD=$PW"]);
+    }
+
+    #[test]
+    fn serializes_v2_shape() {
+        // an app: type=app, src is a URL, derived volumes/deps, no legacy path
+        let app = Package {
+            namespace: "ply".into(),
+            name: "postgres".into(),
+            kind: PackageKind::App,
+            description: "db".into(),
+            versions: vec![ImageVersion {
+                version: "17.10.3".into(),
+                arch: Some("x64".into()),
+                src: "https://registry.plybox.sh/ply/postgres/postgres-17.10.3-linux-x64.img"
+                    .into(),
+                img: Some("postgres-17.10.3-linux-x64.img".into()),
+                bytes: 42,
+                volumes: vec!["/var/lib/postgresql/data".into()],
+                dependencies: vec![Dep {
+                    name: "rclone".into(),
+                    version: "1.68".into(),
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let j = serde_json::to_value(Catalog {
+            packages: vec![app],
+        })
+        .unwrap();
+        assert_eq!(j["packages"][0]["type"], "app");
+        let v = &j["packages"][0]["versions"][0];
+        assert!(v["src"].as_str().unwrap().starts_with("https://"));
+        assert_eq!(v["img"], "postgres-17.10.3-linux-x64.img");
+        assert_eq!(v["volumes"][0], "/var/lib/postgresql/data");
+        assert!(v.get("path").is_none(), "legacy path is never written");
+        assert!(v.get("apps").is_none(), "apps omitted for an app");
+
+        // a stack: img null, apps mirror the [[app]] array, no arch
+        let stack = crate::stack::parse(
+            "[[app]]\nrun=\"postgres@17\"\nname=\"db\"\ne=[\"POSTGRES_PASSWORD=$PW\"]\n\n[[app]]\nrun=\"umami@3\"\nafter=[\"db\"]\npublish=[\"internal:3000\"]\n",
+            std::path::Path::new("p"),
+        )
+        .unwrap()
+        .unwrap();
+        let apps: Vec<StackApp> = stack.members.iter().map(StackApp::from_member).collect();
+        let pkg = Package {
+            namespace: "ply".into(),
+            name: "umami".into(),
+            kind: PackageKind::Stack,
+            versions: vec![ImageVersion {
+                version: "3.0.0".into(),
+                src: "https://registry.plybox.sh/ply/umami/umami-3.0.0.stack.toml".into(),
+                img: None,
+                apps,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let j = serde_json::to_value(Catalog {
+            packages: vec![pkg],
+        })
+        .unwrap();
+        assert_eq!(j["packages"][0]["type"], "stack");
+        let v = &j["packages"][0]["versions"][0];
+        assert!(v["img"].is_null(), "a stack's img is explicit null");
+        assert_eq!(v["apps"][0]["run"], "postgres@17");
+        assert_eq!(v["apps"][0]["name"], "db");
+        assert_eq!(v["apps"][0]["e"][0], "POSTGRES_PASSWORD=$PW");
+        assert_eq!(v["apps"][1]["after"][0], "db");
+        assert_eq!(v["apps"][1]["publish"][0], "internal:3000");
+
+        // and it round-trips back
+        let back: Catalog = serde_json::from_value(j).unwrap();
+        assert_eq!(back.packages[0].kind, PackageKind::Stack);
+        assert_eq!(back.packages[0].versions[0].apps[0].run, "postgres@17");
     }
 
     #[test]
@@ -529,7 +862,7 @@ mod tests {
                 .iter()
                 .map(|(v, img)| ImageVersion {
                     version: (*v).into(),
-                    img: (*img).into(),
+                    img: Some((*img).into()),
                     ..Default::default()
                 })
                 .collect(),

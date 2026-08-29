@@ -44,9 +44,10 @@ pub enum Command {
     /// Run an image (foreground; SIGTERM works; exit code propagates)
     Run(RunArgs),
 
-    /// Start a [stack] — several apps from one ply.toml, in dependency
-    /// order (docker-compose for ply: registry apps + local dirs, wired
-    /// with `after` and per-member env)
+    /// Start a stack — several `ply run`s from one file ([[app]] blocks), in
+    /// dependency order. `ply up` runs the stack in `-C dir`; `ply up
+    /// <namespace>/<name>` fetches and runs a published stack; `ply up
+    /// ./x.stack.toml` runs a stack file.
     Up(UpArgs),
 
     /// Run a command inside a running instance
@@ -87,6 +88,9 @@ pub enum Command {
 
     /// Validate an image, optionally against a host runtime policy
     Check(CheckArgs),
+
+    /// Show an image's derived catalog metadata (type, volumes, links, deps)
+    Inspect(InspectArgs),
 
     /// Import an OCI/Docker image as a self-sufficient (fat) ply image
     Import(ImportArgs),
@@ -322,8 +326,10 @@ pub struct RunArgs {
 
 #[derive(Args)]
 pub struct UpArgs {
-    /// Members to start (with their `after` dependencies); empty = all
-    #[arg(value_name = "MEMBER")]
+    /// Optional stack source first (`<namespace>/<name>` or a `.toml`/dir
+    /// path), then members to start; a bare word is a member. Empty = the
+    /// stack in `-C dir`, all members.
+    #[arg(value_name = "[SOURCE] [MEMBER...]")]
     pub members: Vec<String>,
 
     /// Directory containing the stack ply.toml
@@ -341,6 +347,11 @@ pub struct UpArgs {
     /// How long each member may wait for its `after` dependencies
     #[arg(long, value_name = "DURATION", default_value = "60s")]
     pub after_timeout: String,
+
+    /// Values for `$VAR` holes in the stack (KEY=VALUE lines); the process
+    /// environment is consulted too. An undefined `$VAR` is a hard error.
+    #[arg(long, value_name = "FILE")]
+    pub env_file: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -417,6 +428,17 @@ pub struct CheckArgs {
     /// Runtime policy file to check against (pure function — CI-friendly)
     #[arg(long, value_name = "POLICY")]
     pub against: Option<PathBuf>,
+}
+
+#[derive(Args)]
+pub struct InspectArgs {
+    /// Image file to inspect
+    #[arg(value_name = "IMAGE")]
+    pub image: PathBuf,
+
+    /// Print the derived metadata as JSON (what `ply push` sends)
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Args)]
@@ -700,7 +722,7 @@ pub fn docker_hint(cmd: &str) -> Option<&'static str> {
         "pull" => "dependencies fetch on demand, pinned by ply.lock — there is nothing to pull.\n(`ply sync` pre-fetches a host policy's packages; docs: https://plybox.sh/docs/dependencies/)",
         "tag" => "no tags, on purpose: published versions are immutable — nothing like `:latest` can move.\nBump [package] version and `ply build` instead.",
         "logout" => "signing out is deleting ~/.config/ply/credentials — `ply login` mints a fresh token.\nInstalling never needs an account; only publishing does.",
-        "compose" => "compose is `ply up`: a [stack] ply.toml lists members (registry apps + local dirs) wired with `after` and env.\n(docs: https://plybox.sh/docs/running/)",
+        "compose" => "compose is `ply up`: a stack file lists [[app]] members (registry apps, local dirs, or URLs) wired with `after` and env — each block is one `ply run`.\n(docs: https://plybox.sh/docs/running/)",
         "stop" | "kill" => "Ctrl-C the foreground run, `ply rm <app>`, or `systemctl stop ply-<app>` under systemd.",
         "start" | "restart" => "`ply run IMAGE` starts instances; crash restarts are the [restart] policy's job, reboots are systemd's.\n(docs: https://plybox.sh/docs/deploy/)",
         "inspect" => "`ply check IMAGE` validates an image; `ply ps` / `ply stats` show running instances.",

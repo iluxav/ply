@@ -26,7 +26,7 @@ pub fn dir() -> PathBuf {
 pub const UNIT_MARKER: &str =
     "# managed by `ply reconcile` — edit the deployment file, not this unit";
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Spec {
     /// A runnable app from the registry's apps namespace…
@@ -175,6 +175,52 @@ impl Spec {
         }
         flags
     }
+
+    /// Synthesize a single-app deployment Spec from a stack member, for host
+    /// expansion (reconcile turns a stack file into one unit per member).
+    /// Only registry-ref members are supported on a host — a local
+    /// `run = "./dir"` is a dev-only `ply up` thing, and a URL has no deploy
+    /// lane yet. `$VAR` in the member's env is filled from `lookup`; an
+    /// undefined one is an error, exactly as `ply up`.
+    pub fn from_stack_member(
+        member: &crate::stack::Member,
+        stack_name: Option<&str>,
+        lookup: &impl Fn(&str) -> Option<String>,
+    ) -> Result<Spec> {
+        use crate::stack::MemberSource;
+        let (app, version) = match &member.source {
+            MemberSource::Run { name, version } => (name.clone(), version.clone()),
+            MemberSource::Path(p) => {
+                return Err(Error::Manifest(format!(
+                    "stack member `{}`: `run = \"{}\"` is a local path — a host stack uses registry refs (a local dir is a `ply up` dev thing)",
+                    member.name,
+                    p.display()
+                )))
+            }
+            MemberSource::Url(u) => {
+                return Err(Error::Manifest(format!(
+                    "stack member `{}`: `run = \"{u}\"` is a URL — a host stack uses registry refs for now",
+                    member.name
+                )))
+            }
+        };
+        let env = crate::stack::expand_member_env(member, lookup)?
+            .into_iter()
+            .collect();
+        Ok(Spec {
+            app: Some(app),
+            version,
+            env,
+            publish: member.publish.clone(),
+            domain: member.domain.clone(),
+            volumes: member.volume.clone(),
+            after: member.after.clone(),
+            scale: member.scale,
+            stack: stack_name.map(str::to_string),
+            auto: true,
+            ..Default::default()
+        })
+    }
 }
 
 /// Status lives in a SUBDIRECTORY of the watched dir: systemd's
@@ -216,6 +262,30 @@ pub fn read_status(name: &str) -> Option<(bool, u64)> {
     let raw = std::fs::read_to_string(status_path(name)).ok()?;
     let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
     Some((v.get("ok")?.as_bool()?, v.get("ts")?.as_u64()?))
+}
+
+/// Deployment file paths on this host: (name, path). Same filtering as
+/// `list()` but returns the path — the caller decides single-spec vs stack.
+pub fn list_files() -> Result<Vec<(String, PathBuf)>> {
+    let dir = dir();
+    let mut out = Vec::new();
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(out),
+        Err(source) => return Err(Error::Io { path: dir, source }),
+    };
+    for entry in entries.filter_map(|e| e.ok()) {
+        let file = entry.file_name().to_string_lossy().into_owned();
+        let Some(name) = file.strip_suffix(".toml") else {
+            continue;
+        };
+        if name.starts_with('.') {
+            continue;
+        }
+        out.push((name.to_string(), entry.path()));
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(out)
 }
 
 /// Deployment specs on this host: (name, parse result).
@@ -286,5 +356,57 @@ REDIS_PASSWORD = "s3cret"
         assert!(Spec::parse("app = \"redis\"\nimage = \"/x.img\"\n").is_err());
         assert!(Spec::parse("version = \"8\"\n").is_err());
         assert!(Spec::parse("app = \"redis\"\ntypo = 1\n").is_err());
+    }
+
+    fn stack_of(text: &str) -> crate::stack::Stack {
+        crate::stack::parse(text, std::path::Path::new("p"))
+            .unwrap()
+            .unwrap()
+    }
+
+    #[test]
+    fn stack_member_expands_to_spec() {
+        let stack = stack_of(
+            "[[app]]\nrun=\"postgres@17\"\nname=\"db\"\ne=[\"POSTGRES_PASSWORD=$PW\"]\nvolume=[\"/data\"]\n\n[[app]]\nrun=\"umami@3\"\nafter=[\"db\"]\npublish=[\"internal:3000\"]\n",
+        );
+        let env = BTreeMap::from([("PW".to_string(), "s3cret".to_string())]);
+        let lookup = |k: &str| env.get(k).cloned();
+
+        let db = Spec::from_stack_member(&stack.members[0], Some("umami"), &lookup).unwrap();
+        assert_eq!(db.app.as_deref(), Some("postgres"));
+        assert_eq!(db.version.as_deref(), Some("17"));
+        assert_eq!(db.stack.as_deref(), Some("umami"));
+        assert!(db.auto);
+        assert_eq!(db.volumes, vec!["/data"]);
+        let flags = db.flags();
+        assert!(flags
+            .windows(2)
+            .any(|w| w == ["-e", "POSTGRES_PASSWORD=s3cret"]));
+        assert!(flags.windows(2).any(|w| w == ["--volume", "/data"]));
+
+        let app = Spec::from_stack_member(&stack.members[1], Some("umami"), &lookup).unwrap();
+        let flags = app.flags();
+        assert!(flags.windows(2).any(|w| w == ["--after", "db"]));
+        assert!(flags
+            .windows(2)
+            .any(|w| w == ["--publish", "internal:3000"]));
+    }
+
+    #[test]
+    fn stack_member_undefined_var_errors() {
+        let stack = stack_of("[[app]]\nrun=\"redis@8\"\ne=[\"P=$MISSING\"]\n");
+        let err = Spec::from_stack_member(&stack.members[0], None, &|_: &str| None)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("$MISSING"), "{err}");
+    }
+
+    #[test]
+    fn stack_member_local_path_rejected_on_host() {
+        let stack = stack_of("[[app]]\nrun=\"./server\"\n");
+        let err = Spec::from_stack_member(&stack.members[0], None, &|_: &str| None)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("local path"), "{err}");
     }
 }

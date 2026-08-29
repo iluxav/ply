@@ -129,7 +129,12 @@ pub fn push(image: &str) -> Result<()> {
     if image.starts_with("https://") {
         return push_url(image, &token, &login);
     }
-    let image = std::path::Path::new(image);
+    let path = std::path::Path::new(image);
+    // Stack push: a .toml file, or a directory whose ply.toml is a stack.
+    if let Some((stack, toml_path)) = load_stack_for_push(path)? {
+        return push_stack(&stack, &toml_path, &token, &login);
+    }
+    let image = path;
     let filename = image
         .file_name()
         .and_then(|f| f.to_str())
@@ -139,14 +144,23 @@ pub fn push(image: &str) -> Result<()> {
         std::fs::File::open(image).with_context(|| format!("opening {}", image.display()))?;
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)?;
+
+    // Derive the catalog metadata from the image itself and send it alongside
+    // the bytes — the server stores it verbatim (client-derives, server-
+    // stores). Compact JSON is a valid single-line header value.
+    let meta = ply_core::catalog::derive_push_meta(image)
+        .with_context(|| format!("reading {} — is it a ply image?", image.display()))?;
+    let meta_json = serde_json::to_string(&meta).context("encoding push metadata")?;
     println!(
-        "pushing {filename} ({:.1} MiB) as {login}/…",
-        bytes.len() as f64 / (1024.0 * 1024.0)
+        "pushing {filename} ({:.1} MiB, {}) as {login}/…",
+        bytes.len() as f64 / (1024.0 * 1024.0),
+        format!("{:?}", meta.kind).to_lowercase(),
     );
 
     let result = ureq::post(&format!("{}/api/push/", api_base()))
         .header("Authorization", &format!("Bearer {token}"))
         .header("X-Ply-Filename", &filename)
+        .header("X-Ply-Meta", &meta_json)
         .header("Content-Type", "application/octet-stream")
         .send(&bytes[..]);
     let mut resp = match result {
@@ -199,6 +213,89 @@ fn push_url(url: &str, token: &str, login: &str) -> Result<()> {
             println!("published {published} (bytes stay at the origin)");
             println!("  sha256: {}", body["sha256"].as_str().unwrap_or(""));
             println!("  origin: {}", body["url"].as_str().unwrap_or(""));
+        }
+        None => bail!(
+            "push failed: {}",
+            body["error"].as_str().unwrap_or("unknown error")
+        ),
+    }
+    Ok(())
+}
+
+/// If `path` is a stack — a directory whose ply.toml has `[[app]]`, or a
+/// `.toml` file with `[[app]]` — load it. Returns (stack, the toml path).
+fn load_stack_for_push(
+    path: &std::path::Path,
+) -> Result<Option<(ply_core::stack::Stack, std::path::PathBuf)>> {
+    if path.is_dir() {
+        return Ok(ply_core::stack::load(path)?.map(|s| (s, path.join("ply.toml"))));
+    }
+    if path.extension().and_then(|e| e.to_str()) == Some("toml") {
+        let text =
+            std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+        if let Some(stack) = ply_core::stack::parse(&text, path)? {
+            return Ok(Some((stack, path.to_path_buf())));
+        }
+    }
+    Ok(None)
+}
+
+/// Publish a stack: upload the stack toml (the template, `$VAR` holes intact)
+/// and send its derived `apps[]`. The registry stores the template; consumers
+/// fill the holes at deploy time.
+fn push_stack(
+    stack: &ply_core::stack::Stack,
+    toml_path: &std::path::Path,
+    token: &str,
+    login: &str,
+) -> Result<()> {
+    let name = stack
+        .name
+        .as_deref()
+        .context("a stack push needs `[stack] name`")?;
+    let version = stack
+        .version
+        .as_deref()
+        .context("a stack push needs `[stack] version` (semver x.y.z)")?;
+    if ply_core::catalog::parse_run_ref(name) != Some((name.to_string(), None)) {
+        bail!("stack name `{name}` must be lowercase [a-z0-9-], starting with a letter or digit");
+    }
+    let parts: Vec<&str> = version.split('.').collect();
+    if parts.len() != 3
+        || !parts
+            .iter()
+            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+    {
+        bail!("stack version `{version}` must be x.y.z");
+    }
+    let filename = format!("{name}-{version}.stack.toml");
+    let bytes =
+        std::fs::read(toml_path).with_context(|| format!("reading {}", toml_path.display()))?;
+    let meta = ply_core::catalog::derive_stack_meta(stack);
+    let meta_json = serde_json::to_string(&meta).context("encoding stack metadata")?;
+    println!(
+        "pushing {filename} (stack, {} members) as {login}/…",
+        stack.members.len()
+    );
+
+    let result = ureq::post(&format!("{}/api/push/", api_base()))
+        .header("Authorization", &format!("Bearer {token}"))
+        .header("X-Ply-Filename", &filename)
+        .header("X-Ply-Meta", &meta_json)
+        .header("Content-Type", "application/octet-stream")
+        .send(&bytes[..]);
+    let mut resp = match result {
+        Ok(r) => r,
+        Err(ureq::Error::StatusCode(code)) => {
+            bail!("registry answered {code} — bump [stack] version if it is already published");
+        }
+        Err(e) => return Err(e).context("reaching the registry"),
+    };
+    let body: serde_json::Value = serde_json::from_str(&resp.body_mut().read_to_string()?)?;
+    match body["published"].as_str() {
+        Some(published) => {
+            println!("published {published} (stack)");
+            println!("  {}", body["url"].as_str().unwrap_or(""));
         }
         None => bail!(
             "push failed: {}",

@@ -1,13 +1,20 @@
-//! `[stack]` — one file, several instances: the compose equivalent.
+//! A stack: several `ply run`s, written down. The compose equivalent.
 //!
-//! A stack ply.toml is pure wiring; it defines no app of its own. Each
-//! member is either a prebuilt runnable app from the registry (`run =
-//! "postgres@17"`) or a local directory whose own ply.toml defines the app
-//! (`path = "./server"`). `after` edges order startup and ride the existing
-//! `--after` readiness gate; per-member `env` rides `-e`.
+//! A stack file is pure wiring — it builds no image of its own. It is a
+//! `[stack]` metadata header (name/description) followed by an `[[app]]`
+//! array, and **each `[[app]]` block is exactly one `ply run`**: its fields
+//! map 1:1 to run flags (`run`→the image, `name`→`--name`, `e`→`-e`,
+//! `publish`→`--publish`, `after`→`--after`, `volume`→`--volume`,
+//! `domain`→`--domain`, `scale`→`--scale`). There is no stack concept beyond
+//! "these runs, in dependency order."
 //!
-//! Registry members are version-locked in the stack dir's ply.lock —
-//! upgrades are deliberate (`ply up --refresh`), same principle as MVS.
+//! `after` edges name other members (by their `name`) and ride the existing
+//! `--after` readiness gate. `$VAR` in an `e` value is substituted from the
+//! environment at launch — undefined is a hard error, never a silent empty
+//! (see `expand_vars`).
+//!
+//! Registry members are version-locked in the stack dir's ply.lock — upgrades
+//! are deliberate (`ply up --refresh`), same principle as MVS.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -21,28 +28,50 @@ pub enum MemberSource {
         name: String,
         version: Option<String>,
     },
-    /// `path = "./server"` — a local app dir, built at `up` time.
+    /// `run = "./server"` — a local app dir (or `.img` file), built/run at
+    /// `up` time exactly like a hand-typed `ply run ./server`.
     Path(PathBuf),
+    /// `run = "https://…/app.img"` — a URL image, fetched like `ply run <url>`.
+    Url(String),
 }
 
 #[derive(Debug, Clone)]
 pub struct Member {
-    /// The stack key (`db`, `server`); also the handle `after` edges name.
+    /// The member identity — the `--name` the instance runs under, and the
+    /// handle `after` edges name. Defaults to the image basename of `run`.
     pub name: String,
     pub source: MemberSource,
+    /// `-e KEY=VALUE`; VALUE may contain `$VAR`, expanded at launch.
     pub env: Vec<(String, String)>,
-    /// Stack member keys this one waits for.
+    /// Member names this one waits for → `--after`.
     pub after: Vec<String>,
+    /// `--publish` entries.
+    pub publish: Vec<String>,
+    /// `--volume` paths.
+    pub volume: Vec<String>,
+    /// `--domain` entries.
+    pub domain: Vec<String>,
+    /// `--scale`.
+    pub scale: Option<u32>,
 }
 
 #[derive(Debug)]
 pub struct Stack {
+    pub name: Option<String>,
+    /// Semver of the stack as a publishable artifact (required only to
+    /// `ply push` it; optional for local `ply up`).
+    pub version: Option<String>,
+    pub description: Option<String>,
+    /// A root-owned env file whose KEY=VALUE lines fill `$VAR` holes when a
+    /// host expands this stack (the deploy-time equivalent of `ply up
+    /// --env-file`). Relative paths resolve against the deployments dir.
+    pub env_file: Option<String>,
     /// Members in dependency order (dependencies before dependants).
     pub members: Vec<Member>,
 }
 
 /// Read `<dir>/ply.toml` as a stack. `Ok(None)` when the file has no
-/// `[stack]` table (it's an app manifest or absent).
+/// `[[app]]` array (it's an app manifest or absent).
 pub fn load(dir: &Path) -> Result<Option<Stack>> {
     let path = dir.join("ply.toml");
     let Ok(text) = std::fs::read_to_string(&path) else {
@@ -51,35 +80,82 @@ pub fn load(dir: &Path) -> Result<Option<Stack>> {
     parse(&text, &path)
 }
 
-fn parse(text: &str, path: &Path) -> Result<Option<Stack>> {
+/// Parse a stack file at `path`. `Ok(None)` when there is no `[[app]]` array.
+pub fn parse(text: &str, path: &Path) -> Result<Option<Stack>> {
     let doc: toml::Value = text
         .parse()
         .map_err(|e| Error::Manifest(format!("{}: {e}", path.display())))?;
-    let Some(stack) = doc.get("stack") else {
+    let Some(apps) = doc.get("app") else {
         return Ok(None);
     };
     if doc.get("package").is_some() {
         return Err(Error::Manifest(format!(
-            "{}: has both [package] and [stack] — a stack file is pure wiring; move the app into its own directory and reference it with `path`",
+            "{}: has both [package] and [[app]] — a stack file is pure wiring; move the app into its own directory and reference it with `run = \"./dir\"`",
             path.display()
         )));
     }
-    let table = stack.as_table().ok_or_else(|| {
+    let apps = apps.as_array().ok_or_else(|| {
         Error::Manifest(format!(
-            "{}: [stack] must be a table of members",
+            "{}: [[app]] must be an array of tables (each block is one `ply run`)",
             path.display()
         ))
     })?;
-    if table.is_empty() {
+    if apps.is_empty() {
         return Err(Error::Manifest(format!(
-            "{}: [stack] has no members",
+            "{}: [[app]] has no entries",
             path.display()
         )));
     }
 
+    let (mut name, mut version, mut description, mut env_file) = (None, None, None, None);
+    if let Some(meta) = doc.get("stack") {
+        let meta = meta.as_table().ok_or_else(|| {
+            Error::Manifest(format!("{}: [stack] must be a table", path.display()))
+        })?;
+        for key in meta.keys() {
+            if !matches!(
+                key.as_str(),
+                "name" | "version" | "description" | "env_file"
+            ) {
+                return Err(Error::Manifest(format!(
+                    "{}: [stack] has unknown key `{key}` (expected name, version, description, env_file)",
+                    path.display()
+                )));
+            }
+        }
+        name = meta
+            .get("name")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        version = meta
+            .get("version")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        description = meta
+            .get("description")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        env_file = meta
+            .get("env_file")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+    }
+
     let mut members = Vec::new();
-    for (name, entry) in table {
-        members.push(parse_member(name, entry, path)?);
+    for (i, entry) in apps.iter().enumerate() {
+        members.push(parse_member(i, entry, path)?);
+    }
+
+    // member names must be unique
+    let mut seen = BTreeSet::new();
+    for member in &members {
+        if !seen.insert(member.name.as_str()) {
+            return Err(Error::Manifest(format!(
+                "{}: two members named `{}` — give one a distinct `name`",
+                path.display(),
+                member.name
+            )));
+        }
     }
 
     // after edges must name members
@@ -88,7 +164,7 @@ fn parse(text: &str, path: &Path) -> Result<Option<Stack>> {
         for dep in &member.after {
             if !names.contains(dep.as_str()) {
                 return Err(Error::Manifest(format!(
-                    "{}: member `{}` waits for `{dep}`, which is not a [stack] member",
+                    "{}: member `{}` waits for `{dep}`, which is not a member",
                     path.display(),
                     member.name
                 )));
@@ -104,89 +180,188 @@ fn parse(text: &str, path: &Path) -> Result<Option<Stack>> {
     }
 
     Ok(Some(Stack {
+        name,
+        version,
+        description,
+        env_file,
         members: topo_sort(members, path)?,
     }))
 }
 
-fn parse_member(name: &str, entry: &toml::Value, path: &Path) -> Result<Member> {
+const MEMBER_KEYS: &[&str] = &[
+    "run", "name", "e", "after", "publish", "volume", "domain", "scale",
+];
+
+fn parse_member(index: usize, entry: &toml::Value, path: &Path) -> Result<Member> {
     let table = entry.as_table().ok_or_else(|| {
         Error::Manifest(format!(
-            "{}: member `{name}` must be a table, e.g. {{ run = \"postgres@17\" }}",
-            path.display()
+            "{}: [[app]] #{} must be a table, e.g. run = \"postgres@17\"",
+            path.display(),
+            index + 1
         ))
     })?;
     for key in table.keys() {
-        if !matches!(key.as_str(), "run" | "path" | "env" | "after") {
+        if !MEMBER_KEYS.contains(&key.as_str()) {
             return Err(Error::Manifest(format!(
-                "{}: member `{name}`: unknown key `{key}` (expected run, path, env, after)",
-                path.display()
+                "{}: [[app]] #{}: unknown key `{key}` (expected {})",
+                path.display(),
+                index + 1,
+                MEMBER_KEYS.join(", ")
             )));
         }
     }
-    let run = table.get("run").map(|v| v.as_str());
-    let dir = table.get("path").map(|v| v.as_str());
-    let source = match (run, dir) {
-        (Some(Some(reference)), None) => {
-            let Some((pkg, want)) = crate::catalog::parse_run_ref(reference) else {
-                return Err(Error::Manifest(format!(
-                    "{}: member `{name}`: `run = \"{reference}\"` is not a package reference (expected name or name@version)",
-                    path.display()
-                )));
-            };
-            MemberSource::Run {
-                name: pkg,
-                version: want,
-            }
-        }
-        (None, Some(Some(p))) => MemberSource::Path(PathBuf::from(p)),
-        (None, None) => {
+
+    let run = table
+        .get("run")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            Error::Manifest(format!(
+                "{}: [[app]] #{} needs `run` — the image: a registry ref (`postgres@17`), a path (`./dir`), or a URL",
+                path.display(),
+                index + 1
+            ))
+        })?;
+    let (source, default_name) = classify_run(run, path, index)?;
+
+    let name = match table.get("name") {
+        Some(v) => v
+            .as_str()
+            .ok_or_else(|| {
+                Error::Manifest(format!(
+                    "{}: [[app]] #{}: `name` must be a string",
+                    path.display(),
+                    index + 1
+                ))
+            })?
+            .to_string(),
+        None => default_name.ok_or_else(|| {
+            Error::Manifest(format!(
+                "{}: [[app]] #{}: cannot derive a name from `run = \"{run}\"` — add `name = \"…\"`",
+                path.display(),
+                index + 1
+            ))
+        })?,
+    };
+
+    let env = parse_env(table.get("e"), &name, path)?;
+    let after = string_list(table.get("after"), "after", &name, path)?;
+    let publish = string_list(table.get("publish"), "publish", &name, path)?;
+    let volume = string_list(table.get("volume"), "volume", &name, path)?;
+    let domain = string_list(table.get("domain"), "domain", &name, path)?;
+    let scale = match table.get("scale") {
+        None => None,
+        Some(toml::Value::Integer(n)) if *n > 0 => Some(*n as u32),
+        Some(_) => {
             return Err(Error::Manifest(format!(
-                "{}: member `{name}` needs `run = \"name@ver\"` or `path = \"./dir\"`",
-                path.display()
-            )))
-        }
-        (Some(_), Some(_)) => {
-            return Err(Error::Manifest(format!(
-                "{}: member `{name}` has both `run` and `path` — pick one",
-                path.display()
-            )))
-        }
-        _ => {
-            return Err(Error::Manifest(format!(
-                "{}: member `{name}`: `run`/`path` must be strings",
+                "{}: member `{name}`: `scale` must be a positive integer",
                 path.display()
             )))
         }
     };
 
-    let mut env = Vec::new();
-    if let Some(value) = table.get("env") {
-        let env_table = value.as_table().ok_or_else(|| {
+    Ok(Member {
+        name,
+        source,
+        env,
+        after,
+        publish,
+        volume,
+        domain,
+        scale,
+    })
+}
+
+/// Classify a `run =` value into a source, returning the default member name.
+fn classify_run(run: &str, path: &Path, index: usize) -> Result<(MemberSource, Option<String>)> {
+    if run.starts_with("http://") || run.starts_with("https://") {
+        let stem = run
+            .rsplit('/')
+            .next()
+            .and_then(|f| f.split('-').next())
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        return Ok((MemberSource::Url(run.to_string()), stem));
+    }
+    if run.starts_with("./")
+        || run.starts_with("../")
+        || run.starts_with('/')
+        || run.ends_with(".img")
+    {
+        let stem = Path::new(run)
+            .file_name()
+            .and_then(|f| f.to_str())
+            .map(|f| f.trim_end_matches(".img"))
+            .and_then(|f| f.split('-').next().filter(|s| !s.is_empty()))
+            .map(str::to_string);
+        return Ok((MemberSource::Path(PathBuf::from(run)), stem));
+    }
+    match crate::catalog::parse_run_ref(run) {
+        Some((name, version)) => Ok((
+            MemberSource::Run {
+                name: name.clone(),
+                version,
+            },
+            Some(name),
+        )),
+        None => Err(Error::Manifest(format!(
+            "{}: [[app]] #{}: `run = \"{run}\"` is not a package reference, path, or URL",
+            path.display(),
+            index + 1
+        ))),
+    }
+}
+
+/// Parse an `e = ["KEY=VALUE", …]` array into pairs (values kept raw — `$VAR`
+/// is expanded at launch, not here).
+fn parse_env(
+    value: Option<&toml::Value>,
+    member: &str,
+    path: &Path,
+) -> Result<Vec<(String, String)>> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let list = value.as_array().ok_or_else(|| {
+        Error::Manifest(format!(
+            "{}: member `{member}`: `e` must be an array of \"KEY=VALUE\" strings",
+            path.display()
+        ))
+    })?;
+    let mut out = Vec::new();
+    for item in list {
+        let s = item.as_str().ok_or_else(|| {
             Error::Manifest(format!(
-                "{}: member `{name}`: env must be a table of KEY = \"value\"",
+                "{}: member `{member}`: every `e` entry must be a \"KEY=VALUE\" string",
                 path.display()
             ))
         })?;
-        for (k, v) in env_table {
-            let text = match v {
-                toml::Value::String(s) => s.clone(),
-                toml::Value::Integer(i) => i.to_string(),
-                toml::Value::Float(f) => f.to_string(),
-                toml::Value::Boolean(b) => b.to_string(),
-                _ => {
-                    return Err(Error::Manifest(format!(
-                        "{}: member `{name}`: env {k} must be a string or number",
-                        path.display()
-                    )))
-                }
-            };
-            env.push((k.clone(), text));
+        let Some((k, v)) = s.split_once('=') else {
+            return Err(Error::Manifest(format!(
+                "{}: member `{member}`: `e` entry `{s}` is not KEY=VALUE",
+                path.display()
+            )));
+        };
+        if k.is_empty() {
+            return Err(Error::Manifest(format!(
+                "{}: member `{member}`: `e` entry `{s}` has an empty key",
+                path.display()
+            )));
         }
+        out.push((k.to_string(), v.to_string()));
     }
+    Ok(out)
+}
 
-    let after = match table.get("after") {
-        None => Vec::new(),
-        Some(toml::Value::String(one)) => vec![one.clone()],
+/// A field that is a single string or an array of strings → `Vec<String>`.
+fn string_list(
+    value: Option<&toml::Value>,
+    field: &str,
+    member: &str,
+    path: &Path,
+) -> Result<Vec<String>> {
+    match value {
+        None => Ok(Vec::new()),
+        Some(toml::Value::String(one)) => Ok(vec![one.clone()]),
         Some(toml::Value::Array(list)) => {
             let mut out = Vec::new();
             for item in list {
@@ -194,28 +369,99 @@ fn parse_member(name: &str, entry: &toml::Value, path: &Path) -> Result<Member> 
                     Some(s) => out.push(s.to_string()),
                     None => {
                         return Err(Error::Manifest(format!(
-                            "{}: member `{name}`: after must name members (strings)",
+                            "{}: member `{member}`: `{field}` must be strings",
                             path.display()
                         )))
                     }
                 }
             }
-            out
+            Ok(out)
         }
-        Some(_) => {
-            return Err(Error::Manifest(format!(
-                "{}: member `{name}`: after must be a member name or an array of them",
-                path.display()
-            )))
-        }
-    };
+        Some(_) => Err(Error::Manifest(format!(
+            "{}: member `{member}`: `{field}` must be a string or an array of strings",
+            path.display()
+        ))),
+    }
+}
 
-    Ok(Member {
-        name: name.to_string(),
-        source,
-        env,
-        after,
+/// Substitute `$VAR` / `${VAR}` in a value from `lookup`. `$$` is a literal
+/// `$`. An undefined variable is a hard error — never a silent empty value.
+/// `who` labels the error (e.g. `member `db` env POSTGRES_PASSWORD`).
+pub fn expand_vars(
+    input: &str,
+    who: &str,
+    lookup: &impl Fn(&str) -> Option<String>,
+) -> Result<String> {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '$' {
+            out.push(c);
+            continue;
+        }
+        match chars.peek() {
+            Some('$') => {
+                chars.next();
+                out.push('$');
+            }
+            Some('{') => {
+                chars.next();
+                let mut name = String::new();
+                let mut closed = false;
+                for c in chars.by_ref() {
+                    if c == '}' {
+                        closed = true;
+                        break;
+                    }
+                    name.push(c);
+                }
+                if !closed {
+                    return Err(Error::Manifest(format!(
+                        "{who}: unterminated `${{{name}` (missing `}}`)"
+                    )));
+                }
+                out.push_str(&resolve_var(&name, who, lookup)?);
+            }
+            Some(c) if c.is_ascii_alphabetic() || *c == '_' => {
+                let mut name = String::new();
+                while let Some(&c) = chars.peek() {
+                    if c.is_ascii_alphanumeric() || c == '_' {
+                        name.push(c);
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                out.push_str(&resolve_var(&name, who, lookup)?);
+            }
+            // a `$` not starting a variable stays literal
+            _ => out.push('$'),
+        }
+    }
+    Ok(out)
+}
+
+fn resolve_var(name: &str, who: &str, lookup: &impl Fn(&str) -> Option<String>) -> Result<String> {
+    lookup(name).ok_or_else(|| {
+        Error::Manifest(format!(
+            "{who}: `${name}` is not set — provide it in the environment or an --env-file"
+        ))
     })
+}
+
+/// Expand every `$VAR` in a member's env, returning launch-ready pairs.
+pub fn expand_member_env(
+    member: &Member,
+    lookup: &impl Fn(&str) -> Option<String>,
+) -> Result<Vec<(String, String)>> {
+    member
+        .env
+        .iter()
+        .map(|(k, v)| {
+            let who = format!("member `{}` env {k}", member.name);
+            Ok((k.clone(), expand_vars(v, &who, lookup)?))
+        })
+        .collect()
 }
 
 /// Kahn's algorithm, declaration order as the tie-break; cycles are errors.
@@ -253,7 +499,7 @@ fn topo_sort(members: Vec<Member>, path: &Path) -> Result<Vec<Member>> {
             .map(|(_, m)| m.name.as_str())
             .collect();
         return Err(Error::Manifest(format!(
-            "{}: [stack] has an `after` cycle involving {}",
+            "{}: [[app]] has an `after` cycle involving {}",
             path.display(),
             stuck.join(", ")
         )));
@@ -273,7 +519,7 @@ pub fn select<'a>(stack: &'a Stack, names: &[String]) -> Result<Vec<&'a Member>>
     for name in names {
         if !known.contains(name.as_str()) {
             return Err(Error::Manifest(format!(
-                "`{name}` is not a [stack] member (members: {})",
+                "`{name}` is not a member (members: {})",
                 stack
                     .members
                     .iter()
@@ -415,14 +661,29 @@ mod tests {
 
     const LAB: &str = r#"
 [stack]
-db     = { run = "postgres@17", env = { POSTGRES_PASSWORD = "dev", PGPORT = 5442 } }
-server = { path = "./server", after = "db" }
-web    = { path = "./web", after = "server" }
+name = "lab"
+
+[[app]]
+run  = "postgres@17"
+name = "db"
+e    = ["POSTGRES_PASSWORD=dev", "PGPORT=5442"]
+volume = ["/var/lib/postgresql/data"]
+
+[[app]]
+run   = "./server"
+after = "db"
+publish = ["internal:8080"]
+
+[[app]]
+run   = "./web"
+after = ["server"]
+scale = 2
 "#;
 
     #[test]
     fn parses_and_orders_the_lab_stack() {
         let stack = stack_of(LAB);
+        assert_eq!(stack.name.as_deref(), Some("lab"));
         let names: Vec<&str> = stack.members.iter().map(|m| m.name.as_str()).collect();
         assert_eq!(names, vec!["db", "server", "web"]);
         let db = &stack.members[0];
@@ -433,13 +694,17 @@ web    = { path = "./web", after = "server" }
                 version: Some("17".into())
             }
         );
-        // numbers coerce to strings for -e
         assert!(db.env.contains(&("PGPORT".into(), "5442".into())));
+        assert_eq!(db.volume, vec!["/var/lib/postgresql/data"]);
+        // ./server default name is its dir basename; after coerces string→[…]
+        assert_eq!(stack.members[1].name, "server");
         assert_eq!(stack.members[1].after, vec!["db"]);
+        assert_eq!(stack.members[1].publish, vec!["internal:8080"]);
+        assert_eq!(stack.members[2].scale, Some(2));
     }
 
     #[test]
-    fn no_stack_table_is_none() {
+    fn no_app_array_is_none() {
         assert!(parse("[package]\nname = \"x\"\n", Path::new("p"))
             .unwrap()
             .is_none());
@@ -447,9 +712,9 @@ web    = { path = "./web", after = "server" }
     }
 
     #[test]
-    fn rejects_package_plus_stack() {
+    fn rejects_package_plus_app() {
         let err = parse(
-            "[package]\nname = \"x\"\n[stack]\ndb = { run = \"redis\" }\n",
+            "[package]\nname = \"x\"\n[[app]]\nrun = \"redis\"\n",
             Path::new("p"),
         )
         .unwrap_err();
@@ -457,27 +722,38 @@ web    = { path = "./web", after = "server" }
     }
 
     #[test]
+    fn default_name_from_registry_ref() {
+        let s = stack_of("[[app]]\nrun = \"redis@8\"\n");
+        assert_eq!(s.members[0].name, "redis");
+    }
+
+    #[test]
+    fn duplicate_names_rejected() {
+        let err = parse(
+            "[[app]]\nrun = \"postgres@17\"\n[[app]]\nrun = \"postgres@17\"\n",
+            Path::new("p"),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("two members named"));
+    }
+
+    #[test]
     fn rejects_bad_members() {
         for (toml, msg) in [
-            ("[stack]\ndb = { }\n", "needs `run"),
+            ("[[app]]\nname = \"x\"\n", "needs `run"),
+            ("[[app]]\nrun = \"redis\"\nscale = 0\n", "positive integer"),
+            ("[[app]]\nrun = \"redis\"\ntypo = 1\n", "unknown key"),
+            ("[[app]]\nrun = \"Not A Ref\"\n", "not a package reference"),
             (
-                "[stack]\ndb = { run = \"redis\", path = \"./x\" }\n",
-                "pick one",
+                "[[app]]\nrun = \"redis\"\ne = [\"NOEQ\"]\n",
+                "not KEY=VALUE",
             ),
             (
-                "[stack]\ndb = { run = \"redis\", scale = 2 }\n",
-                "unknown key",
+                "[[app]]\nrun = \"redis\"\nname=\"a\"\nafter = \"ghost\"\n",
+                "not a member",
             ),
             (
-                "[stack]\ndb = { run = \"Not A Ref\" }\n",
-                "not a package reference",
-            ),
-            (
-                "[stack]\na = { run = \"redis\", after = \"ghost\" }\n",
-                "not a [stack] member",
-            ),
-            (
-                "[stack]\na = { run = \"redis\", after = \"a\" }\n",
+                "[[app]]\nrun = \"redis\"\nname=\"a\"\nafter = \"a\"\n",
                 "waits for itself",
             ),
         ] {
@@ -492,7 +768,7 @@ web    = { path = "./web", after = "server" }
     #[test]
     fn rejects_cycles() {
         let err = parse(
-            "[stack]\na = { run = \"x\", after = \"b\" }\nb = { run = \"y\", after = \"a\" }\n",
+            "[[app]]\nrun = \"x\"\nname=\"a\"\nafter = \"b\"\n[[app]]\nrun = \"y\"\nname=\"b\"\nafter = \"a\"\n",
             Path::new("p"),
         )
         .unwrap_err();
@@ -521,6 +797,70 @@ web    = { path = "./web", after = "server" }
         assert!(select(&stack, &["ghost".into()]).is_err());
     }
 
+    // --- $VAR expansion ------------------------------------------------------
+
+    fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
+        let map: BTreeMap<String, String> = pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        move |k: &str| map.get(k).cloned()
+    }
+
+    #[test]
+    fn expand_basic_and_braced() {
+        let e = env(&[("PW", "s3cret"), ("HOST", "db.ply")]);
+        assert_eq!(expand_vars("p=$PW", "w", &e).unwrap(), "p=s3cret");
+        assert_eq!(
+            expand_vars("postgres://u:${PW}@${HOST}:5432", "w", &e).unwrap(),
+            "postgres://u:s3cret@db.ply:5432"
+        );
+    }
+
+    #[test]
+    fn expand_literal_dollar_and_trailing() {
+        let e = env(&[]);
+        assert_eq!(expand_vars("cost is $$5", "w", &e).unwrap(), "cost is $5");
+        assert_eq!(expand_vars("ends with $", "w", &e).unwrap(), "ends with $");
+        assert_eq!(
+            expand_vars("price $ each", "w", &e).unwrap(),
+            "price $ each"
+        );
+    }
+
+    #[test]
+    fn expand_undefined_is_an_error() {
+        let e = env(&[]);
+        let err = expand_vars("p=$MISSING", "member `db` env P", &e)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("$MISSING` is not set"), "{err}");
+        assert!(err.contains("member `db`"), "labels the source: {err}");
+    }
+
+    #[test]
+    fn expand_member_env_maps_all() {
+        let m = Member {
+            name: "db".into(),
+            source: MemberSource::Run {
+                name: "postgres".into(),
+                version: None,
+            },
+            env: vec![("A".into(), "$X".into()), ("B".into(), "plain".into())],
+            after: vec![],
+            publish: vec![],
+            volume: vec![],
+            domain: vec![],
+            scale: None,
+        };
+        let e = env(&[("X", "1")]);
+        let out = expand_member_env(&m, &e).unwrap();
+        assert_eq!(
+            out,
+            vec![("A".into(), "1".into()), ("B".into(), "plain".into())]
+        );
+    }
+
     #[test]
     fn lock_roundtrip_and_pin_invalidation() {
         let tmp = tempfile::tempdir().unwrap();
@@ -530,12 +870,10 @@ web    = { path = "./web", after = "server" }
         lock.save(tmp.path()).unwrap();
         let loaded = StackLock::load(tmp.path());
         assert_eq!(loaded, lock);
-        // same reference → pinned, with per-arch digests
         let pin = loaded.pinned("db", "postgres@17").unwrap();
         assert_eq!(pin.version, "17.10.0");
         assert_eq!(pin.digests.get("x64"), Some(&"sha256:abc".to_string()));
         assert_eq!(pin.digests.get("arm64"), Some(&"sha256:def".to_string()));
-        // changed reference → re-resolve
         assert!(loaded.pinned("db", "postgres@18").is_none());
         assert!(loaded.pinned("other", "postgres@17").is_none());
     }

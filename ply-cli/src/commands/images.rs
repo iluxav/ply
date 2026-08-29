@@ -1,9 +1,46 @@
 //! bundle / import / rebase — image transformation commands.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
-use crate::cli::{BundleArgs, ImportArgs, RebaseArgs};
+use crate::cli::{BundleArgs, ImportArgs, InspectArgs, RebaseArgs};
 use crate::commands::build::human_size;
+
+/// Show what an image declares, as the catalog records it — the same
+/// derivation `ply push` sends and the registry stores. `--json` prints the
+/// raw metadata (used by the registry pipeline); the default is a summary.
+pub fn inspect(args: InspectArgs) -> Result<()> {
+    let meta = ply_core::catalog::derive_push_meta(&args.image)
+        .with_context(|| format!("reading {}", args.image.display()))?;
+    if args.json {
+        println!("{}", serde_json::to_string(&meta)?);
+        return Ok(());
+    }
+    println!(
+        "type:         {}",
+        format!("{:?}", meta.kind).to_lowercase()
+    );
+    println!(
+        "volumes:      {}",
+        if meta.volumes.is_empty() {
+            "—".into()
+        } else {
+            meta.volumes.join(", ")
+        }
+    );
+    println!(
+        "links:        {}",
+        if meta.links.is_empty() {
+            "—".into()
+        } else {
+            meta.links.join(", ")
+        }
+    );
+    println!("dependencies: {}", meta.dependencies.len());
+    for d in &meta.dependencies {
+        println!("  {} {}", d.name, d.version);
+    }
+    Ok(())
+}
 
 pub fn bundle(args: BundleArgs) -> Result<()> {
     let outcome = ply_core::bundle::bundle(&args.image, &args.output, true)?;

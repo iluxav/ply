@@ -42,6 +42,7 @@ const args = {
   only: null,
   dryRun: false,
   apk2pkg: join(ROOT, "target/release/apk2pkg"),
+  ply: join(ROOT, "target/release/ply"),
   files: [],
   namespace: "ply",
 };
@@ -62,6 +63,7 @@ for (let i = 0; i < argv.length; i++) {
   else if (argv[i] === "--state-only") args.stateOnly = true;
   else if (argv[i] === "--reindex") args.reindex = true;
   else if (argv[i] === "--apk2pkg") args.apk2pkg = next();
+  else if (argv[i] === "--ply") args.ply = next();
   else if (argv[i] === "--file") args.files.push(next());
   else if (argv[i] === "--namespace") args.namespace = next();
   else { console.error(`unknown argument: ${argv[i]}`); process.exit(2); }
@@ -141,6 +143,26 @@ function errLine(e) {
   return lines.find((l) => l.includes("[ERROR]")) ?? lines.at(-1) ?? "unknown error";
 }
 
+// v2 catalog metadata, derived from the image itself via `ply inspect`
+// (client-derives, server-stores). Best-effort: a missing/old `ply` binary
+// leaves the entry without volumes/deps — `src` still comes from the path.
+async function deriveMeta(imgPath) {
+  try {
+    const { stdout } = await execFileAsync(args.ply, ["inspect", imgPath, "--json"],
+      { maxBuffer: 8 * 1024 * 1024 });
+    const m = JSON.parse(stdout);
+    return {
+      type: m.type ?? "layer",
+      volumes: m.volumes ?? [],
+      links: m.links ?? [],
+      dependencies: m.dependencies ?? [],
+    };
+  } catch (e) {
+    console.log(`  (meta derive failed for ${imgPath.split("/").at(-1)}: ${errLine(e)}) — no v2 metadata`);
+    return null;
+  }
+}
+
 async function processOne(p) {
   const t0 = Date.now();
   console.log(`  converting ${p.apk}@${p.apk_version}…`);
@@ -180,6 +202,7 @@ async function processOne(p) {
 
     // 3. ledger (written after every success — crash-safe deltas; JS is
     // single-threaded, so concurrent tasks can't interleave inside this block)
+    const derived = await deriveMeta(img);
     state[ledgerKey(p)] = {
       name: p.name,
       version: p.version,
@@ -187,6 +210,7 @@ async function processOne(p) {
       upload_path: p.upload_path,
       bytes,
       pushed_at: new Date().toISOString(),
+      ...(derived ?? {}),
     };
     saveState();
     touchedRepos.add(dirname(p.upload_path)); // repo dir on the CDN, e.g. ply/jq
@@ -225,6 +249,7 @@ for (const p of manualPushes) {
       "--cache-control", "public, max-age=31536000, immutable",
       "--content-type", "application/octet-stream"],
       { maxBuffer: 16 * 1024 * 1024 });
+    const derived = await deriveMeta(p.file);
     state[key] = {
       name: p.name,
       version: p.version,
@@ -232,6 +257,7 @@ for (const p of manualPushes) {
       upload_path: p.upload_path,
       bytes: statSync(p.file).size,
       pushed_at: new Date().toISOString(),
+      ...(derived ?? {}),
     };
     saveState();
     touchedRepos.add(dirname(p.upload_path));
@@ -332,7 +358,9 @@ async function publishState() {
         namespace,
         owner: c.owner ?? "ply",
         name: e.name,
-        type: c.type ?? (namespace === "apps" ? "app" : "layer"),
+        // type is derived from the image (client-derives); a curated override
+        // still wins, then the namespace default for pre-derive ledger rows.
+        type: e.type ?? c.type ?? (namespace === "apps" ? "app" : "layer"),
         description: c.description ?? m?.description ?? "",
         license: c.license ?? m?.license ?? "",
         homepage: c.homepage ?? m?.url ?? "",
@@ -350,9 +378,15 @@ async function publishState() {
       version: e.version,
       img: e.img,
       arch: e.img.endsWith("-arm64.img") ? "arm64" : "x64",
+      // src is the v2 canonical location — a full URL. path is kept for the
+      // current site reader until the whole catalog is on src.
+      src: `https://registry.plybox.sh/${e.upload_path}`,
       path: e.upload_path,
       bytes: e.bytes ?? 0,
       pushed_at: e.pushed_at,
+      ...(e.volumes?.length ? { volumes: e.volumes } : {}),
+      ...(e.links?.length ? { links: e.links } : {}),
+      ...(e.dependencies?.length ? { dependencies: e.dependencies } : {}),
     });
   }
   const packages = [...byKey.values()].sort((a, b) =>

@@ -1,8 +1,33 @@
 # gitea — self-hosted Git, as a ply stack: the app + its database, one file.
-#   ply up
-# gitea composes the git layer and connects to Postgres; on first boot it
-# generates its config, migrates, and creates the admin from env. Change the
-# passwords before anything real.
+#
+#   PW=s3cret ADMIN_PW=change-me ply up
+#
+# Each [[app]] block is one `ply run`. gitea composes the git layer and
+# connects to Postgres; on first boot it generates its config, migrates, and
+# creates the admin from env. `$PW`/`$ADMIN_PW` are holes filled from the
+# environment (or an --env-file) at launch — an undefined one is a hard
+# error, never a silent empty value.
+
 [stack]
-gitea-db = { run = "postgres@17", env = { POSTGRES_PASSWORD = "change-me", POSTGRES_DB = "gitea" } }
-gitea = { run = "gitea@1", after = "gitea-db", publish = "internal:3000", env = { DB_HOST = "gitea-db.ply:5432", DB_NAME = "gitea", DB_USER = "postgres", DB_PASSWD = "change-me", GITEA_ADMIN_USER = "admin", GITEA_ADMIN_PASSWORD = "change-me", GITEA_ADMIN_EMAIL = "admin@example.com" } }
+name = "gitea"
+version = "1.0.0"
+description = "Self-hosted Git service (Gitea)."
+
+[[app]]
+run  = "postgres@17"
+name = "gitea-db"
+e    = ["POSTGRES_PASSWORD=$PW", "POSTGRES_DB=gitea"]
+
+[[app]]
+run     = "gitea@1"
+after   = ["gitea-db"]
+publish = ["internal:3000"]
+e = [
+  "DB_HOST=gitea-db.ply:5432",
+  "DB_NAME=gitea",
+  "DB_USER=postgres",
+  "DB_PASSWD=$PW",
+  "GITEA_ADMIN_USER=admin",
+  "GITEA_ADMIN_PASSWORD=$ADMIN_PW",
+  "GITEA_ADMIN_EMAIL=admin@example.com",
+]
