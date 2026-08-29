@@ -1,6 +1,0 @@
-app = "postgres"
-stack = "n8n"
-publish = ["internal:5432"]
-[env]
-POSTGRES_PASSWORD = "change-me"
-POSTGRES_DB = "n8n"

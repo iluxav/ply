@@ -35,6 +35,11 @@ pub struct Spec {
     /// …or a local image path…
     #[serde(default)]
     pub image: Option<String>,
+    /// …or a direct image URL (`url = "https://…/<name>-<ver>-linux-<arch>.img"`)
+    /// — a CI artifact on any static host. Fetched once: the URL is treated
+    /// as immutable, so deploying a new version means a new URL.
+    #[serde(default)]
+    pub url: Option<String>,
     /// …or a GitHub repo whose releases carry the CI-built .img
     /// (`github = "org/repo"`). Exactly one of the three.
     #[serde(default)]
@@ -128,15 +133,16 @@ impl Spec {
         let spec: Spec = toml::from_str(text).map_err(|e| Error::Manifest(e.to_string()))?;
         let sources = spec.app.is_some() as u8
             + spec.image.is_some() as u8
+            + spec.url.is_some() as u8
             + spec.github.is_some() as u8
             + spec.repo.is_some() as u8;
         match sources {
             1 => Ok(spec),
             0 => Err(Error::Manifest(
-                "a deployment needs one of: `app` (registry), `image` (a file), `github` (release assets), `repo` (build here)".into(),
+                "a deployment needs one of: `app` (registry), `image` (a file), `url` (a direct link), `github` (release assets), `repo` (build here)".into(),
             )),
             _ => Err(Error::Manifest(
-                "a deployment names exactly one of `app`, `image`, `github`, `repo`".into(),
+                "a deployment names exactly one of `app`, `image`, `url`, `github`, `repo`".into(),
             )),
         }
     }
@@ -178,29 +184,24 @@ impl Spec {
 
     /// Synthesize a single-app deployment Spec from a stack member, for host
     /// expansion (reconcile turns a stack file into one unit per member).
-    /// Only registry-ref members are supported on a host — a local
-    /// `run = "./dir"` is a dev-only `ply up` thing, and a URL has no deploy
-    /// lane yet. `$VAR` in the member's env is filled from `lookup`; an
-    /// undefined one is an error, exactly as `ply up`.
+    /// Registry-ref and URL members are supported on a host — a local
+    /// `run = "./dir"` stays a dev-only `ply up` thing (there is nothing to
+    /// build against on a host). `$VAR` in the member's env is filled from
+    /// `lookup`; an undefined one is an error, exactly as `ply up`.
     pub fn from_stack_member(
         member: &crate::stack::Member,
         stack_name: Option<&str>,
         lookup: &impl Fn(&str) -> Option<String>,
     ) -> Result<Spec> {
         use crate::stack::MemberSource;
-        let (app, version) = match &member.source {
-            MemberSource::Run { name, version } => (name.clone(), version.clone()),
+        let (app, version, url) = match &member.source {
+            MemberSource::Run { name, version } => (Some(name.clone()), version.clone(), None),
+            MemberSource::Url(u) => (None, None, Some(u.clone())),
             MemberSource::Path(p) => {
                 return Err(Error::Manifest(format!(
-                    "stack member `{}`: `run = \"{}\"` is a local path — a host stack uses registry refs (a local dir is a `ply up` dev thing)",
+                    "stack member `{}`: `run = \"{}\"` is a local path — a host stack uses registry refs or URLs (a local dir is a `ply up` dev thing)",
                     member.name,
                     p.display()
-                )))
-            }
-            MemberSource::Url(u) => {
-                return Err(Error::Manifest(format!(
-                    "stack member `{}`: `run = \"{u}\"` is a URL — a host stack uses registry refs for now",
-                    member.name
                 )))
             }
         };
@@ -208,7 +209,8 @@ impl Spec {
             .into_iter()
             .collect();
         Ok(Spec {
-            app: Some(app),
+            app,
+            url,
             version,
             env,
             publish: member.publish.clone(),
@@ -356,6 +358,14 @@ REDIS_PASSWORD = "s3cret"
         assert!(Spec::parse("app = \"redis\"\nimage = \"/x.img\"\n").is_err());
         assert!(Spec::parse("version = \"8\"\n").is_err());
         assert!(Spec::parse("app = \"redis\"\ntypo = 1\n").is_err());
+        assert!(Spec::parse("app = \"redis\"\nurl = \"https://x/a-1.0.0-linux-x64.img\"\n").is_err());
+    }
+
+    #[test]
+    fn spec_url_lane_parses() {
+        let spec = Spec::parse("url = \"https://x/a-1.0.0-linux-x64.img\"\n").unwrap();
+        assert_eq!(spec.url.as_deref(), Some("https://x/a-1.0.0-linux-x64.img"));
+        assert!(spec.app.is_none());
     }
 
     fn stack_of(text: &str) -> crate::stack::Stack {
@@ -399,6 +409,20 @@ REDIS_PASSWORD = "s3cret"
             .unwrap_err()
             .to_string();
         assert!(err.contains("$MISSING"), "{err}");
+    }
+
+    #[test]
+    fn stack_member_url_expands_to_url_spec() {
+        let stack = stack_of(
+            "[[app]]\nrun=\"https://cdn.example.com/web-1.2.0-linux-x64.img\"\nname=\"web\"\npublish=[\"internal:3000\"]\n",
+        );
+        let spec = Spec::from_stack_member(&stack.members[0], Some("s"), &|_: &str| None).unwrap();
+        assert_eq!(
+            spec.url.as_deref(),
+            Some("https://cdn.example.com/web-1.2.0-linux-x64.img")
+        );
+        assert!(spec.app.is_none());
+        assert_eq!(spec.stack.as_deref(), Some("s"));
     }
 
     #[test]

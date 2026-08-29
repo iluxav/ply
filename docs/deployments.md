@@ -1,6 +1,6 @@
 ---
 title: Deployments & CD
-description: A deployment is a file. Four ways to say where truth lives — registry, image, GitHub releases, or a repo built on the host — and a timer that keeps reality converged. Zero resident processes.
+description: A deployment is a file. Five ways to say where truth lives — registry, image, a direct URL, GitHub releases, or a repo built on the host — and a timer that keeps reality converged. Zero resident processes.
 section: Guides
 order: 14.5
 ---
@@ -23,7 +23,7 @@ sudo ply setup --swap 2G     # small hosts that will build JS on-droplet
 
 ## A deployment names where truth lives
 
-Exactly one of four sources per file:
+Exactly one of five sources per file:
 
 ```toml
 # 1 · registry — a runnable app from your registry, newest matching version
@@ -41,7 +41,14 @@ image = "/srv/deploy/myapp-1.2.0-linux-x64.img"
 ```
 
 ```toml
-# 3 · github — your CI builds the image and attaches it to a GitHub release;
+# 3 · url — a direct link to a CI-built image on any static host. The URL is
+#     treated as immutable and fetched once; a new version is a new URL.
+url = "https://cdn.example.com/myapp-1.2.0-linux-x64.img"
+publish = ["internal:8080"]
+```
+
+```toml
+# 4 · github — your CI builds the image and attaches it to a GitHub release;
 #     the host pulls it. `version` blank = follow the latest release.
 github = "org/myapp"
 publish = ["internal:8080"]
@@ -49,7 +56,7 @@ domain = ["app.example.com"]
 ```
 
 ```toml
-# 4 · repo — no CI at all: the host clones and builds the repo itself
+# 5 · repo — no CI at all: the host clones and builds the repo itself
 repo = "https://github.com/org/myapp"
 build = "npm ci && npm run build"
 runtime = "node@24"
@@ -60,7 +67,7 @@ publish = ["internal:3000"]
 domain = ["app.example.com"]
 ```
 
-If the repo carries its own `ply.toml`, lane 4 needs none of the manifest
+If the repo carries its own `ply.toml`, lane 5 needs none of the manifest
 fields — `repo` plus a `build` command is enough; the repo's manifest rules.
 
 ## Continuous deployment is a pull
@@ -94,8 +101,8 @@ centrally orchestrated fleets). See [Deploys, health & restarts](/docs/deploy/).
 ## Private repos: one credential
 
 A fine-grained personal access token with **Contents: read** on that one
-repo covers everything: `https` clones for lane 4, release downloads for
-lane 3, and the dashboard's update checks.
+repo covers everything: `https` clones for lane 5, release downloads for
+lane 4, and the dashboard's update checks.
 
 ```toml
 repo = "https://github.com/org/private-app"
@@ -104,11 +111,11 @@ token_file = ".keys/private-app.token"      # root-owned file, 0600
 
 Relative `token_file` and `deploy_key` paths resolve against the
 deployments dir. The token is injected into git per-invocation — it never
-lands in `.git/config`. An SSH `deploy_key` remains supported for lane 4.
+lands in `.git/config`. An SSH `deploy_key` remains supported for lane 5.
 
 ## Building on the host
 
-Lane 4 builds run in a throwaway, memory-fenced container (a real ply app
+Lane 5 builds run in a throwaway, memory-fenced container (a real ply app
 named `<name>-builder` — it shows up in `ply ps` and the dashboard, and its
 log ring is the build log). The checkout persists between builds, so
 `node_modules` and framework caches *are* the cache.
@@ -120,7 +127,7 @@ fence kept the builder at low CPU weight and ~60% of RAM.
 
 Rules of thumb: Go, Python and static sites build fine on 512 MB;
 JavaScript wants `ply setup --swap 2G` (ply refuses a JS build on a small
-host without swap, and tells you the fix); Rust belongs in CI — use lane 3.
+host without swap, and tells you the fix); Rust belongs in CI — use lane 4.
 
 ## What the host reports back
 
@@ -134,7 +141,7 @@ host without swap, and tells you the fix); Rust belongs in CI — use lane 3.
 
 | key | meaning |
 |---|---|
-| `app` / `image` / `github` / `repo` | the source — exactly one |
+| `app` / `image` / `url` / `github` / `repo` | the source — exactly one |
 | `version` | registry/github lanes: exact pin, prefix follow, or blank = latest |
 | `asset` | github lane: app name in `<asset>-<ver>-linux-<arch>.img`; default = deployment name |
 | `ref` | repo lane: branch or committish; default = remote HEAD |

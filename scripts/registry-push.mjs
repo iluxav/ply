@@ -88,7 +88,11 @@ const manualPushes = args.files.map((file) => {
 });
 
 // --- load catalog + ledger ----------------------------------------------------
-const catalog = JSON.parse(readFileSync(args.catalog, "utf8"));
+// The apk catalog only drives batch conversion; --file and --state-only
+// runs work without it (the alpine lane is retired).
+const catalog = existsSync(args.catalog)
+  ? JSON.parse(readFileSync(args.catalog, "utf8"))
+  : { package_count: 0, packages: [], arch: "x86_64", tier: "none", branch: "-" };
 const state = existsSync(args.state) ? JSON.parse(readFileSync(args.state, "utf8")) : {};
 const saveState = () => writeFileSync(args.state, JSON.stringify(state, null, 1));
 

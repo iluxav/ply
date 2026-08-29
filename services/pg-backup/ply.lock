@@ -9,7 +9,7 @@ sha256 = "sha256:5afac172e512ba5c3b5937bbcb6797d32bafa2293c7df8da16c9b4848e84670
 name = "postgresql-client17"
 version = "17.10.0"
 source = "https://registry.plybox.sh/ply/{package}"
-sha256 = "sha256:87c342cee34c6a2ad5d9f9397a74e19d5237cc6752505bd2cbc40c8e2393ad80"
+sha256 = "sha256:7eeaa0dceb1328ab8e02acfbd2d8c55908754d7dfccae37dc8c81442ab2c4c5b"
 
 [[package]]
 name = "debian"

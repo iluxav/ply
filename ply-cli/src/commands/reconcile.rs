@@ -280,6 +280,14 @@ fn apply(name: &str, spec: &Spec, app_names: &mut BTreeSet<String>) -> Result<Ap
             force_restart = rebuilt;
             (image, shown)
         }
+        _ if spec.url.is_some() => {
+            let url = spec.url.as_deref().expect("guard");
+            let (path, resolved) = ply_core::source::fetch_url_image(url)
+                .with_context(|| format!("fetching {url}"))?;
+            println!("{name}: {resolved} (url)");
+            let shown = resolved.to_string();
+            (named_image(name, &path, &shown)?, shown)
+        }
         (None, None, Some(repo)) => {
             let token = read_token(spec)?;
             let asset_app = spec.asset.clone().unwrap_or_else(|| name.to_string());

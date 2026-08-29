@@ -65,7 +65,8 @@ pub fn exec(args: RunArgs) -> Result<()> {
         }
     }
 
-    // Three run forms besides a plain .img path:
+    // Four run forms besides a plain .img path:
+    //  - an http(s) URL of an .img: fetched into the store, once per URL
     //  - a directory with ply.toml: build it, run the result (cargo run)
     //  - a bare name (`postgres`, `myapp@1.2`): resolve against the registry,
     //    newest matching version, fetched into the store
@@ -73,7 +74,11 @@ pub fn exec(args: RunArgs) -> Result<()> {
     // An existing file always wins over a name lookup.
     let mut dev_entrypoint: Option<Vec<String>> = None;
     let image_path = std::path::Path::new(&args.image);
-    let image_arg = if !args.image.starts_with("docker://") && image_path.is_dir() {
+    let image_arg = if args.image.starts_with("http://") || args.image.starts_with("https://") {
+        let (path, resolved) = ply_core::source::fetch_url_image(&args.image)?;
+        eprintln!("ply: {resolved} (url)");
+        path.to_string_lossy().into_owned()
+    } else if !args.image.starts_with("docker://") && image_path.is_dir() {
         let dir = image_path.to_path_buf();
         if ply_core::stack::load(&dir)?.is_some() {
             bail!(

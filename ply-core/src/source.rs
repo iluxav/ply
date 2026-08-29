@@ -190,6 +190,72 @@ impl Source {
     }
 }
 
+/// Fetch a plain image URL — `https://…/<name>-<version>-<os>-<arch>.img` —
+/// into the store and return (path, parsed name). The basename is the
+/// contract: it must parse as an image filename and match this host's
+/// platform. A marker under `<data>/urls/` maps sha256(URL) → the digest it
+/// served, so a versioned artifact URL (immutable by convention) is fetched
+/// once and reconcile's minute loop stays off the network; deploying a new
+/// version means naming a new URL. Plain http is private-hosts-only, the
+/// same hygiene as sources.
+pub fn fetch_url_image(url: &str) -> Result<(PathBuf, ImageName)> {
+    let filename = url
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(url)
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or("");
+    let image = ImageName::parse(filename).map_err(|_| {
+        Error::Source(format!(
+            "`{url}`: an image URL must end in `<name>-<version>-<os>-<arch>.img` (got `{filename}`)"
+        ))
+    })?;
+    if image.os != Os::Linux || image.arch != Arch::host() {
+        return Err(Error::Source(format!(
+            "{filename}: built for {}-{}, this host is {}-{}",
+            image.os.as_str(),
+            image.arch.as_str(),
+            Os::Linux.as_str(),
+            Arch::host().as_str(),
+        )));
+    }
+    if let Some(host_part) = url.strip_prefix("http://") {
+        let host = host_part.split(['/', ':']).next().unwrap_or("");
+        if !is_private_host(host) {
+            return Err(Error::Source(format!(
+                "plain http image URL `{url}` on a public host — use https://"
+            )));
+        }
+    } else if !url.starts_with("https://") {
+        return Err(Error::Source(format!("`{url}`: expected an http(s) URL")));
+    }
+
+    let store = Store::open_default()?;
+    let markers = crate::paths::data_dir().join("urls");
+    let marker = markers.join(crate::digest::sha256_str(url));
+    if let Ok(digest) = std::fs::read_to_string(&marker) {
+        if let Some(path) = store.image_path(digest.trim()) {
+            return Ok((path, image));
+        }
+    }
+
+    let tmp = store
+        .root()
+        .join(format!(".url-{filename}.{}", std::process::id()));
+    if let Err(e) = http_get_file(url, &tmp) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(Error::Source(format!("download {url} failed: {e}")));
+    }
+    let digest = crate::digest::sha256_file(&tmp)?;
+    let path = store.insert(&tmp, &digest)?;
+    if std::fs::create_dir_all(&markers).is_ok() {
+        let _ = std::fs::write(&marker, &digest);
+    }
+    Ok((path, image))
+}
+
 /// RFC-1918 / localhost hosts may use plain http (hash catches tampering
 /// anyway; this is hygiene).
 fn is_private_host(host: &str) -> bool {
@@ -296,6 +362,29 @@ mod tests {
         assert!(Source::parse("http://192.168.1.10/pkgs", false).is_ok());
         assert!(Source::parse("http://example.com/pkgs", false).is_err());
         assert!(Source::parse("http://example.com/pkgs", true).is_ok());
+    }
+
+    /// Validation happens before any network or store access, so bad URLs
+    /// fail fast with a message naming the contract.
+    #[test]
+    fn url_image_validation() {
+        let host_arch = Arch::host().as_str();
+        let other = if host_arch == "x64" { "arm64" } else { "x64" };
+        // basename must parse as an image filename
+        let err = fetch_url_image("https://x.example/readme.txt").unwrap_err();
+        assert!(err.to_string().contains("must end in"), "{err}");
+        // wrong arch is refused
+        let err =
+            fetch_url_image(&format!("https://x.example/a-1.0.0-linux-{other}.img")).unwrap_err();
+        assert!(err.to_string().contains("this host"), "{err}");
+        // plain http on a public host is refused
+        let err =
+            fetch_url_image(&format!("http://x.example/a-1.0.0-linux-{host_arch}.img"))
+                .unwrap_err();
+        assert!(err.to_string().contains("use https"), "{err}");
+        // query strings don't confuse the basename
+        let err = fetch_url_image("https://x.example/dir/?download=1").unwrap_err();
+        assert!(err.to_string().contains("must end in"), "{err}");
     }
 
     #[test]

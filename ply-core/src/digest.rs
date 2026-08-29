@@ -29,3 +29,8 @@ pub fn sha256_file(path: &Path) -> Result<String> {
     }
     Ok(format!("sha256:{}", hex::encode(hasher.finalize())))
 }
+
+/// Bare hex sha256 of a string — a filesystem-safe cache key.
+pub fn sha256_str(s: &str) -> String {
+    hex::encode(Sha256::digest(s.as_bytes()))
+}
