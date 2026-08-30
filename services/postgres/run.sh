@@ -16,7 +16,16 @@
 #                      data dir, right after initdb, before serving
 set -eu
 
-PGBIN=/opt/postgresql17-17.10.0/usr/lib/postgresql/17/bin
+# The keg root is globbed, never pinned: a postgresql17 bump must not need
+# an edit here (restore.sh derives it the same way). Debian keeps the server
+# tools off PATH, under /usr/lib/postgresql/<major>/bin — a normal install
+# reaches them through postgresql-common's pg_wrapper, which ply never runs.
+PGROOT=$(echo /opt/postgresql17-*)
+PGBIN="$PGROOT/usr/lib/postgresql/17/bin"
+[ -d "$PGBIN" ] || { echo "postgres: no postgresql17 keg at $PGROOT" >&2; exit 1; }
+# On PATH too, so `ply exec <db> psql ...` finds the tools the way an
+# operator expects — without it, a bare `psql` is an unexplained ENOENT.
+export PATH="$PGBIN:$PATH"
 PGDATA=/var/lib/postgresql/data
 SOCK=/tmp
 PGUSER="${POSTGRES_USER:-postgres}"

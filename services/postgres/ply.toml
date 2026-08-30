@@ -10,7 +10,7 @@
 
 [package]
 name = "postgres"
-version = "17.10.5"
+version = "17.10.6"
 user = "postgres:70:70"
 entrypoint = ["./run.sh"]
 # SIGTERM to a postmaster is a SMART shutdown: it waits for every client to
