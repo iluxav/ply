@@ -329,6 +329,18 @@ pub fn systemd_unit(
     ))
 }
 
+/// How long systemd waits for `ply run` to stop before it gives up and
+/// SIGKILLs the unit.
+///
+/// The supervisor MUST finish inside this window. Instances run in their own
+/// top-level cgroup, outside the unit's — so when systemd loses patience it
+/// kills the supervisor and nothing else, and the instance keeps running,
+/// orphaned, still holding its slot. The replacement unit then starts, finds
+/// that slot taken, and takes the next one — which means a different
+/// per-instance volume. That is how a restart silently swaps a database for
+/// an empty one; see `runtime::run::SHUTDOWN_GRACE`.
+pub const SYSTEMD_STOP_TIMEOUT_SECS: u64 = 15;
+
 /// The unit text. `after` apps become `After=`/`Wants=` on their ply units
 /// (systemd orders the start; `--after` in ExecStart gates on readiness).
 pub fn render_unit(
@@ -380,10 +392,11 @@ pub fn render_unit(
          Restart=on-failure\n\
          RestartSec=2\n\
          KillMode=mixed\n\
-         TimeoutStopSec=15\n\
+         TimeoutStopSec={stop_timeout}\n\
          \n\
          [Install]\n\
          WantedBy={target}\n",
+        stop_timeout = SYSTEMD_STOP_TIMEOUT_SECS,
         flags = run_flags
             .iter()
             .map(|f| format!(" {}", quote_unit_arg(f)))

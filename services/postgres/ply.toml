@@ -10,9 +10,14 @@
 
 [package]
 name = "postgres"
-version = "17.10.4"
+version = "17.10.5"
 user = "postgres:70:70"
 entrypoint = ["./run.sh"]
+# SIGTERM to a postmaster is a SMART shutdown: it waits for every client to
+# disconnect, so a database with a live connection pool never stops at all.
+# SIGINT is the fast shutdown — disconnect clients, checkpoint, exit — and is
+# what the docker-library image asks for too.
+stop_signal = "SIGINT"
 include = ["run.sh", "restore.sh", "cacert.pem"]
 base = "debian@13"
 

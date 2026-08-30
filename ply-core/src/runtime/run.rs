@@ -334,6 +334,10 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
         Some(name) => crate::manifest::parse_stop_signal(name)?,
         None => Signal::SIGTERM,
     };
+    // The handler installed above stops instances too — it must ask for the
+    // same thing a rolling deploy asks for, or `systemctl stop` means
+    // something the app never agreed to.
+    STOP_SIGNAL.store(stop_signal as i32, Ordering::SeqCst);
 
     // [restart] policy: the parent respawns instances it started. If the
     // parent itself dies, that's systemd's layer.
@@ -357,6 +361,10 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
     }
     let mut slots: std::collections::BTreeMap<u32, SlotInfo> = Default::default();
     let mut pending: Vec<(u32, std::time::Instant)> = Vec::new(); // (slot, due)
+
+    // Shutdown bookkeeping — see SHUTDOWN_GRACE.
+    let mut shutdown_began: Option<std::time::Instant> = None;
+    let mut escalated = false;
 
     let mut instances: Vec<Instance> = Vec::new();
     for _ in 0..opts.scale.max(1) {
@@ -400,6 +408,28 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
         }
 
         let shutting_down = SHUTTING_DOWN.load(Ordering::SeqCst);
+
+        // A stop has to END. The container's PID 1 is the app's own
+        // entrypoint, and the kernel drops default-action signals to PID 1 —
+        // a plain `sh run.sh` with no SIGTERM handler ignores the polite
+        // request completely. Waiting for it forever is not patience: it
+        // hands the decision to systemd, which kills only the supervisor
+        // (the instance is in its own cgroup) and leaves the instance
+        // running, holding its slot, so the replacement takes the next slot
+        // and a different volume.
+        if shutting_down && !escalated && !instances.is_empty() {
+            let began = *shutdown_began.get_or_insert_with(std::time::Instant::now);
+            if began.elapsed() >= SHUTDOWN_GRACE {
+                escalated = true;
+                eprintln!(
+                    "ply: {identity} did not stop within {}s — SIGKILL",
+                    SHUTDOWN_GRACE.as_secs(),
+                );
+                for instance in &instances {
+                    let _ = signal::kill(instance.child, Signal::SIGKILL);
+                }
+            }
+        }
 
         for (pid, code, failed) in deaths {
             let Some(pos) = instances.iter().position(|i| i.child == pid) else {
@@ -1136,14 +1166,24 @@ fn launch_instance(
         };
         let app_volumes = crate::paths::volumes_dir().join(&app);
         let host_dir = app_volumes.join(format!("{name}.{suffix}"));
-        let fresh = !host_dir.exists();
         std::fs::create_dir_all(&host_dir).map_err(|source| Error::Io {
             path: host_dir.clone(),
             source,
         })?;
         // Starting empty next to a volume that is full is almost never what
         // the operator meant, and a database that does it looks healthy.
-        if fresh && volume.scope != "shared" && !volume.ephemeral {
+        //
+        // The test is EMPTY, not newly-created: the second time an app lands
+        // on the wrong slot, that slot's directory is already there from the
+        // first time — which is exactly when the operator most needs telling.
+        //
+        // Scaled apps are exempt: asking for N instances means asking for N
+        // empty data dirs, and saying so N times is noise. Asking for ONE
+        // and getting an empty one is the accident.
+        let empty = std::fs::read_dir(&host_dir)
+            .map(|mut e| e.next().is_none())
+            .unwrap_or(false);
+        if empty && opts.scale <= 1 && volume.scope != "shared" && !volume.ephemeral {
             let siblings = populated_siblings(&app_volumes, name, &suffix);
             if !siblings.is_empty() {
                 eprintln!(
@@ -1876,6 +1916,16 @@ someoneelse:200000:65536
     }
 }
 
+/// How long a stop waits for instances to go quietly before SIGKILL.
+///
+/// Strictly inside `lifecycle::SYSTEMD_STOP_TIMEOUT_SECS`: the supervisor
+/// must be the one that ends the shutdown, never systemd. If systemd's
+/// timeout fires first it kills the supervisor alone — the instance lives in
+/// its own cgroup, survives, and keeps its slot, and the unit systemd starts
+/// next lands on a fresh slot with an empty volume. Two production databases
+/// were swapped for empty ones that way (2026-08-30).
+const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
+
 const MAX_CHILDREN: usize = 256;
 static CHILD_PIDS: [AtomicI32; MAX_CHILDREN] = [const { AtomicI32::new(0) }; MAX_CHILDREN];
 static CHILD_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -1898,16 +1948,36 @@ fn update_child(idx: usize, pid: i32) {
 
 static SIGNALS_SEEN: AtomicUsize = AtomicUsize::new(0);
 static SHUTTING_DOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// `[package] stop_signal`, readable from a signal handler. A rolling deploy
+/// always honoured it; a plain `systemctl stop` used to forward SIGTERM
+/// verbatim, which is a *different request* for anything that reads the two
+/// differently — to postgres SIGTERM means "smart shutdown: wait for every
+/// client to disconnect first", so a database with a live connection pool
+/// never exited at all.
+static STOP_SIGNAL: AtomicI32 = AtomicI32::new(nix::libc::SIGTERM);
 
-extern "C" fn forward_signal(sig: i32) {
+/// What to send a container on the `seen`-th stop request: what the app
+/// declared it wants, and SIGKILL once it has ignored that. The signal we
+/// RECEIVED is deliberately not passed on — SIGTERM from systemd means
+/// "stop", not "smart shutdown", and only the app knows which signal spells
+/// that for it.
+fn signal_for_stop(seen: usize, declared: i32) -> i32 {
+    if seen >= 1 {
+        nix::libc::SIGKILL
+    } else {
+        declared
+    }
+}
+
+extern "C" fn forward_signal(_sig: i32) {
     // A forwarded stop means intent: no respawns after this point.
     SHUTTING_DOWN.store(true, Ordering::SeqCst);
     // A container's entrypoint is PID 1 in its pid ns: the kernel drops
-    // default-action signals to init. First signal forwards as-is (apps
-    // with handlers stop gracefully); repeated signals escalate to SIGKILL,
-    // which init cannot ignore.
-    let escalate = SIGNALS_SEEN.fetch_add(1, Ordering::SeqCst) >= 1;
-    let sig = if escalate { nix::libc::SIGKILL } else { sig };
+    // default-action signals to init. First signal sends the app's declared
+    // stop signal (apps with handlers stop gracefully); repeated signals
+    // escalate to SIGKILL, which init cannot ignore.
+    let seen = SIGNALS_SEEN.fetch_add(1, Ordering::SeqCst);
+    let sig = signal_for_stop(seen, STOP_SIGNAL.load(Ordering::SeqCst));
     let count = CHILD_COUNT.load(Ordering::SeqCst).min(MAX_CHILDREN);
     for slot in CHILD_PIDS.iter().take(count) {
         let pid = slot.load(Ordering::SeqCst);
@@ -2041,9 +2111,91 @@ fn rootless_scale_guard(rootless: bool, scale: u32, has_ports: bool, publish: bo
 mod tests {
     use super::*;
 
+    /// `systemctl stop` must ask the app for the shutdown IT defined. ply
+    /// used to forward the received SIGTERM verbatim, which to a postmaster
+    /// means "smart shutdown — wait for every client to disconnect": with a
+    /// web app holding a connection pool, the database never exited, systemd
+    /// timed out, and the orphaned instance kept its slot.
+    #[test]
+    fn a_stop_asks_for_the_signal_the_app_declared() {
+        let sigint = Signal::SIGINT as i32;
+        assert_eq!(
+            signal_for_stop(0, sigint),
+            sigint,
+            "the first stop must send the declared signal, not the one we were sent",
+        );
+        assert_ne!(signal_for_stop(0, sigint), Signal::SIGTERM as i32);
+        // An app that ignores its own stop signal does not get to hang here.
+        assert_eq!(signal_for_stop(1, sigint), nix::libc::SIGKILL);
+        // Undeclared still means SIGTERM — the default is unchanged.
+        assert_eq!(
+            signal_for_stop(0, Signal::SIGTERM as i32),
+            Signal::SIGTERM as i32
+        );
+    }
+
+    /// The shipped postgres must ask for a FAST shutdown. Losing this line
+    /// re-creates the outage: a database that cannot stop while anything is
+    /// connected to it.
+    #[test]
+    fn the_shipped_postgres_asks_for_a_fast_shutdown() {
+        let toml =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../services/postgres/ply.toml");
+        let text =
+            std::fs::read_to_string(&toml).unwrap_or_else(|e| panic!("{}: {e}", toml.display()));
+        let manifest: crate::manifest::Manifest =
+            toml::from_str(&text).expect("postgres manifest parses");
+        let declared = manifest
+            .package
+            .stop_signal
+            .expect("postgres must declare stop_signal — SIGTERM is a SMART shutdown");
+        assert_eq!(
+            crate::manifest::parse_stop_signal(&declared).expect("valid signal"),
+            Signal::SIGINT,
+        );
+    }
+
+    /// The supervisor must always be the one that ends a shutdown. If
+    /// systemd's stop timeout fires first it kills the supervisor and NOT
+    /// the instance (different cgroups), the instance keeps its slot, and
+    /// the replacement unit starts on the next slot — a different volume.
+    #[test]
+    fn the_stop_grace_finishes_inside_systemds_patience() {
+        let systemd = std::time::Duration::from_secs(crate::lifecycle::SYSTEMD_STOP_TIMEOUT_SECS);
+        assert!(
+            SHUTDOWN_GRACE < systemd,
+            "SHUTDOWN_GRACE ({:?}) must stay under TimeoutStopSec ({:?}) — otherwise systemd \
+             kills the supervisor first and orphans the instance, which is how a restart \
+             silently swaps a database for an empty one",
+            SHUTDOWN_GRACE,
+            systemd,
+        );
+        // And the unit really carries that number, so the two cannot drift.
+        let unit = crate::lifecycle::render_unit(
+            "db",
+            "/usr/local/bin/ply",
+            "db.img",
+            "/var/lib/ply/db.img",
+            &[],
+            &[],
+            false,
+        );
+        assert!(
+            unit.contains(&format!(
+                "TimeoutStopSec={}",
+                crate::lifecycle::SYSTEMD_STOP_TIMEOUT_SECS
+            )),
+            "generated unit lost its stop timeout:\n{unit}",
+        );
+    }
+
     /// The plybox-db outage: a second instance came up on data.2 while
     /// data.1 held the registry, and nothing said so until the site had been
     /// serving an empty database for hours.
+    ///
+    /// data.2 ALREADY EXISTS here, left behind by the first time this
+    /// happened — the recurrence is the case that matters, and keying the
+    /// warning on "directory was just created" missed it in production.
     #[test]
     fn a_full_volume_from_another_instance_is_reported() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -2051,6 +2203,7 @@ mod tests {
         std::fs::create_dir_all(app.join("data.1")).expect("data.1");
         std::fs::write(app.join("data.1/PG_VERSION"), "17").expect("write");
         std::fs::create_dir_all(app.join("data.2")).expect("data.2");
+        assert!(app.join("data.2").exists(), "the empty slot is not new");
 
         assert_eq!(
             populated_siblings(&app, "data", "2"),

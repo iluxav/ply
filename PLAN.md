@@ -294,7 +294,37 @@ warned. Then `plybox-web`, holding a start-time COPY of /etc/hosts, went on
 dialling instance 1's dead address (EHOSTUNREACH 10.77.0.3) until every
 DB-backed route returned 500: login, `ply push`, the whole API.
 
-Both causes are now fixed in the runtime:
+**It then happened AGAIN at 07:48**, during the recovery, on a plain
+`systemctl restart ply-plybox-db` — which is how the real trigger surfaced.
+The full chain:
+
+1. `SIGTERM` reaches the supervisor, which forwarded it verbatim to the
+   container. But the container's PID 1 is postgres itself, and **SIGTERM to
+   a postmaster is a SMART shutdown: it waits for every client to
+   disconnect.** plybox-web holds a 4-connection pool, so the database
+   never exited. (`[package] stop_signal` existed for exactly this and was
+   honoured on rolling deploys — but not on `systemctl stop`.)
+2. The supervisor waited for it, forever.
+3. systemd's `TimeoutStopSec=15` fired and killed the supervisor — and only
+   the supervisor: instances run in their own top-level cgroup
+   (`/ply-plybox-db.2`), outside the unit's, so `KillMode=mixed` never
+   reaches them.
+4. The orphaned postgres kept running, holding slot 1.
+5. systemd started the replacement. It found slot 1 taken, took slot 2, and
+   slot 2 means volume `data.2` — empty.
+
+That is why stopping the web app first always worked and restarting the
+database alone always failed.
+
+Fixed in the runtime:
+
+- **a stop asks for the signal the app declared** (`signal_for_stop`), not
+  the one systemd happened to send; postgres now declares
+  `stop_signal = "SIGINT"` (fast shutdown), as the docker-library image does
+- **a shutdown is bounded**: after `SHUTDOWN_GRACE` (10s, held strictly
+  under `SYSTEMD_STOP_TIMEOUT_SECS` by a test) the supervisor SIGKILLs its
+  instances and exits on its own terms. systemd's timeout must never be the
+  thing that ends a stop, because it kills the wrong process.
 
 - a container's /etc/hosts is a **bind-mounted file**, not a copy, and
   `hosts::add_entry`/`remove_entry` refresh every running instance's copy —
