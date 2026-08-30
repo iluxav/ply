@@ -55,7 +55,9 @@ pub enum Command {
 
     /// Make systemd agree with /var/lib/ply/deployments/ (a deployment is
     /// a file: `<name>.toml` naming a registry app, an image, a GitHub
-    /// release stream, or a repo to build — plus env, publish, domains).
+    /// release stream, a repo to build, or a published stack
+    /// (`stack = "<ns>/<name>"`, expanded into one unit per member and
+    /// re-fetched every beat) — plus env, publish, domains).
     /// Fleet hosts sync the dir from git first. Fired automatically by
     /// ply-deployments.path and the 1-minute timer; safe to run by hand.
     /// Root only.

@@ -54,6 +54,17 @@ pub fn exec() -> Result<()> {
                 );
             }
             Ok(None) => {
+                // …or it NAMES a published stack: `stack = "<ns>/<name>"`.
+                if let Some(reference) = ply_core::stack::parse_ref(&text) {
+                    converge_stack_ref(
+                        &name,
+                        &reference,
+                        &mut desired,
+                        &mut app_names,
+                        &mut changed_units,
+                    );
+                    continue;
+                }
                 let spec = match Spec::parse(&text) {
                     Ok(spec) => spec,
                     Err(e) => {
@@ -200,6 +211,61 @@ fn held(name: &str, auto: bool) -> bool {
 /// holes fill from the stack's `env_file` (root-owned, resolved against the
 /// deployments dir) plus the process environment. A member that fails leaves
 /// its unit in place (desired), like any single deployment.
+/// A deployment that names a published stack (`stack = "<ns>/<name>"`).
+/// Fetched every beat: the reference is unversioned, so republishing the
+/// stack converges its new SHAPE exactly as an unpinned member converges a
+/// new image.
+///
+/// The member names of the last good fetch are remembered in `.status/`.
+/// Without that, one unreachable registry would look like "this stack has no
+/// members" and retire every unit it owns — a network blip must never be
+/// indistinguishable from a deletion.
+fn converge_stack_ref(
+    name: &str,
+    reference: &str,
+    desired: &mut BTreeSet<String>,
+    app_names: &mut BTreeSet<String>,
+    changed_units: &mut bool,
+) {
+    let remembered = deployments::status_dir().join(format!("{name}.members"));
+    let keep_known_members = |desired: &mut BTreeSet<String>| {
+        if let Ok(text) = std::fs::read_to_string(&remembered) {
+            for m in text.lines().map(str::trim).filter(|m| !m.is_empty()) {
+                desired.insert(m.to_string());
+            }
+        }
+    };
+
+    if held(name, true) {
+        keep_known_members(desired);
+        return;
+    }
+
+    let stack =
+        match ply_core::catalog::fetch_stack(reference, ply_core::catalog::OFFICIAL_RUN_SOURCE) {
+            Ok(stack) => stack,
+            Err(e) => {
+                keep_known_members(desired);
+                deployments::write_status(name, false, &format!("stack {reference}: {e:#}"));
+                return;
+            }
+        };
+
+    let members: Vec<String> = stack.members.iter().map(|m| m.name.clone()).collect();
+    converge_stack(name, stack, desired, app_names, changed_units);
+
+    // Written only after a converge: the file answers "what did this stack
+    // own when we last actually knew?", which is the question the failure
+    // path above asks.
+    let dir = deployments::status_dir();
+    if std::fs::create_dir_all(&dir).is_ok() {
+        let tmp = dir.join(format!(".{name}.members.tmp"));
+        if std::fs::write(&tmp, members.join("\n") + "\n").is_ok() {
+            let _ = std::fs::rename(&tmp, &remembered);
+        }
+    }
+}
+
 fn converge_stack(
     name: &str,
     stack: ply_core::stack::Stack,

@@ -270,6 +270,22 @@ fn parse_overlay(text: &str, path: &Path) -> Result<StackOverlay> {
 /// — including `app = "name"` as a plain string, which is the single-app
 /// DEPLOYMENT lane's registry key, not a malformed stack. Only an array of
 /// `[[app]]` tables makes a file a stack.
+/// A deployment file that NAMES a published stack instead of spelling one
+/// out: `stack = "<namespace>/<name>"`. Always newest — the reference carries
+/// no version, so reconcile re-fetches every beat and a republished SHAPE (a
+/// member added, a port moved, an `after` edge changed) converges the same
+/// way a new member image does.
+///
+/// A spelled-out stack file has a `[stack]` TABLE; a reference has a `stack`
+/// STRING. Same key, different types, so the two can never be confused.
+pub fn parse_ref(text: &str) -> Option<String> {
+    let doc: toml::Value = text.parse().ok()?;
+    match doc.get("stack") {
+        Some(toml::Value::String(s)) if !s.trim().is_empty() => Some(s.trim().to_string()),
+        _ => None,
+    }
+}
+
 pub fn parse(text: &str, path: &Path) -> Result<Option<Stack>> {
     let doc: toml::Value = text
         .parse()
@@ -1201,6 +1217,52 @@ scale = 2
         assert!(
             !pin.digests.contains_key("x64"),
             "stale arch digest dropped"
+        );
+    }
+}
+
+#[cfg(test)]
+mod stack_ref_tests {
+    use super::*;
+
+    /// A deployment file that NAMES a published stack.
+    #[test]
+    fn a_reference_file_yields_the_reference() {
+        assert_eq!(
+            parse_ref("stack = \"iluxav/todos\"\n").as_deref(),
+            Some("iluxav/todos")
+        );
+    }
+
+    /// A real stack file spells its members out and carries a `[stack]`
+    /// TABLE. That must never be mistaken for a reference — the two shapes
+    /// share a key name and nothing else.
+    #[test]
+    fn a_spelled_out_stack_is_not_a_reference() {
+        let text = "[stack]\nname = \"todos\"\nversion = \"0.1.0\"\n\n[[app]]\nrun = \"postgres@17\"\nname = \"db\"\n";
+        assert_eq!(parse_ref(text), None);
+        assert!(
+            parse(text, std::path::Path::new("todos.toml"))
+                .unwrap()
+                .is_some(),
+            "the spelled-out lane must still parse as a stack"
+        );
+    }
+
+    /// A single-app deployment is untouched by the new lane.
+    #[test]
+    fn a_single_app_spec_is_not_a_reference() {
+        assert_eq!(parse_ref("app = \"redis\"\nversion = \"8\"\n"), None);
+    }
+
+    /// The dispatch reaches the reference lane only because a reference file
+    /// has no `[[app]]` blocks — so `parse` must decline it.
+    #[test]
+    fn parse_declines_a_reference_file_so_the_dispatch_falls_through() {
+        assert!(
+            parse("stack = \"iluxav/todos\"\n", std::path::Path::new("t.toml"))
+                .unwrap()
+                .is_none()
         );
     }
 }

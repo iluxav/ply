@@ -1,0 +1,90 @@
+#!/bin/sh
+# publish-ply-namespace.sh — step 1 of folding `apps/` into `ply/`.
+#
+# `apps/` exists because TYPE picked a namespace: runnable things went to
+# apps/, kegs to ply/. That is the same category error as filtering stacks out
+# of a catalog — type is a tag, not an address. Every package should be
+# {namespace}/{name}, the way GitHub is {user}/{repo}.
+#
+# This publishes the runnable packages under `ply/` ALONGSIDE their `apps/`
+# copies. Nothing breaks while it runs: bare names still resolve to apps/
+# until OFFICIAL_RUN_SOURCE is repointed (step 2), and namespaced refs were
+# never involved. Reads are free, so the apps/ copies can simply stay.
+#
+#   PUSH=0 scripts/publish-ply-namespace.sh   # dry run — print, push nothing
+#
+# NOT handled here: `dashboard` is published by its own repo's CI. Change that
+# workflow's `ply push --as apps` to `--as ply` and cut a release.
+set -eu
+cd "$(dirname "$0")/.."
+OUT=${OUT:-out}
+PLY=${PLY:-$PWD/target/release/ply}
+PUSH=${PUSH:-1}
+
+[ -x "$PLY" ] || { echo "error: $PLY not found — cargo build --release -p ply-cli" >&2; exit 1; }
+
+# redis is ONE package now (deb2pkg --manifest-extra), so its version comes
+# from the deb, not from a wrapper's ply.toml.
+version_of() {
+  case $1 in
+    redis) echo "8.0.2" ;;
+    *) sed -n 's/^version = "\(.*\)"/\1/p' "services/$1/ply.toml" | head -1 ;;
+  esac
+}
+
+# `ply/redis@8.0.2` is the KEG today, and the registry is append-only, so the
+# merged package cannot claim that version while the old row exists. The bytes
+# share a filename, so nothing in R2 needs touching — only the two rows that
+# make the push a duplicate. Deleting them lets the normal push path redo
+# everything, including flipping the package's type from layer to app
+# (route.ts: ON CONFLICT (owner, name) DO UPDATE SET type).
+if [ "${SKIP_REDIS_PREFLIGHT:-0}" != 1 ]; then
+  kind=$(curl -fsS "https://registry.plybox.sh/ply/state.json?t=$(date +%s)" 2>/dev/null \
+    | tr -d ' \n' | grep -o '"name":"redis","type":"[a-z]*"' | sed 's/.*"type":"\([a-z]*\)".*/\1/') || kind=""
+  if [ "$kind" = "layer" ]; then
+    cat >&2 <<'MSG'
+error: ply/redis@8.0.2 is still the old keg. On the registry's database, drop
+its version rows first (the bytes are replaced by the push itself):
+
+  ply exec plybox-db -- /opt/postgresql17-*/usr/lib/postgresql/17/bin/psql \
+    -h /tmp -U postgres -d plybox -c \
+    "DELETE FROM versions v USING packages p \
+      WHERE v.package_id = p.id AND p.owner = 'ply' \
+        AND p.name = 'redis' AND v.version = '8.0.2';"
+
+Then re-run this script. (SKIP_REDIS_PREFLIGHT=1 bypasses this check.)
+MSG
+    exit 1
+  fi
+fi
+
+missing=0
+for p in postgres redis notify pg-backup; do
+  v=$(version_of "$p")
+  for a in x64 arm64; do
+    f="$OUT/$p-$v-linux-$a.img"
+    [ -f "$f" ] || { echo "missing: $f" >&2; missing=1; }
+  done
+done
+[ "$missing" = 0 ] || { echo "error: build the missing images first (scripts/build-arm64.sh for arm64)" >&2; exit 1; }
+
+for p in postgres redis notify pg-backup; do
+  v=$(version_of "$p")
+  for a in x64 arm64; do
+    f="$OUT/$p-$v-linux-$a.img"
+    if [ "$PUSH" != 1 ]; then
+      echo "would push $f -> ply/$p"
+      continue
+    fi
+    echo "==> $f -> ply/$p"
+    "$PLY" push "$f" --as ply
+  done
+done
+
+echo
+echo "done. gate — every name must now resolve under ply/:"
+echo "  curl -s https://registry.plybox.sh/ply/state.json | grep -o '\"name\": \"[^\"]*\"' | sort -u"
+echo
+echo "then step 2: point OFFICIAL_RUN_SOURCE (ply-core/src/catalog.rs) at"
+echo "ply/{package}, release, and self-update hosts. Not before: bare names"
+echo "like \`postgres@17\` resolve through it on every live deployment."

@@ -72,6 +72,14 @@ struct Args {
     #[arg(long = "symlink")]
     symlinks: Vec<String>,
 
+    /// Append a TOML fragment to the generated manifest — how to RUN what
+    /// the deb ships (`[package] entrypoint`, `[ports]`, `[volumes]`,
+    /// `[health]`). A keg with an entrypoint is simply a package that is
+    /// also runnable: one `ply/redis` instead of a keg plus a wrapper of the
+    /// same name, which two namespaces were papering over.
+    #[arg(long = "manifest-extra", value_name = "FILE")]
+    manifest_extra: Option<PathBuf>,
+
     /// Re-download cached indexes regardless of age
     #[arg(long)]
     refresh: bool,
@@ -278,6 +286,13 @@ fn main() -> Result<()> {
         manifest.push_str(&format!("ld_library_path = {}\n", toml_array(&lib_paths)));
     }
     manifest.push_str(&format!("\n[dependencies]\ndebian = \"{}\"\n", args.base));
+    // Hand-written runtime metadata. The generated part says what the
+    // package CONTAINS; this says how to RUN it. Its `[package]` keys are
+    // merged into the generated one — two `[package]` tables would be a
+    // duplicate key, and the fragment must read like the manifest it becomes.
+    if let Some(extra) = &args.manifest_extra {
+        manifest = merge_manifest_extra(&manifest, extra)?;
+    }
     std::fs::write(staging.join("ply.toml"), &manifest)?;
 
     std::fs::create_dir_all(&args.outdir)
@@ -979,6 +994,36 @@ fn tempfile_dir() -> Result<PathBuf> {
     let dir = std::env::temp_dir().join(format!("deb2pkg-{}", std::process::id()));
     std::fs::create_dir_all(&dir)?;
     Ok(dir)
+}
+
+/// Fold a hand-written fragment into a generated keg manifest: `[package]`
+/// keys join the generated `[package]`, every other table is appended whole.
+/// Returns the manifest text, re-rendered.
+fn merge_manifest_extra(manifest: &str, extra: &Path) -> Result<String> {
+    let text =
+        std::fs::read_to_string(extra).with_context(|| format!("reading {}", extra.display()))?;
+    let fragment: toml::Table = text
+        .parse()
+        .with_context(|| format!("{}: not valid TOML", extra.display()))?;
+    let mut doc: toml::Table = manifest
+        .parse()
+        .context("generated manifest is not valid TOML (deb2pkg bug)")?;
+
+    for (key, value) in fragment {
+        match (doc.get_mut(&key), value) {
+            // merge table-into-table, so `[package] entrypoint` lands beside
+            // the generated name/version instead of redeclaring the table
+            (Some(toml::Value::Table(into)), toml::Value::Table(from)) => {
+                for (k, v) in from {
+                    into.insert(k, v);
+                }
+            }
+            (_, value) => {
+                doc.insert(key, value);
+            }
+        }
+    }
+    toml::to_string_pretty(&doc).context("re-rendering the merged manifest")
 }
 
 #[cfg(test)]

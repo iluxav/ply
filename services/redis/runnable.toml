@@ -1,0 +1,44 @@
+# Appended to the generated redis keg by `deb2pkg --manifest-extra`. The keg
+# says what redis IS; this says how to run it — so `ply/redis` is one package,
+# depended on by a build and deployed by a host, rather than a keg and a
+# same-named 4 KiB wrapper kept apart by living in two namespaces.
+#
+#   ply run redis@8                      # dev: no auth, port 6379
+#   ply run redis@8 -e REDIS_PASSWORD=s3cret -e REDIS_PORT=6380
+#
+#   REDIS_PASSWORD   set → requirepass
+#   REDIS_PORT       listen port (default: 6379)
+#   REDIS_BIND       bind address (default: * -::*; use 127.0.0.1 to keep a
+#                    rootless instance off the LAN)
+#   REDIS_ARGS       extra redis-server arguments, word-split
+#
+# Data persists in the `data` volume (RDB snapshots in /data).
+
+[package]
+user = "redis:100:100"
+entrypoint = ["/bin/sh", "-c", """
+set -e
+AUTH=
+[ -n "$REDIS_PASSWORD" ] && AUTH="--requirepass $REDIS_PASSWORD"
+exec redis-server --port "${REDIS_PORT:-6379}" --bind ${REDIS_BIND:-* -::*} \
+  --protected-mode no --dir /data $AUTH $REDIS_ARGS
+"""]
+
+[volumes]
+data = { path = "/data" }
+
+[ports]
+db = 6379
+
+[health]
+port = 6379
+grace = "15s"
+
+[restart]
+policy = "on-failure"
+
+# A keg only DECLARES its base; an app RESOLVES it, so being runnable means
+# naming where the closure comes from (build.rs skips the lockfile entirely
+# for a package with no entrypoint).
+[sources]
+default = "https://registry.plybox.sh/ply/{package}"

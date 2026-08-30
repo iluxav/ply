@@ -413,7 +413,7 @@ async function publishState() {
     writeFileSync(file, JSON.stringify(obj, null, 1));
     execFileSync("npx", ["wrangler", "r2", "object", "put",
       `${args.bucket}/${key}`, "--file", file, "--remote",
-      "--cache-control", "public, max-age=300", "--content-type", "application/json"],
+      "--cache-control", "public, max-age=30", "--content-type", "application/json"],
       { stdio: ["ignore", "ignore", "pipe"] });
     rmSync(file, { force: true });
     console.log(`${key} published (${obj.package_count} packages, ${obj.image_count} images)`);

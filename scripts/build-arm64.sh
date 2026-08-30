@@ -39,7 +39,9 @@ push ply "$OUT"/debian-*-linux-arm64.img
 echo "==> phase 2: deb2pkg kegs (arm64)"
 cargo run --release -p deb2pkg -- git --arch arm64 --outdir "$OUT"
 cargo run --release -p deb2pkg -- caddy --arch arm64 --outdir "$OUT"
-cargo run --release -p deb2pkg -- redis-server --name redis --arch arm64 --outdir "$OUT"
+# redis is ONE package: the deb's contents plus how to run them. No wrapper.
+cargo run --release -p deb2pkg -- redis-server --name redis \
+  --manifest-extra services/redis/runnable.toml --arch arm64 --outdir "$OUT"
 cargo run --release -p deb2pkg -- postgresql-17 --name postgresql17 --skip-so llvmjit.so --arch arm64 --outdir "$OUT"
 cargo run --release -p deb2pkg -- postgresql-client-17 --name postgresql-client17 --arch arm64 --outdir "$OUT"
 cargo run --release -p deb2pkg -- rclone --arch arm64 --outdir "$OUT"
@@ -73,9 +75,9 @@ push ply "$OUT"/git-*-linux-arm64.img "$OUT"/caddy-*-linux-arm64.img \
   "$OUT"/node-*-linux-arm64.img
 
 echo "==> phase 4: app wrappers (arm64)"
-# NOTE: the redis wrapper reuses out/redis-<v>-linux-arm64.img — the keg of
-# the same name was already pushed above, so the overwrite is safe.
-for d in postgres redis pg-backup; do
+# postgres and pg-backup carry real scripts of their own, so they stay
+# wrappers over a keg. redis does not — it is built runnable in phase 2.
+for d in postgres pg-backup; do
   v=$(sed -n 's/^version = "\(.*\)"/\1/p' "services/$d/ply.toml" | head -1)
   "$PLY" build "services/$d" -o "$OUT/$d-$v-linux-arm64.img" --arch arm64
 done
@@ -87,8 +89,7 @@ nv=$(sed -n 's/^version = "\(.*\)"/\1/p' services/notify/ply.toml | head -1)
 
 pgv=$(sed -n 's/^version = "\(.*\)"/\1/p' services/postgres/ply.toml | head -1)
 pbv=$(sed -n 's/^version = "\(.*\)"/\1/p' services/pg-backup/ply.toml | head -1)
-rv=$(sed -n 's/^version = "\(.*\)"/\1/p' services/redis/ply.toml | head -1)
-push apps "$OUT/postgres-$pgv-linux-arm64.img" "$OUT/redis-$rv-linux-arm64.img" \
+push apps "$OUT/postgres-$pgv-linux-arm64.img" \
   "$OUT/pg-backup-$pbv-linux-arm64.img" "$OUT/notify-$nv-linux-arm64.img"
 
 echo "==> done. gate:"
