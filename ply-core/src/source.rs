@@ -131,9 +131,49 @@ impl Source {
             .filter(|img| img.name == name && img.os == os && img.arch == arch)
             .map(|img| img.version)
             .collect();
+        // The listing above sees only what the source STORES. A version
+        // published by URL (`ply push <url>`) is deliberately absent from
+        // index.json — a bare filename there would name bytes the registry
+        // does not hold — and lives in the catalog instead, with an absolute
+        // `src`. Without this merge such a version resolves nowhere: it shows
+        // on the site and in `ply search`, while `app =`, `run =` and stack
+        // members all report "no published <name>".
+        versions.extend(self.catalog_images(name).into_iter().filter_map(|(f, _)| {
+            ImageName::parse(&f)
+                .ok()
+                .filter(|img| img.name == name && img.os == os && img.arch == arch)
+                .map(|img| img.version)
+        }));
         versions.sort();
         versions.dedup();
         Ok(versions)
+    }
+
+    /// `(filename, src)` for every version the catalog lists for `name`.
+    /// A source need not publish a catalog: absence is not an error, it just
+    /// means the listing is whatever the source stores.
+    fn catalog_images(&self, name: &str) -> Vec<(String, String)> {
+        let Ok(catalog) = crate::catalog::Catalog::load(self) else {
+            return Vec::new();
+        };
+        catalog
+            .packages
+            .iter()
+            .filter(|p| p.name == name)
+            .flat_map(|p| p.versions.iter())
+            .filter_map(|v| v.img.clone().map(|img| (img, v.src.clone())))
+            .filter(|(_, src)| !src.is_empty())
+            .collect()
+    }
+
+    /// Where the bytes of `filename` actually live, when that is not the
+    /// source's own canonical path — the absolute `src` the catalog records
+    /// for a URL-published version. `None` means "fetch it the usual way".
+    pub fn catalog_src(&self, name: &str, filename: &str) -> Option<String> {
+        self.catalog_images(name)
+            .into_iter()
+            .find(|(f, _)| f == filename)
+            .map(|(_, src)| src)
     }
 
     /// Fetch one package image, verify its sha256, insert into the store.
@@ -168,7 +208,11 @@ impl Source {
                 std::fs::copy(&src, &tmp).map_err(|source| Error::Io { path: src, source })?;
             }
             _ => {
-                let url = self.url_for(&image.name, &filename, &image.version);
+                // A URL-published version is not under this source's prefix;
+                // the catalog is the only thing that knows where it is.
+                let url = self
+                    .catalog_src(&image.name, &filename)
+                    .unwrap_or_else(|| self.url_for(&image.name, &filename, &image.version));
                 if let Err(e) = http_get_file(&url, &tmp) {
                     let _ = std::fs::remove_file(&tmp); // no partial downloads left behind
                     return Err(Error::Source(format!("download {url} failed: {e}")));
@@ -396,6 +440,86 @@ mod tests {
         assert_eq!(
             source.url_for("ffmpeg", &image.to_string(), &image.version),
             "https://github.com/org/repo/releases/download/v6.1.0/ffmpeg-6.1.0-linux-x64.img"
+        );
+    }
+}
+
+#[cfg(test)]
+mod catalog_versions_tests {
+    use super::*;
+    use crate::image::name::{Arch, Os};
+
+    /// A source whose catalog names a version the directory does not hold —
+    /// exactly the shape `ply push <url>` produces: the registry records the
+    /// version with an absolute `src`, and index.json (or the dir listing)
+    /// deliberately omits it because the bytes live elsewhere.
+    fn source_with(dir: &std::path::Path, state: &str, files: &[&str]) -> Source {
+        let pkg = dir.join("foo");
+        std::fs::create_dir_all(&pkg).unwrap();
+        for f in files {
+            std::fs::write(pkg.join(f), b"x").unwrap();
+        }
+        std::fs::write(dir.join("state.json"), state).unwrap();
+        Source::parse(&format!("file://{}/{{package}}", dir.display()), false).unwrap()
+    }
+
+    const STATE: &str = r#"{"packages":[{"namespace":"n","name":"foo","type":"app","versions":[
+      {"version":"1.0.0","arch":"x64","img":"foo-1.0.0-linux-x64.img","src":"https://r/foo-1.0.0-linux-x64.img"},
+      {"version":"2.0.0","arch":"x64","img":"foo-2.0.0-linux-x64.img","src":"https://elsewhere.example/foo-2.0.0-linux-x64.img"}
+    ]}]}"#;
+
+    #[test]
+    fn a_version_only_the_catalog_knows_is_still_listed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = source_with(tmp.path(), STATE, &["foo-1.0.0-linux-x64.img"]);
+        let got = src.list_versions("foo", Os::Linux, Arch::X64).unwrap();
+        let got: Vec<String> = got.iter().map(|v| v.to_string()).collect();
+        assert!(
+            got.contains(&"2.0.0".to_string()),
+            "url-published 2.0.0 must resolve, got {got:?}"
+        );
+        assert!(got.contains(&"1.0.0".to_string()), "got {got:?}");
+    }
+
+    /// The catalog is optional — a source that publishes only an index must
+    /// keep working exactly as before.
+    #[test]
+    fn no_catalog_still_lists_from_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pkg = tmp.path().join("foo");
+        std::fs::create_dir_all(&pkg).unwrap();
+        std::fs::write(pkg.join("foo-1.0.0-linux-x64.img"), b"x").unwrap();
+        let src = Source::parse(
+            &format!("file://{}/{{package}}", tmp.path().display()),
+            false,
+        )
+        .unwrap();
+        let got = src.list_versions("foo", Os::Linux, Arch::X64).unwrap();
+        assert_eq!(got.len(), 1, "got {got:?}");
+    }
+
+    /// Whoever fetches must be told where the bytes actually are, or it will
+    /// request a path the registry never stored.
+    #[test]
+    fn catalog_src_locates_bytes_that_are_not_at_the_canonical_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = source_with(tmp.path(), STATE, &["foo-1.0.0-linux-x64.img"]);
+        assert_eq!(
+            src.catalog_src("foo", "foo-2.0.0-linux-x64.img").as_deref(),
+            Some("https://elsewhere.example/foo-2.0.0-linux-x64.img")
+        );
+    }
+
+    /// Wrong architecture must never be offered — the resolver would fetch an
+    /// image this host cannot run.
+    #[test]
+    fn other_architectures_are_filtered_out() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = source_with(tmp.path(), STATE, &[]);
+        let got = src.list_versions("foo", Os::Linux, Arch::Arm64).unwrap();
+        assert!(
+            got.is_empty(),
+            "x64-only catalog leaked into arm64: {got:?}"
         );
     }
 }
