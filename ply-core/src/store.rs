@@ -21,7 +21,7 @@ impl Store {
     pub fn open_default() -> Result<Store> {
         let root = if let Ok(dir) = std::env::var("PLY_STORE") {
             PathBuf::from(dir)
-        } else if rustix_is_root() {
+        } else if crate::paths::is_root() {
             PathBuf::from(SYSTEM_STORE)
         } else {
             let home = std::env::var("HOME").map_err(|_| {
@@ -138,15 +138,7 @@ fn move_file(from: &Path, to: &Path) -> Result<()> {
     Ok(())
 }
 
-fn rustix_is_root() -> bool {
-    // effective uid 0; avoids pulling a uid crate for one call
-    unsafe { libc_geteuid() == 0 }
-}
-
-extern "C" {
-    #[link_name = "geteuid"]
-    fn libc_geteuid() -> u32;
-}
+extern "C" {}
 
 #[cfg(test)]
 mod tests {

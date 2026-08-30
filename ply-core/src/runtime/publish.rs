@@ -246,13 +246,13 @@ pub fn bind(spec: Publish, rootless: bool) -> Result<TcpListener> {
 /// Accept loop — runs on its own thread for the parent's lifetime. Each
 /// connection tries the pool in round-robin order and splices bytes; an
 /// unreachable backend (booting, dying, mid-roll) is skipped.
-pub fn serve(listener: TcpListener, pool: Pool) {
-    // Never dial ourselves. If a backend ever equals this listener's own
-    // address, every accepted connection would open another to us: a loop
-    // that spawns a thread per hop until the process runs out. It took one
-    // bad address derivation to find that out, so the guard lives here
-    // rather than in whatever computes the address next time.
-    let own = listener.local_addr().ok();
+/// `same_network`: do the listener and the backends live in ONE network? On
+/// the host's, yes — and then a backend equal to this listener's address is
+/// a loop that spawns a thread per hop until the process dies, so it must be
+/// refused. With the instances in their own namespace the very same numbers
+/// name different sockets, and refusing would break every publish.
+pub fn serve(listener: TcpListener, pool: Pool, same_network: bool) {
+    let own = same_network.then(|| listener.local_addr().ok()).flatten();
     for conn in listener.incoming() {
         let Ok(client) = conn else { continue };
         let pool = pool.clone();
@@ -351,7 +351,7 @@ mod tests {
         let addr = front.local_addr().unwrap();
         let pool = Pool::new();
         pool.insert(0, addr); // the exact shape a bad address derivation makes
-        std::thread::spawn(move || serve(front, pool));
+        std::thread::spawn(move || serve(front, pool, true));
 
         // the connection is refused service rather than looping: it closes
         let mut c = TcpStream::connect(addr).expect("connect");
@@ -636,7 +636,7 @@ mod tests {
         let front = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let front_addr = front.local_addr().unwrap();
         let serve_pool = pool.clone();
-        std::thread::spawn(move || serve(front, serve_pool));
+        std::thread::spawn(move || serve(front, serve_pool, true));
 
         for i in 0..4 {
             assert_eq!(roundtrip(front_addr, b"ping"), b"ping", "conn {i}");

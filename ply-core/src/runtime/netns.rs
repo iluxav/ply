@@ -164,6 +164,32 @@ pub fn enter(ns: &OwnedFd) -> Result<()> {
         .map_err(|e| Error::Runtime(format!("joining a network namespace: {e}")))
 }
 
+impl NetNs {
+    /// Move this process into the holder's USER namespace only.
+    ///
+    /// This is the key that unlocks the network one. Joining a network
+    /// namespace needs CAP_SYS_ADMIN both in the namespace that owns it and
+    /// in the caller's own user namespace (`netns_install` checks both), and
+    /// an unprivileged process has neither out here. Inside the user
+    /// namespace it owns, it has both.
+    ///
+    /// Only the user namespace, deliberately: the network stays the host's,
+    /// so this process and the children it spawns can still resolve names
+    /// and fetch images. Each child joins the network namespace itself,
+    /// after its downloads and before it launches anything. Children keep
+    /// the capability across `execve` because inside here they are uid 0.
+    ///
+    /// Must be called while single-threaded: `setns(CLONE_NEWUSER)` refuses
+    /// a threaded process.
+    pub fn enter_user(&self) -> Result<()> {
+        let user = std::fs::File::open(format!("/proc/{}/ns/user", self.holder))
+            .map(OwnedFd::from)
+            .map_err(|e| Error::Runtime(format!("opening the holder's user namespace: {e}")))?;
+        nix::sched::setns(&user, CloneFlags::CLONE_NEWUSER)
+            .map_err(|e| Error::Runtime(format!("joining the user namespace: {e}")))
+    }
+}
+
 /// The holder: unshare, raise `lo`, report, park.
 fn child_hold(ready: OwnedFd, go: OwnedFd) -> Result<()> {
     use std::io::Write;

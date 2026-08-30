@@ -283,7 +283,10 @@ pub(crate) fn http_get_string(url: &str) -> std::result::Result<String, String> 
 fn http_get_file(url: &str, dest: &Path) -> std::result::Result<(), String> {
     let mut response = ureq::get(url).call().map_err(|e| e.to_string())?;
     let mut reader = response.body_mut().as_reader();
-    let mut file = std::fs::File::create(dest).map_err(|e| e.to_string())?;
+    // Name the file: "download failed: Permission denied" reads like the
+    // network refused us, when it is the disk that did.
+    let mut file =
+        std::fs::File::create(dest).map_err(|e| format!("creating {}: {e}", dest.display()))?;
     let mut buf = [0u8; 64 * 1024];
     loop {
         let n = reader.read(&mut buf).map_err(|e| e.to_string())?;

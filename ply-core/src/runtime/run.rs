@@ -199,7 +199,11 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
         let spec = &spec;
         let pool = crate::runtime::publish::Pool::new();
         let serve_pool = pool.clone();
-        std::thread::spawn(move || crate::runtime::publish::serve(listener, serve_pool));
+        // The listener was bound out there; the instances live in here.
+        let same_network = opts.netns.is_none();
+        std::thread::spawn(move || {
+            crate::runtime::publish::serve(listener, serve_pool, same_network)
+        });
         eprintln!(
             "ply: publishing {}:{} → {} pool",
             spec.scope.bind_addr(rootless),
@@ -1422,6 +1426,30 @@ pub fn parse_subid(text: &str, user: &str, id: u32) -> Option<SubIdRange> {
 }
 
 /// The invoking user's name, read from the host's passwd file.
+/// Our own id map, rewritten so a child sees the same ids we do. An entry
+/// `inside outside count` becomes `inside inside count`: the child's view
+/// matches ours, and every id it names is one we actually hold.
+///
+/// Empty when we are the initial namespace (mapping everything), which is
+/// not something to hand a child — the helpers deal with that case.
+fn mirror_own_map(file: &str) -> String {
+    let Ok(map) = std::fs::read_to_string(format!("/proc/self/{file}")) else {
+        return String::new();
+    };
+    let mut out = String::new();
+    for line in map.lines() {
+        let f: Vec<&str> = line.split_whitespace().collect();
+        if f.len() != 3 {
+            return String::new();
+        }
+        if f == ["0", "0", "4294967295"] {
+            return String::new(); // the initial namespace
+        }
+        out.push_str(&format!("{} {} {}\n", f[0], f[0], f[2]));
+    }
+    out
+}
+
 fn username_for(uid: u32) -> Option<String> {
     let text = std::fs::read_to_string("/etc/passwd").ok()?;
     text.lines()
@@ -1469,6 +1497,31 @@ pub(crate) fn write_id_maps(pid: i32) -> Result<()> {
         _ => None,
     };
 
+    // Write the child's maps ourselves when we may. Inside a namespace ply
+    // created (`ply up`'s fleet) we hold CAP_SETUID/CAP_SETGID over our
+    // children, and the setuid helpers are powerless there anyway: host
+    // root is unmapped, so their setuid bit does nothing and they fail with
+    // EPERM. Outside, this write is refused and the helpers below run
+    // exactly as before.
+    //
+    // The child gets OUR id space, one-to-one — the ids we may delegate are
+    // precisely the ones mapped to us, and `/proc/self/uid_map` is the only
+    // honest account of those.
+    if let Some((umap, gmap)) = (mirror_own_map("uid_map"), mirror_own_map("gid_map")).into() {
+        let direct = |file: &str, contents: &str| -> std::io::Result<()> {
+            std::fs::write(format!("/proc/{pid}/{file}"), contents)
+        };
+        // NOT setgroups=deny: irreversible, and gosu/su-exec need setgroups
+        // on their way down to a service user.
+        if !umap.is_empty()
+            && !gmap.is_empty()
+            && direct("gid_map", &gmap).is_ok()
+            && direct("uid_map", &umap).is_ok()
+        {
+            return Ok(());
+        }
+    }
+
     if let Some((u, g)) = ranges {
         // NOT setgroups=deny here: that is irreversible, and gosu/su-exec
         // call setgroups() on their way down to a service user. The helpers
@@ -1487,7 +1540,9 @@ pub(crate) fn write_id_maps(pid: i32) -> Result<()> {
             }
             Ok(())
         };
-        // inside 0 -> your uid (1 id), then inside 1.. -> the delegated range
+        // RootIsYou: inside 0 -> your uid (1 id), then inside 1.. -> the
+        // delegated range. Identity: every id keeps its number, so the
+        // subuid range is usable by nested namespaces under the same names.
         helper(
             "newuidmap",
             [
@@ -1533,6 +1588,12 @@ pub(crate) fn write_id_maps(pid: i32) -> Result<()> {
 /// Why the single-id map is in play, for the one-line warning at startup.
 /// None when a delegated range is usable.
 pub fn subid_gap() -> Option<&'static str> {
+    // Inside a namespace ply owns, the range comes from the map we already
+    // hold, not from /etc/subuid — where this process is uid 0 and would
+    // look up "root" and find nothing. Warning there would be false.
+    if !mirror_own_map("uid_map").is_empty() {
+        return None;
+    }
     let uid = nix::unistd::getuid().as_raw();
     let gid = nix::unistd::getgid().as_raw();
     let user = username_for(uid).unwrap_or_default();

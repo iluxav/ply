@@ -5,7 +5,7 @@ use crate::cli::PsArgs;
 
 pub fn exec(args: PsArgs) -> Result<()> {
     // Reaping needs root (unmounts); without it just show liveness.
-    if nix_is_root() {
+    if ply_core::paths::is_root() {
         let _ = state::reap_stale();
     }
     let states = state::list()?;
@@ -98,12 +98,4 @@ fn human_duration(secs: u64) -> String {
         3600..=86399 => format!("{}h", secs / 3600),
         _ => format!("{}d", secs / 86400),
     }
-}
-
-fn nix_is_root() -> bool {
-    unsafe { nix_geteuid() == 0 }
-}
-extern "C" {
-    #[link_name = "geteuid"]
-    fn nix_geteuid() -> u32;
 }

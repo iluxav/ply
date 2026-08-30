@@ -110,7 +110,12 @@ pub fn exec(args: UpArgs) -> Result<()> {
     // what lets one stack file mean the same thing here and on a droplet.
     let netns = match ply_core::paths::is_root() {
         true => None,
-        false => match ply_core::runtime::netns::NetNs::create() {
+        false => match ply_core::runtime::netns::NetNs::create()
+            .and_then(|ns| ns.enter_user().map(|()| ns))
+        {
+            // This process now owns the namespaces; the network is still the
+            // host's, so members can fetch what they need. Each joins the
+            // stack's network itself, once it is ready to launch.
             Ok(ns) => Some(ns),
             Err(e) => {
                 eprintln!("ply up: {e}");

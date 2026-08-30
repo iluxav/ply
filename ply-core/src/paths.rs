@@ -3,8 +3,30 @@
 
 use std::path::PathBuf;
 
+/// Real root — not root *inside a user namespace*.
+///
+/// Both look identical to `geteuid()`, and the difference decides
+/// everything: whether ply builds a bridge, writes /etc/systemd, sets
+/// cgroup limits. Inside `ply up`'s own namespace a process is uid 0 (it
+/// must be, or `execve` would strip the capabilities its children need to
+/// be mapped) while having none of root's actual reach. The initial user
+/// namespace is the one mapping the whole id range as itself.
 pub fn is_root() -> bool {
-    nix::unistd::geteuid().is_root()
+    nix::unistd::geteuid().is_root() && in_initial_user_ns()
+}
+
+/// Every "am I root?" in ply routes through `is_root` for this reason: a
+/// process inside a user namespace sees euid 0 and would otherwise pick
+/// root's paths (`/var/lib/ply/store`) that it cannot write.
+fn in_initial_user_ns() -> bool {
+    match std::fs::read_to_string("/proc/self/uid_map") {
+        Ok(map) => {
+            let f: Vec<&str> = map.split_whitespace().collect();
+            f == ["0", "0", "4294967295"]
+        }
+        // unreadable (no /proc): trust the uid, as ply always did
+        Err(_) => true,
+    }
 }
 
 /// Ephemeral state (instances, state files). tmpfs either way.

@@ -53,7 +53,48 @@ caller can never dial into the wrong network. Tested: a listener that exists
 only inside a namespace is unreachable via `Direct` and reachable via
 `InNamespace`.
 
-**Step 3 implemented; needs the installed binary to verify.** The design
+**DONE — verified 2026-08-30 on this laptop.** A rootless stack runs in its
+own network namespace: postgres binds 5432, the API 3001, Next 3000, members
+reach each other as `<name>.ply`, and the machine's own postgres on 5432 is
+untouched. The dev overlay no longer overrides a single address — only a
+password, one host-side port, and local checkouts.
+
+How it fits together, in the order the kernel forces:
+
+1. `ply up` forks a holder that unshares a user namespace and waits; the
+   parent maps it with `newuidmap` (a child cannot map itself under
+   `apparmor_restrict_unprivileged_userns`), then the holder unshares the
+   network namespace and raises `lo`.
+2. `ply up` joins the USER namespace only. That is the key: joining a
+   network namespace needs CAP_SYS_ADMIN in the namespace that owns it AND
+   in the caller's own, and inside the one it owns it has both. The network
+   stays the host's, so members can still resolve names and fetch images.
+3. Each member inherits that user namespace — keeping capabilities across
+   `execve` because inside it they are uid 0 — fetches what it needs, binds
+   its published listener OUT HERE, then joins the network namespace and
+   launches. A bound socket keeps working after its process moves, so the
+   proxy accepts on the host and connects from inside.
+
+Three traps this uncovered, all fixed and each worth remembering:
+
+- `geteuid() == 0` is not "am I root". Inside a user namespace it is true
+  while none of root's reach exists — the store picked `/var/lib/ply/store`
+  and could not write it. Every root check now routes through
+  `paths::is_root`, which also requires the initial user namespace.
+- Capabilities are dropped by `execve` unless euid is 0, so the fleet
+  namespace must map root-is-you; an identity map left members powerless.
+- A guard comparing socket ADDRESSES must know whether two sockets share a
+  network: `127.0.0.1:3001` inside and outside are different sockets.
+
+Remaining before the deletions in this item can happen:
+
+- egress (`pasta`): inside the namespace there is no route out, so an app
+  calling an external API at runtime fails. Fetching happens before the
+  join, so builds and pulls are fine.
+- discovery env still advertises the host-side published address
+  (`DB_ADDR=127.0.0.1:5433`) instead of the in-namespace one.
+
+Superseded note, kept because it is why the design changed: The design
 below is now in place: `ply up` makes the namespace, and each `ply run`
 binds its published listeners in the caller's network FIRST (a bound socket
 keeps working after its process moves), then joins the namespace, then

@@ -129,7 +129,7 @@ pub fn new(
 /// the image IS the upperdir at commit time, so resuming is lossless on any
 /// machine that has the file.
 pub fn edit(image: &Path, source_override: Option<&str>, allow_insecure: bool) -> Result<String> {
-    if !nix::unistd::geteuid().is_root() {
+    if !crate::paths::is_root() {
         return Err(Error::Runtime("ply craft needs root — try sudo".into()));
     }
     let manifest = crate::image::read::read_manifest(image)?;
@@ -203,7 +203,7 @@ pub fn edit(image: &Path, source_override: Option<&str>, allow_insecure: bool) -
 
 /// `ply craft shell` — (re)enter the session.
 pub fn shell(name: &str, cmd: &[String]) -> Result<i32> {
-    if !nix::unistd::geteuid().is_root() {
+    if !crate::paths::is_root() {
         return Err(Error::Runtime("ply craft needs root — try sudo".into()));
     }
     let session = CraftSession::load(name)?;
