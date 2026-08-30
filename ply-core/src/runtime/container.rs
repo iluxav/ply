@@ -40,6 +40,11 @@ pub struct ContainerSpec {
     /// Running in a user namespace as an unprivileged user: /dev nodes are
     /// bind-mounted from the host (mknod is denied), devpts is best-effort.
     pub rootless: bool,
+    /// Names that must resolve to loopback inside this container: the other
+    /// members of a shared namespace. Rootful writes `<app>.ply` into the
+    /// host's /etc/hosts against real bridge IPs; sharing a namespace, the
+    /// members ARE loopback, so the same names are written here instead.
+    pub local_aliases: Vec<String>,
     /// Switch to this user before exec ([package] user = "name:uid:gid").
     pub run_user: Option<crate::manifest::RunUser>,
     /// Write end of the parent's log tee: stdout+stderr are redirected here
@@ -112,6 +117,12 @@ fn setup_and_exec(spec: &ContainerSpec) -> Result<isize> {
     {
         use std::io::Write;
         let _ = writeln!(hosts, "127.0.0.1\t{}", spec.hostname);
+        // Siblings sharing this namespace: `db.ply` means the same thing
+        // here as it does on a bridge, which is what lets one stack file
+        // serve a laptop and a droplet.
+        for alias in &spec.local_aliases {
+            let _ = writeln!(hosts, "127.0.0.1\t{alias}.ply");
+        }
     }
 
     // A declared run user gets a passwd/group entry (getpwuid must work —

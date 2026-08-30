@@ -8,6 +8,7 @@ pub mod hosts;
 pub mod logring;
 pub mod loopdev;
 pub mod mount;
+pub mod netns;
 pub mod network;
 pub mod publish;
 pub mod run;

@@ -40,6 +40,14 @@ pub struct RunOptions {
     /// own backend pool, all fed by the same instances. An edge needs :80 and
     /// :443 together; a service may want HTTP plus gRPC or metrics.
     pub publish: Vec<crate::runtime::publish::Publish>,
+    /// Names of the other members sharing `netns`, so `<name>.ply` resolves
+    /// to loopback inside each container.
+    pub netns_peers: Vec<String>,
+    /// A network namespace every instance joins (`/proc/<pid>/ns/net`).
+    /// Rootless, this is how a stack's members share one network: they bind
+    /// their own natural ports there and reach each other on loopback,
+    /// touching no host port. `None` keeps the caller's network.
+    pub netns: Option<PathBuf>,
     /// `--after`: apps on this host that must be healthy before the first
     /// instance launches (waited for once, at parent start).
     pub after: Vec<String>,
@@ -152,9 +160,43 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
     // pool map follows the instance lifecycle via launch/Drop.
     // Every listener is claimed before anything starts, so a taken port fails
     // fast rather than half-way through a launch.
+    // Order matters. The listeners are claimed HERE, in the caller's
+    // network, because that is where the world reaches them — a bound
+    // socket keeps working after its process moves. Only then does this
+    // process join the stack's namespace, so everything spawned below (the
+    // accept threads, and every instance) is already inside it.
+    let listeners: Vec<(crate::runtime::publish::Publish, std::net::TcpListener)> = opts
+        .publish
+        .iter()
+        .map(|spec| crate::runtime::publish::bind(*spec, rootless).map(|l| (*spec, l)))
+        .collect::<Result<Vec<_>>>()?;
+
+    // Joining is best-effort: a stack that cannot get its own network should
+    // still run on the host's, exactly as it did before any of this existed.
+    // What must NOT happen is believing we joined when we did not — the
+    // instance's address is derived from it, and on the host network an
+    // un-injected port makes the pool's backend the proxy's own listener,
+    // which then accepts its own connections until it runs out of threads.
+    let _joined = match &opts.netns {
+        None => false,
+        Some(path) => match std::fs::File::open(path)
+            .map_err(|source| Error::Io {
+                path: path.clone(),
+                source,
+            })
+            .and_then(|ns| crate::runtime::netns::enter(&std::os::fd::OwnedFd::from(ns)))
+        {
+            Ok(()) => true,
+            Err(e) => {
+                eprintln!("ply: staying on the host network — {e}");
+                false
+            }
+        },
+    };
+
     let mut publishing: Vec<PublishWiring> = Vec::new();
-    for spec in &opts.publish {
-        let listener = crate::runtime::publish::bind(*spec, rootless)?;
+    for (spec, listener) in listeners {
+        let spec = &spec;
         let pool = crate::runtime::publish::Pool::new();
         let serve_pool = pool.clone();
         std::thread::spawn(move || crate::runtime::publish::serve(listener, serve_pool));
@@ -944,6 +986,21 @@ fn volume_name_from_path(path: &str) -> String {
     }
 }
 
+/// Is this process inside the namespace at `path`? Compared by identity,
+/// not by whether a join was attempted — believing a failed join is what
+/// turns a proxy into its own backend.
+fn in_namespace(path: &std::path::Path) -> bool {
+    let ino = |p: &std::path::Path| {
+        std::fs::metadata(p)
+            .ok()
+            .map(|m| std::os::unix::fs::MetadataExt::ino(&m))
+    };
+    match (ino(path), ino(std::path::Path::new("/proc/self/ns/net"))) {
+        (Some(a), Some(b)) => a == b,
+        _ => false,
+    }
+}
+
 fn launch_instance(
     ctx: &AppContext,
     opts: &RunOptions,
@@ -1102,7 +1159,15 @@ fn launch_instance(
     // owns the externally visible port.
     // Skipped when the spec named the instance port: that is the author saying
     // where the app listens, and an imported image cannot be talked out of it.
-    let injected_port = match (publish.first(), rootless) {
+    // In a namespace of ply's own, an instance is alone on its loopback:
+    // it binds the port it declares, exactly as it does on a bridge. The
+    // injection below exists only for the host-network case, where every
+    // instance would otherwise fight for the same number.
+    // The process either joined the stack's namespace or it did not; asking
+    // the kernel avoids threading a flag through every launch path, and
+    // cannot disagree with reality the way a remembered intention can.
+    let in_own_network = !rootless || opts.netns.as_ref().is_some_and(|p| in_namespace(p));
+    let injected_port = match (publish.first(), rootless && !in_own_network) {
         (Some(w), true) if !w.spec.instance_port_explicit => {
             let port = crate::runtime::publish::allocate_loopback_port()?;
             match spec_env.iter_mut().find(|(k, _)| k == "PORT") {
@@ -1131,6 +1196,7 @@ fn launch_instance(
         keep_caps,
         privileged: opts.privileged,
         rootless,
+        local_aliases: opts.netns_peers.clone(),
         run_user,
         log_fd: Some(log_tx),
     };
@@ -1381,7 +1447,14 @@ fn have(tool: &str) -> bool {
 /// range needs CAP_SETUID in the parent namespace, which is exactly what the
 /// setuid-root `newuidmap`/`newgidmap` helpers are for. Same mechanism
 /// rootless podman and docker use.
-fn write_id_maps(pid: i32) -> Result<()> {
+/// Map a child's user namespace from OUT HERE.
+///
+/// The child cannot map itself: AppArmor's `apparmor_restrict_unprivileged_userns`
+/// (Ubuntu 24.04+) leaves an unprivileged user namespace without the
+/// capabilities its own `uid_map`/`setgroups` writes need. The setuid
+/// `newuidmap`/`newgidmap` helpers are how this is done everywhere, and how
+/// ply has always done it for containers.
+pub(crate) fn write_id_maps(pid: i32) -> Result<()> {
     let uid = nix::unistd::getuid().as_raw();
     let gid = nix::unistd::getgid().as_raw();
     let user = username_for(uid).unwrap_or_default();

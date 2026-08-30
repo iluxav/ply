@@ -663,6 +663,8 @@ fn build_from_repo(name: &str, spec: &Spec) -> Result<(PathBuf, String, bool)> {
             scale: 1,
             links: vec![(checkout.clone(), "/work".into())],
             publish: vec![],
+            netns: None,
+            netns_peers: vec![],
             after: vec![],
             after_timeout: std::time::Duration::from_secs(60),
             privileged: false,

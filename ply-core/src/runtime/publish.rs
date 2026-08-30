@@ -247,12 +247,25 @@ pub fn bind(spec: Publish, rootless: bool) -> Result<TcpListener> {
 /// connection tries the pool in round-robin order and splices bytes; an
 /// unreachable backend (booting, dying, mid-roll) is skipped.
 pub fn serve(listener: TcpListener, pool: Pool) {
+    // Never dial ourselves. If a backend ever equals this listener's own
+    // address, every accepted connection would open another to us: a loop
+    // that spawns a thread per hop until the process runs out. It took one
+    // bad address derivation to find that out, so the guard lives here
+    // rather than in whatever computes the address next time.
+    let own = listener.local_addr().ok();
     for conn in listener.incoming() {
         let Ok(client) = conn else { continue };
         let pool = pool.clone();
         std::thread::spawn(move || {
             let _ = client.set_nodelay(true);
             for addr in pool.rotated() {
+                if Some(addr) == own {
+                    eprintln!(
+                        "ply: refusing to proxy {addr} to itself — the instance is not \
+                         where the pool thinks it is"
+                    );
+                    continue;
+                }
                 match connect_either_family(addr, std::time::Duration::from_millis(500)) {
                     Ok(upstream) => {
                         let _ = upstream.set_nodelay(true);
@@ -328,6 +341,78 @@ mod tests {
             let port = allocate_loopback_port().expect("allocates");
             assert_ne!(port, taken, "handed out a port an app could not bind");
         }
+    }
+
+    /// A pool whose backend IS the listener must not be dialled: that loop
+    /// spawns a thread per hop and takes the process down with EAGAIN.
+    #[test]
+    fn a_listener_is_never_its_own_backend() {
+        let front = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = front.local_addr().unwrap();
+        let pool = Pool::new();
+        pool.insert(0, addr); // the exact shape a bad address derivation makes
+        std::thread::spawn(move || serve(front, pool));
+
+        // the connection is refused service rather than looping: it closes
+        let mut c = TcpStream::connect(addr).expect("connect");
+        let mut got = Vec::new();
+        c.set_read_timeout(Some(std::time::Duration::from_secs(2)))
+            .ok();
+        let _ = c.read_to_end(&mut got);
+        assert!(got.is_empty(), "no backend served it");
+    }
+
+    /// A backend inside a network namespace is reachable from a thread that
+    /// is also inside it — which is what the run parent arranges by joining
+    /// before it spawns anything. From outside, the same address is dead.
+    #[test]
+    fn a_namespace_backend_is_reachable_only_from_inside() {
+        use crate::runtime::netns::NetNs;
+
+        let ns = match NetNs::create() {
+            Ok(ns) => ns,
+            Err(e) if std::env::var("PLY_NETNS_TESTS").is_ok() => {
+                panic!("PLY_NETNS_TESTS is set but namespaces are unavailable: {e}")
+            }
+            // skips where unprivileged user namespaces are restricted; see
+            // netns::tests::namespace_for_test
+            Err(_) => return,
+        };
+
+        // a listener that exists only inside the namespace
+        let fd = ns.open().expect("ns fd");
+        let (port_tx, port_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            crate::runtime::netns::enter(&fd).expect("enter");
+            let l = TcpListener::bind("127.0.0.1:0").expect("bind inside");
+            port_tx.send(l.local_addr().unwrap().port()).unwrap();
+            for c in l.incoming().flatten() {
+                let mut c = c;
+                let _ = c.write_all(b"inside");
+            }
+        });
+        let port = port_rx.recv().expect("port");
+        let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+
+        // from the caller's network the address is dead…
+        assert!(
+            connect_either_family(addr, std::time::Duration::from_millis(200)).is_err(),
+            "premise: the backend is invisible from the caller's network"
+        );
+
+        // …and alive from a thread that joined the namespace
+        let fd = ns.open().expect("ns fd");
+        let got = std::thread::spawn(move || {
+            crate::runtime::netns::enter(&fd).expect("enter");
+            let mut conn = connect_either_family(addr, std::time::Duration::from_millis(500))
+                .expect("reaches the backend from inside");
+            let mut got = String::new();
+            conn.read_to_string(&mut got).expect("read");
+            got
+        })
+        .join()
+        .expect("thread");
+        assert_eq!(got, "inside");
     }
 
     /// An app that binds `[::]` IPv6-only must still look alive to a probe

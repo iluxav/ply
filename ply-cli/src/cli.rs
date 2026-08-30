@@ -245,6 +245,17 @@ pub struct RunArgs {
     #[arg(value_name = "IMAGE")]
     pub image: String,
 
+    /// Join this network namespace (`/proc/<pid>/ns/net`) instead of the
+    /// caller's. `ply up` passes the one it made for the stack, so members
+    /// share a network; not something to type by hand.
+    #[arg(long, value_name = "PATH", hide = true)]
+    pub netns: Option<std::path::PathBuf>,
+
+    /// A sibling in `--netns`, so `<name>.ply` resolves to loopback inside
+    /// the container. Repeatable; set by `ply up`.
+    #[arg(long = "netns-peer", value_name = "NAME", hide = true)]
+    pub netns_peer: Vec<String>,
+
     /// Name this running app instead of using the image's own name. Sets its
     /// state pool, its `<name>.ply` address, and what `--after` waits on — so
     /// two runs of one image (two databases, say) don't collide.

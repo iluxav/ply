@@ -101,11 +101,37 @@ pub fn exec(args: UpArgs) -> Result<()> {
         signal::signal(Signal::SIGTERM, signal::SigHandler::Handler(note_stop)).ok();
     }
     let exe = std::env::current_exe().context("locating the ply binary")?;
+
+    // One network for the stack. Rootful already gives every instance its
+    // own address on the bridge; rootless cannot attach a veth to the host,
+    // so ply makes a namespace it owns and puts the members inside it.
+    // There they bind their own declared ports, reach each other on
+    // loopback as `<name>.ply`, and touch nothing on the machine — which is
+    // what lets one stack file mean the same thing here and on a droplet.
+    let netns = match ply_core::paths::is_root() {
+        true => None,
+        false => match ply_core::runtime::netns::NetNs::create() {
+            Ok(ns) => Some(ns),
+            Err(e) => {
+                eprintln!("ply up: {e}");
+                eprintln!("ply up: falling back to the host's network for this run");
+                None
+            }
+        },
+    };
+    let peers: Vec<String> = prepared.iter().map(|p| p.member.clone()).collect();
+
     let mut children: Vec<(String, Child)> = Vec::new();
     for p in &prepared {
         let mut cmd = std::process::Command::new(&exe);
         cmd.arg("run").arg(&p.target);
         cmd.arg("--name").arg(&p.member);
+        if let Some(ns) = &netns {
+            cmd.arg("--netns").arg(ns.path());
+            for peer in peers.iter().filter(|n| *n != &p.member) {
+                cmd.arg("--netns-peer").arg(peer);
+            }
+        }
         for (k, v) in &p.env {
             cmd.arg("-e").arg(format!("{k}={v}"));
         }
