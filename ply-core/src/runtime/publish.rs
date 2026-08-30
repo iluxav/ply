@@ -158,14 +158,45 @@ impl Pool {
 /// Reserve a free loopback port (rootless: one per instance, injected as
 /// PORT). Bind-then-drop has a theoretical reuse race; in practice the
 /// instance rebinds it within milliseconds.
+///
+/// A free loopback port is not proof the app can bind it. Apps bind
+/// wildcards — node's `listen(port)` takes `[::]` — and a socket already on
+/// `[::]:port` (an editor's port forwarder mirroring an earlier run is the
+/// usual culprit, and it outlives the run it copied) does not stop the
+/// kernel handing us the same number on `127.0.0.1`. The app then fails to
+/// bind IPv6, serves nothing on IPv4 either, and ply waits on a port that
+/// answers for nobody — an instance that looks up and is unreachable.
+///
+/// So prefer a port free on every address the app might choose — but only
+/// prefer it. Whether *this* process can bind a wildcard is a property of
+/// where ply happens to be running (a namespace without IPv6 refuses `[::]`
+/// outright), and that must never decide whether an app may start. The
+/// probe filters candidates; a loopback port is still the answer.
 pub fn allocate_loopback_port() -> Result<u16> {
-    let listener = TcpListener::bind(("127.0.0.1", 0))
-        .map_err(|e| Error::Runtime(format!("allocating a loopback port: {e}")))?;
-    let port = listener
-        .local_addr()
-        .map_err(|e| Error::Runtime(format!("allocating a loopback port: {e}")))?
-        .port();
-    Ok(port)
+    let err = |e: std::io::Error| Error::Runtime(format!("allocating a loopback port: {e}"));
+    let mut fallback = None;
+    for _ in 0..64 {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(err)?;
+        let port = listener.local_addr().map_err(err)?.port();
+        drop(listener);
+        // A wildcard this process cannot bind AT ALL (EAFNOSUPPORT,
+        // EADDRNOTAVAIL — no IPv6 here) says nothing about the port, so
+        // only a genuine conflict disqualifies it.
+        let taken = |addr: &str| {
+            matches!(
+                TcpListener::bind((addr, port)),
+                Err(e) if e.kind() == std::io::ErrorKind::AddrInUse
+            )
+        };
+        if !taken("::") && !taken("0.0.0.0") {
+            return Ok(port);
+        }
+        fallback.get_or_insert(port);
+    }
+    // Every candidate was claimed on some wildcard. Hand back the first one
+    // anyway: the app may well bind loopback and work, and refusing to start
+    // is certainly worse than a port that might be shadowed.
+    fallback.ok_or_else(|| Error::Runtime("no loopback port available".into()))
 }
 
 /// Bind the published host port. Separate from `serve` so the claim fails
@@ -228,6 +259,59 @@ fn relay(client: TcpStream, upstream: TcpStream) {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// The allocator must skip a port an app could not bind.
+    ///
+    /// The squatter here is IPv6-ONLY on purpose: that is the shape seen in
+    /// the wild (an editor's port forwarder mirroring an earlier run). It
+    /// leaves 127.0.0.1 bindable, so the loopback probe calls the port free,
+    /// and it refuses IPv4 connections, so a connect check misses it too —
+    /// the instance then comes up bound to nothing reachable. A dual-stack
+    /// listener would block loopback and never reproduce the bug.
+    #[test]
+    fn allocated_port_is_free_on_every_address_an_app_might_bind() {
+        use nix::sys::socket::{
+            bind, listen, setsockopt, socket, sockopt, AddressFamily, Backlog, SockFlag,
+            SockProtocol, SockType, SockaddrIn6,
+        };
+        use std::net::{Ipv6Addr, SocketAddrV6};
+
+        let sock = socket(
+            AddressFamily::Inet6,
+            SockType::Stream,
+            SockFlag::empty(),
+            SockProtocol::Tcp,
+        )
+        .expect("ipv6 socket");
+        setsockopt(&sock, sockopt::Ipv6V6Only, &true).expect("v6only");
+        let any = SockaddrIn6::from(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0));
+        bind(std::os::fd::AsRawFd::as_raw_fd(&sock), &any).expect("bind [::]:0");
+        listen(&sock, Backlog::new(1).unwrap()).expect("listen");
+        let taken =
+            nix::sys::socket::getsockname::<SockaddrIn6>(std::os::fd::AsRawFd::as_raw_fd(&sock))
+                .expect("port")
+                .port();
+
+        // The hole: `bind(127.0.0.1, 0)` searches only the IPv4 space, so the
+        // kernel may hand back a port an existing `[::]` listener holds — while
+        // an EXPLICIT bind to that port fails. Allocation must therefore prove
+        // the port with real binds, which is what this asserts.
+        for _ in 0..32 {
+            let port = allocate_loopback_port().expect("allocates");
+            assert_ne!(port, taken, "handed out a port an app could not bind");
+        }
+    }
+
+    /// Filtering is a preference, never a gate: if no candidate is clean the
+    /// allocator still returns one. An app that fails to start because ply
+    /// could not find its ideal port is a worse outcome than a port that
+    /// might be shadowed.
+    #[test]
+    fn allocation_never_fails_closed() {
+        assert!(allocate_loopback_port().is_ok());
+    }
+
     use super::*;
     use std::io::{Read, Write};
 

@@ -21,7 +21,7 @@ clap = { version = "4", features = ["derive", "wrap_help"] }
 backhand = { version = "0.25", default-features = false, features = ["zstd"] }
 serde_json = "1"
 ureq = { version = "3", default-features = false, features = ["rustls"] }
-nix = { version = "0.31", features = ["sched", "mount", "signal", "hostname", "process", "fs", "ioctl", "user", "term", "poll"] }
+nix = { version = "0.31", features = ["sched", "mount", "signal", "hostname", "process", "fs", "ioctl", "user", "term", "poll", "socket", "net"] }
 caps = "0.5"
 seccompiler = "0.5"
 semver = { version = "1", features = ["serde"] }

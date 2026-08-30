@@ -7,7 +7,7 @@
 #   POSTGRES_USER      superuser name            (default: postgres)
 #   POSTGRES_PASSWORD  set → scram auth for TCP; local socket is trust
 #   POSTGRES_DB        extra database created on first boot
-#   PGPORT             listen port               (default: 5432)
+#   PGPORT             listen port               (default: $PORT, else 5432)
 #   POSTGRES_LISTEN    listen_addresses          (default: *)
 #   BACKUP_DEST        rclone target (:s3:bucket/prefix, RCLONE_S3_* creds)
 #   BACKUP_INTERVAL    seconds between dumps     (default: 86400)
@@ -28,6 +28,15 @@ export SSL_CERT_FILE="${SSL_CERT_FILE:-$PWD/cacert.pem}"
 # bucket-scoped tokens may not HeadBucket/CreateBucket — skip the check
 export RCLONE_S3_NO_CHECK_BUCKET="${RCLONE_S3_NO_CHECK_BUCKET:-true}"
 [ -n "${POSTGRES_PASSWORD:-}" ] && export PGPASSWORD="$POSTGRES_PASSWORD"
+
+# Rootless instances share the host network, so ply hands each one its own
+# loopback port as PORT and balances the published address onto it. Binding
+# 5432 regardless would collide with the host's own postgres — and the
+# publish proxy would then forward to whichever process won the port.
+# PGPORT still wins when set: that is the operator naming the port.
+# Exported, so psql/pg_isready/pg_ctl below all agree with the server (a
+# unix socket file is named for its port).
+export PGPORT="${PGPORT:-${PORT:-5432}}"
 
 fresh=""
 if [ ! -s "$PGDATA/PG_VERSION" ]; then
@@ -97,4 +106,4 @@ if [ -n "${BACKUP_DEST:-}" ]; then
   ) &
 fi
 
-exec $PGBIN/postgres -D "$PGDATA" -p "${PGPORT:-5432}" -c listen_addresses="${POSTGRES_LISTEN:-*}" -c unix_socket_directories="$SOCK"
+exec $PGBIN/postgres -D "$PGDATA" -p "$PGPORT" -c listen_addresses="${POSTGRES_LISTEN:-*}" -c unix_socket_directories="$SOCK"

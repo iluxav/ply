@@ -80,6 +80,192 @@ pub fn load(dir: &Path) -> Result<Option<Stack>> {
     parse(&text, &path)
 }
 
+/// The stack `ply up DIR` should start: `stack.toml` first, then a
+/// `ply.toml` that carries `[[app]]`.
+///
+/// Two lookups, not one, because the answer differs by question. A repo
+/// whose root is an APP (its own ply.toml) may also ship a stack.toml
+/// describing the deployment it belongs to — ply-web is exactly that. For
+/// `ply up` the stack.toml is the point; for "is this directory a stack?"
+/// (`ply run DIR`) it is not — that directory is still an app, and `load`
+/// keeps answering from ply.toml alone.
+pub fn discover(dir: &Path) -> Result<Option<(Stack, PathBuf)>> {
+    for candidate in ["stack.toml", "ply.toml"] {
+        let path = dir.join(candidate);
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        if let Some(stack) = parse(&text, &path)? {
+            return Ok(Some((stack, path)));
+        }
+    }
+    Ok(None)
+}
+
+/// Local overrides for a stack: `stack.toml` → `stack.dev.toml` beside it,
+/// the stack-level twin of `ply.dev.toml`.
+///
+/// A committed stack describes production — members reach each other by
+/// their `<name>.ply` bridge names, secrets are `$VAR` holes. On a laptop
+/// almost none of that is true: rootless shares the host network, so the
+/// address is loopback and a published port may have to dodge whatever the
+/// machine already runs. The overlay is where those local truths live, so
+/// the production file never has to carry a dev-shaped lie.
+///
+/// Applied by `ply up` only. A host reconciling a deployment never reads it
+/// — same rule as `ply.dev.toml`, and the reason a stack stays publishable.
+pub fn dev_overlay_path(stack_file: &Path) -> PathBuf {
+    let name = stack_file
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let stem = name.strip_suffix(".toml").unwrap_or(&name);
+    stack_file.with_file_name(format!("{stem}.dev.toml"))
+}
+
+/// Apply `<stack>.dev.toml` if it exists. Returns a summary of what it
+/// changed (for the "applying …" line), or None when there is no overlay.
+pub fn apply_dev_overlay(stack: &mut Stack, stack_file: &Path) -> Result<Option<String>> {
+    let path = dev_overlay_path(stack_file);
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return Ok(None);
+    };
+    let overlay = parse_overlay(&text, &path)?;
+    let mut touched: Vec<String> = Vec::new();
+
+    if let Some(env_file) = overlay.env_file {
+        stack.env_file = Some(env_file);
+        touched.push("env_file".into());
+    }
+    for member in overlay.members {
+        let Some(target) = stack.members.iter_mut().find(|m| m.name == member.name) else {
+            // a typo must not silently do nothing — the whole point of an
+            // overlay is that it changes something
+            return Err(Error::Manifest(format!(
+                "{}: no member named `{}` in {} — overlays override members, they do not add them",
+                path.display(),
+                member.name,
+                stack_file.display()
+            )));
+        };
+        let mut fields: Vec<&str> = Vec::new();
+        if let Some(run) = member.run {
+            let (source, _) = classify_run(&run, &path, 0)?;
+            target.source = source;
+            fields.push("run");
+        }
+        if !member.env.is_empty() {
+            // merged by key: an overlay adds DATABASE_URL without discarding
+            // whatever else the member declares
+            for (k, v) in member.env {
+                match target.env.iter_mut().find(|(key, _)| key == &k) {
+                    Some(pair) => pair.1 = v,
+                    None => target.env.push((k, v)),
+                }
+            }
+            fields.push("env");
+        }
+        if let Some(publish) = member.publish {
+            target.publish = publish;
+            fields.push("publish");
+        }
+        if let Some(domain) = member.domain {
+            target.domain = domain;
+            fields.push("domain");
+        }
+        if let Some(volume) = member.volume {
+            target.volume = volume;
+            fields.push("volume");
+        }
+        if let Some(scale) = member.scale {
+            target.scale = Some(scale);
+            fields.push("scale");
+        }
+        if !fields.is_empty() {
+            touched.push(format!("{}({})", member.name, fields.join(",")));
+        }
+    }
+    Ok(Some(touched.join(", ")))
+}
+
+/// One member's overrides. Every field is optional but `name`, which says
+/// WHICH member is being overridden.
+struct MemberOverlay {
+    name: String,
+    run: Option<String>,
+    env: Vec<(String, String)>,
+    publish: Option<Vec<String>>,
+    domain: Option<Vec<String>>,
+    volume: Option<Vec<String>>,
+    scale: Option<u32>,
+}
+
+struct StackOverlay {
+    env_file: Option<String>,
+    members: Vec<MemberOverlay>,
+}
+
+fn parse_overlay(text: &str, path: &Path) -> Result<StackOverlay> {
+    let doc: toml::Value = text
+        .parse()
+        .map_err(|e| Error::Manifest(format!("{}: {e}", path.display())))?;
+    let env_file = doc
+        .get("stack")
+        .and_then(|s| s.get("env_file"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let mut members = Vec::new();
+    for (i, entry) in doc
+        .get("app")
+        .and_then(|a| a.as_array())
+        .map(|a| a.as_slice())
+        .unwrap_or_default()
+        .iter()
+        .enumerate()
+    {
+        let table = entry.as_table().ok_or_else(|| {
+            Error::Manifest(format!(
+                "{}: [[app]] #{} is not a table",
+                path.display(),
+                i + 1
+            ))
+        })?;
+        let name = table
+            .get("name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                Error::Manifest(format!(
+                    "{}: [[app]] #{} needs `name` — it says which member to override",
+                    path.display(),
+                    i + 1
+                ))
+            })?
+            .to_string();
+        let list = |key: &str| -> Result<Option<Vec<String>>> {
+            match table.get(key) {
+                None => Ok(None),
+                Some(v) => Ok(Some(string_list(Some(v), key, &name, path)?)),
+            }
+        };
+        members.push(MemberOverlay {
+            run: table
+                .get("run")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            env: parse_env(table.get("e"), &name, path)?,
+            publish: list("publish")?,
+            domain: list("domain")?,
+            volume: list("volume")?,
+            scale: table
+                .get("scale")
+                .and_then(|v| v.as_integer())
+                .map(|n| n as u32),
+            name,
+        });
+    }
+    Ok(StackOverlay { env_file, members })
+}
+
 /// Parse a stack file at `path`. `Ok(None)` when there is no `[[app]]` array
 /// — including `app = "name"` as a plain string, which is the single-app
 /// DEPLOYMENT lane's registry key, not a malformed stack. Only an array of
@@ -893,6 +1079,104 @@ scale = 2
     /// A namespaced member follows a published app: the ref keeps its
     /// namespace (that is where the catalog lives), while the member's
     /// identity on the host is the bare package name.
+    /// The overlay is how one committed stack serves both worlds: production
+    /// values in stack.toml, local truths (loopback, a port that dodges what
+    /// this machine runs) in stack.dev.toml. Env MERGES by key so an overlay
+    /// adds DATABASE_URL without discarding the member's other vars.
+    #[test]
+    fn dev_overlay_overrides_members() {
+        let dir = std::env::temp_dir().join(format!("ply-overlay-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stack_file = dir.join("stack.toml");
+        std::fs::write(
+            &stack_file,
+            "[stack]\nname = \"todos\"\n\n[[app]]\nrun = \"postgres@17\"\nname = \"db\"\npublish = [\"internal:5432\"]\ne = [\"POSTGRES_DB=todos\"]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("stack.dev.toml"),
+            "[[app]]\nname = \"db\"\npublish = [\"internal:5433\"]\ne = [\"DATABASE_URL=postgres://localhost:5433/todos\"]\n",
+        )
+        .unwrap();
+
+        let (mut stack, file) = discover(&dir).unwrap().expect("stack");
+        let what = apply_dev_overlay(&mut stack, &file)
+            .unwrap()
+            .expect("overlay applied");
+        assert!(what.contains("db("), "summary names the member: {what}");
+
+        let db = &stack.members[0];
+        assert_eq!(db.publish, vec!["internal:5433"], "publish replaced");
+        let env: std::collections::BTreeMap<_, _> = db.env.iter().cloned().collect();
+        assert_eq!(
+            env.get("POSTGRES_DB").map(String::as_str),
+            Some("todos"),
+            "kept"
+        );
+        assert!(env.contains_key("DATABASE_URL"), "added");
+
+        // a host reads the stack file alone — the overlay is `ply up` only
+        let text = std::fs::read_to_string(&stack_file).unwrap();
+        let host_view = parse(&text, &stack_file).unwrap().unwrap();
+        assert_eq!(host_view.members[0].publish, vec!["internal:5432"]);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Overriding a member that does not exist is a typo, and a silent no-op
+    /// would be the worst possible answer.
+    #[test]
+    fn dev_overlay_rejects_unknown_member() {
+        let dir = std::env::temp_dir().join(format!("ply-overlay-bad-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stack_file = dir.join("stack.toml");
+        std::fs::write(
+            &stack_file,
+            "[[app]]\nrun = \"redis@8\"\nname = \"cache\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("stack.dev.toml"),
+            "[[app]]\nname = \"cach\"\nscale = 2\n",
+        )
+        .unwrap();
+
+        let (mut stack, file) = discover(&dir).unwrap().unwrap();
+        let err = apply_dev_overlay(&mut stack, &file)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no member named `cach`"), "{err}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `ply up` finds stack.toml; "is this dir a stack?" still answers
+    /// from ply.toml, so an app repo that also ships a stack.toml stays
+    /// runnable with `ply run ./dir`.
+    #[test]
+    fn discover_prefers_stack_toml_but_load_does_not() {
+        let dir = std::env::temp_dir().join(format!("ply-stack-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("ply.toml"),
+            "[package]\nname = \"web\"\nversion = \"0.1.0\"\nentrypoint = [\"node\"]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("stack.toml"),
+            "[stack]\nname = \"todos\"\n\n[[app]]\nrun = \"postgres@17\"\n",
+        )
+        .unwrap();
+
+        let (found, from) = discover(&dir).unwrap().expect("stack.toml is the stack");
+        assert_eq!(found.name.as_deref(), Some("todos"));
+        assert!(from.ends_with("stack.toml"), "reports which file it read");
+        assert!(
+            load(&dir).unwrap().is_none(),
+            "an app dir stays an app even when it ships a stack.toml"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn namespaced_member_ref() {
         let stack = stack_of("[[app]]\nrun = \"ply/ply-web\"\npublish = [\"internal:3000\"]\n");

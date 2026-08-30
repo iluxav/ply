@@ -1,6 +1,6 @@
 ---
 title: Stacks & local dev
-description: ply up starts several apps from one stack file — each [[app]] block is one ply run — and ply.dev.toml overlays dev behavior without touching the image.
+description: ply up starts several apps from one stack file — each [[app]] block is one ply run — and ply.dev.toml / stack.dev.toml overlay dev behavior without touching the image.
 section: Guides
 order: 12.6
 ---
@@ -142,6 +142,40 @@ PW=dev ply up     # db from the registry, server under tsx watch on live code
 
 Delete the file (or clone fresh) and the identical tree runs the production
 entrypoint. Nothing to remember, nothing to ship.
+
+## stack.dev.toml — the same overlay, one level up
+
+`ply.dev.toml` fixes an app's dev behavior; a stack has its own version of
+the problem. The committed stack describes **production**: members reach
+each other by their `<name>.ply` bridge names and secrets are `$VAR` holes.
+On a laptop almost none of that is true — rootless shares the host network,
+so the address is loopback, and a published port may have to dodge whatever
+the machine already runs.
+
+Put those local truths in `stack.dev.toml`, beside the stack file:
+
+```toml
+# stack.dev.toml   (add it to .gitignore)
+[[app]]
+name    = "db"                 # WHICH member — matched by name
+publish = ["internal:5433"]    # 5432 is this laptop's own postgres
+
+[[app]]
+name = "server"
+e = ["DATABASE_URL=postgres://postgres:dev@127.0.0.1:5433/todos"]
+```
+
+- Members are matched by `name`; overriding a name that is not in the stack
+  is an error, not a silent no-op.
+- `e` **merges by key** — the override adds `DATABASE_URL` and leaves the
+  member's other variables alone. `publish`, `domain`, `volume`, `scale` and
+  `run` replace outright; `[stack] env_file` replaces too.
+- Overlays override members, they never add them.
+
+Same structural rule as `ply.dev.toml`: **`ply up` applies it, a host never
+does.** `ply reconcile` reads the stack file alone, so the file you commit
+(and `ply push`) is the production one, and the deployment cannot inherit a
+laptop's loopback address.
 
 ## ply run DIR
 

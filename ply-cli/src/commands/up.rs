@@ -173,13 +173,29 @@ fn load_up_stack(args: &UpArgs) -> Result<(stack::Stack, Vec<String>, Option<Pat
             return Ok((resolve_stack_source(first, &args.source)?, members, None));
         }
     }
-    let stack = stack::load(&args.dir)?.ok_or_else(|| {
+    let (mut stack, file) = stack::discover(&args.dir)?.ok_or_else(|| {
         anyhow::anyhow!(
-            "no [[app]] in {} — a stack file lists members, each one a `ply run`:\n\n  [[app]]\n  run = \"postgres@17\"\n  name = \"db\"\n\n  [[app]]\n  run   = \"./server\"\n  after = [\"db\"]\n\nor bring up a published stack: `ply up <namespace>/<name>`",
-            args.dir.join("ply.toml").display()
+            "no stack in {} — expected `[[app]]` blocks in stack.toml or ply.toml, each one a `ply run`:\n\n  [[app]]\n  run = \"postgres@17\"\n  name = \"db\"\n\n  [[app]]\n  run   = \"./server\"\n  after = [\"db\"]\n\nor bring up a published stack: `ply up <namespace>/<name>`",
+            args.dir.display()
         )
     })?;
+    apply_dev_overlay(&mut stack, &file);
     Ok((stack, args.members.clone(), Some(args.dir.clone())))
+}
+
+/// `<stack>.dev.toml` beside the stack file: local truths (loopback
+/// addresses, a port that dodges what this machine already runs) kept out of
+/// the committed, publishable stack. `ply up` only — a host never applies it.
+fn apply_dev_overlay(stack: &mut stack::Stack, file: &std::path::Path) {
+    match stack::apply_dev_overlay(stack, file) {
+        Ok(Some(what)) => eprintln!(
+            "ply up: applying {} ({what})",
+            stack::dev_overlay_path(file).display()
+        ),
+        Ok(None) => {}
+        // a broken overlay must not silently ship production values
+        Err(e) => eprintln!("ply up: ignoring dev overlay — {e}"),
+    }
 }
 
 /// A first positional is a stack SOURCE (not a member name) when it names a
@@ -195,11 +211,17 @@ fn is_stack_source(first: &str) -> bool {
 fn resolve_stack_source(first: &str, source: &str) -> Result<stack::Stack> {
     let path = std::path::Path::new(first);
     if path.is_dir() {
-        return stack::load(path)?.ok_or_else(|| anyhow::anyhow!("{first} has no [[app]] stack"));
+        let (mut stack, file) = stack::discover(path)?
+            .ok_or_else(|| anyhow::anyhow!("{first} has no [[app]] stack"))?;
+        apply_dev_overlay(&mut stack, &file);
+        return Ok(stack);
     }
     if path.is_file() {
         let text = std::fs::read_to_string(path).with_context(|| format!("reading {first}"))?;
-        return stack::parse(&text, path)?.ok_or_else(|| anyhow::anyhow!("{first} has no [[app]]"));
+        let mut stack =
+            stack::parse(&text, path)?.ok_or_else(|| anyhow::anyhow!("{first} has no [[app]]"))?;
+        apply_dev_overlay(&mut stack, path);
+        return Ok(stack);
     }
     if first.ends_with(".toml") {
         bail!("no such stack file: {first}");

@@ -145,6 +145,17 @@ pub fn write_image(trees: &[TreeSource], extra: &[ExtraFile], out: &Path) -> Res
     let mut fs = FilesystemWriter::default();
     fs.set_time(0);
     fs.set_block_size(DEFAULT_BLOCK_SIZE);
+    // Duplicate-file elision OFF, and this is a correctness fix, not a
+    // preference: backhand keys its dup cache on a hash of the FIRST BLOCK
+    // only and then reuses that file's whole block list *and length*. Two
+    // multi-block files sharing their first 128 KiB — routine among bundled
+    // JS, where esbuild emits the same preamble — silently become the same
+    // file in the image. Observed: next's @edge-runtime `load.js` shipped as
+    // `fetch.js` (identical for their first 648 910 bytes), so `next dev`
+    // died on `import_load.load is not a function`. The image hashes
+    // reproducibly, so nothing downstream can notice. Space saved is never
+    // worth shipping the wrong bytes.
+    fs.set_no_duplicate_files(false);
     fs.set_only_root_id();
     fs.set_root_mode(0o755);
     // Zstd level 15 (backhand's implicit default is 3): measured on a real
@@ -355,6 +366,53 @@ mod tests {
             basic.frag_index, 0xffffffff,
             "empty file must not reference a fragment"
         );
+    }
+
+    /// Two multi-block files that share their first block must keep their
+    /// OWN bytes. backhand's duplicate-file cache keys on a hash of the
+    /// first block alone and then reuses that file's whole block list and
+    /// length — so with it enabled the second file silently ships as the
+    /// first. Bundled JS hits this routinely (esbuild emits identical
+    /// preambles); it cost a whole afternoon once, and the image hashes
+    /// reproducibly, so nothing downstream can catch it.
+    #[test]
+    fn files_sharing_a_first_block_keep_their_own_bytes() {
+        use std::io::Read;
+
+        let block = DEFAULT_BLOCK_SIZE as usize;
+        let shared = vec![b'x'; block * 2];
+        let mut a = shared.clone();
+        a.extend_from_slice(b"AAAA-tail-of-the-first-file");
+        let mut b = shared.clone();
+        b.extend_from_slice(b"BBBB-tail-of-the-second-file-which-is-longer");
+
+        let src = tempfile::tempdir().unwrap();
+        std::fs::write(src.path().join("a.bin"), &a).unwrap();
+        std::fs::write(src.path().join("b.bin"), &b).unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let img = out.path().join("t.img");
+        let tree = TreeSource {
+            dir: src.path(),
+            prefix: "",
+            filter: None,
+        };
+        write_image(std::slice::from_ref(&tree), &[], &img).unwrap();
+
+        let file = std::fs::File::open(&img).unwrap();
+        let fs = backhand::FilesystemReader::from_reader(std::io::BufReader::new(file)).unwrap();
+        for (name, want) in [("/a.bin", &a), ("/b.bin", &b)] {
+            let node = fs
+                .files()
+                .find(|n| n.fullpath.to_string_lossy() == name)
+                .unwrap_or_else(|| panic!("{name} present"));
+            let backhand::InnerNode::File(f) = &node.inner else {
+                panic!("not a file");
+            };
+            let mut got = Vec::new();
+            fs.file(f).reader().read_to_end(&mut got).unwrap();
+            assert_eq!(got.len(), want.len(), "{name}: wrong length");
+            assert!(got == *want, "{name}: wrong bytes (deduplicated away?)");
+        }
     }
 
     #[test]

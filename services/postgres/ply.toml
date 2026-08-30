@@ -10,7 +10,7 @@
 
 [package]
 name = "postgres"
-version = "17.10.3"
+version = "17.10.4"
 user = "postgres:70:70"
 entrypoint = ["./run.sh"]
 include = ["run.sh", "restore.sh", "cacert.pem"]

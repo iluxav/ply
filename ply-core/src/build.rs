@@ -174,8 +174,12 @@ pub fn build(opts: &BuildOptions) -> Result<BuildOutcome> {
     }
 
     // Build to a temp name, rename into place (a half-written .img must
-    // never be mistaken for an image).
-    let tmp_path = image_path.with_extension("img.tmp");
+    // never be mistaken for an image). The pid keeps that name unique:
+    // two builds of the same app at once — a leftover `ply up` still
+    // building while you start another — would otherwise share one temp
+    // path, and the loser finalizes into a file the winner already
+    // renamed away (ENOENT at finalize).
+    let tmp_path = image_path.with_extension(format!("img.tmp.{}", std::process::id()));
     write_image(&trees, &extra, &tmp_path)?;
     std::fs::rename(&tmp_path, &image_path).map_err(|source| Error::Io {
         path: image_path.clone(),
