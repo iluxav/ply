@@ -43,6 +43,8 @@ pub struct RunOptions {
     /// Names of the other members sharing `netns`, so `<name>.ply` resolves
     /// to loopback inside each container.
     pub netns_peers: Vec<String>,
+    /// The resolver inside `netns` (its user-mode router), when there is one.
+    pub netns_dns: Option<String>,
     /// A network namespace every instance joins (`/proc/<pid>/ns/net`).
     /// Rootless, this is how a stack's members share one network: they bind
     /// their own natural ports there and reach each other on loopback,
@@ -1200,6 +1202,7 @@ fn launch_instance(
         keep_caps,
         privileged: opts.privileged,
         rootless,
+        dns: opts.netns_dns.clone(),
         local_aliases: opts.netns_peers.clone(),
         run_user,
         log_fd: Some(log_tx),

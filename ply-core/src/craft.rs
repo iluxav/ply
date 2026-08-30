@@ -264,6 +264,7 @@ pub fn shell(name: &str, cmd: &[String]) -> Result<i32> {
         keep_caps: vec![],
         privileged: true, // authoring needs real root; host netns for apk/apt
         rootless: false,
+        dns: None,
         local_aliases: vec![],
         run_user: None,
         log_fd: None,

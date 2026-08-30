@@ -665,6 +665,7 @@ fn build_from_repo(name: &str, spec: &Spec) -> Result<(PathBuf, String, bool)> {
             publish: vec![],
             netns: None,
             netns_peers: vec![],
+            netns_dns: None,
             after: vec![],
             after_timeout: std::time::Duration::from_secs(60),
             privileged: false,

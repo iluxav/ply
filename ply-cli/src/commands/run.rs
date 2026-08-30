@@ -199,6 +199,7 @@ pub fn exec(args: RunArgs) -> Result<()> {
         publish,
         netns: args.netns.clone(),
         netns_peers: args.netns_peer.clone(),
+        netns_dns: args.netns_dns.clone(),
         after: args.after.clone(),
         after_timeout: ply_core::manifest::parse_duration(&args.after_timeout)
             .map_err(|e| anyhow::anyhow!("--after-timeout: {e}"))?,

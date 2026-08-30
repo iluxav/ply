@@ -256,6 +256,11 @@ pub struct RunArgs {
     #[arg(long = "netns-peer", value_name = "NAME", hide = true)]
     pub netns_peer: Vec<String>,
 
+    /// The resolver reachable inside `--netns`. Set by `ply up` when it has
+    /// attached a user-mode router.
+    #[arg(long = "netns-dns", value_name = "IP", hide = true)]
+    pub netns_dns: Option<String>,
+
     /// Name this running app instead of using the image's own name. Sets its
     /// state pool, its `<name>.ply` address, and what `--after` waits on — so
     /// two runs of one image (two databases, say) don't collide.

@@ -26,11 +26,18 @@ use nix::sched::CloneFlags;
 
 use crate::error::{Error, Result};
 
+/// The address a user-mode router hands the namespace. slirp4netns's
+/// defaults, and pasta is configured to match, so an app sees one story
+/// whichever is installed.
+pub const EGRESS_DNS: &str = "10.0.2.3";
+
 /// A namespace and the process keeping it alive.
 #[derive(Debug)]
 pub struct NetNs {
     /// The holder. Killing it releases the namespace.
     pub holder: nix::unistd::Pid,
+    /// The user-mode router giving the namespace a way out, if any.
+    egress: Option<std::process::Child>,
 }
 
 impl NetNs {
@@ -121,7 +128,10 @@ impl NetNs {
                         "netns: could not create a network namespace: {why}"
                     )));
                 }
-                Ok(NetNs { holder: child })
+                Ok(NetNs {
+                    holder: child,
+                    egress: None,
+                })
             }
         }
     }
@@ -139,10 +149,110 @@ impl NetNs {
 
 impl Drop for NetNs {
     fn drop(&mut self) {
+        if let Some(mut router) = self.egress.take() {
+            let _ = router.kill();
+            let _ = router.wait();
+        }
         // the namespace dies with its last member
         let _ = nix::sys::signal::kill(self.holder, nix::sys::signal::Signal::SIGKILL);
         let _ = nix::sys::wait::waitpid(self.holder, None);
     }
+}
+
+/// Give the namespace a way out.
+///
+/// A fresh namespace has only `lo`: apps can reach each other and nothing
+/// else, so anything calling an external API at runtime fails. Attaching a
+/// veth to the host would need real privilege — the unprivileged answer is
+/// a user-mode router, a process that reads the namespace's packets from a
+/// tap device and re-sends them as ordinary sockets it opens as you. It can
+/// only do what you could do anyway, which is exactly why it needs no
+/// privilege.
+///
+/// `pasta` (Debian `passt`) is preferred — podman's default since 5.0, and
+/// faster because it splices sockets instead of running a whole TCP stack.
+/// `slirp4netns` is the fallback. With neither, the namespace simply has no
+/// egress, and the caller says so.
+impl NetNs {
+    pub fn attach_egress(&mut self) -> Result<&'static str> {
+        let pid = self.holder.as_raw().to_string();
+        if which("pasta") {
+            // pasta configures the interface itself and exits into the
+            // background; it dies with the namespace.
+            let out = std::process::Command::new("pasta")
+                .args([
+                    "--config-net",
+                    "--dns-forward",
+                    EGRESS_DNS,
+                    "--netns",
+                    &format!("/proc/{pid}/ns/net"),
+                ])
+                .output()
+                .map_err(|e| Error::Runtime(format!("pasta: {e}")))?;
+            if out.status.success() {
+                return Ok("pasta");
+            }
+            // fall through to slirp4netns rather than leave the stack mute
+        }
+        if which("slirp4netns") {
+            // --ready-fd, so the members are not launched into a namespace
+            // whose interface is still coming up
+            let (ready_r, ready_w) =
+                nix::unistd::pipe().map_err(|e| Error::Runtime(format!("pipe: {e}")))?;
+            let mut cmd = std::process::Command::new("slirp4netns");
+            cmd.args([
+                "--configure",
+                "--mtu=65520",
+                // the host's own services stay the host's
+                "--disable-host-loopback",
+                "--ready-fd=3",
+                &pid,
+                "tap0",
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+            // the ready pipe has to arrive as fd 3, and survive exec
+            let raw = ready_w.as_raw_fd();
+            unsafe {
+                use std::os::unix::process::CommandExt;
+                cmd.pre_exec(move || {
+                    if nix::libc::dup2(raw, 3) < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+            let child = cmd
+                .spawn()
+                .map_err(|e| Error::Runtime(format!("slirp4netns: {e}")))?;
+            drop(ready_w); // ours closed, so a dead child means EOF not a hang
+            let mut byte = [0u8; 1];
+            let ready = {
+                use std::io::Read;
+                let mut f = std::fs::File::from(ready_r);
+                matches!(f.read(&mut byte), Ok(1))
+            };
+            if !ready {
+                let mut child = child;
+                let _ = child.kill();
+                return Err(Error::Runtime("slirp4netns never reported ready".into()));
+            }
+            self.egress = Some(child);
+            return Ok("slirp4netns");
+        }
+        Err(Error::Runtime(
+            "no user-mode router found — install `passt` (pasta) or `slirp4netns` for outbound \
+             network from a stack; apps that only talk to each other are unaffected"
+                .into(),
+        ))
+    }
+}
+
+fn which(tool: &str) -> bool {
+    std::env::var("PATH")
+        .unwrap_or_default()
+        .split(':')
+        .any(|d| !d.is_empty() && std::path::Path::new(d).join(tool).exists())
 }
 
 /// `/proc/<pid>/ns/net` — the handle to a live namespace.

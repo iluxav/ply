@@ -108,6 +108,7 @@ pub fn exec(args: UpArgs) -> Result<()> {
     // There they bind their own declared ports, reach each other on
     // loopback as `<name>.ply`, and touch nothing on the machine — which is
     // what lets one stack file mean the same thing here and on a droplet.
+    let mut egress_dns: Option<String> = None;
     let netns = match ply_core::paths::is_root() {
         true => None,
         false => match ply_core::runtime::netns::NetNs::create()
@@ -116,7 +117,18 @@ pub fn exec(args: UpArgs) -> Result<()> {
             // This process now owns the namespaces; the network is still the
             // host's, so members can fetch what they need. Each joins the
             // stack's network itself, once it is ready to launch.
-            Ok(ns) => Some(ns),
+            Ok(mut ns) => {
+                // A namespace with no way out is worse than none for an app
+                // that calls anything: say what happened either way.
+                match ns.attach_egress() {
+                    Ok(router) => {
+                        eprintln!("ply up: stack network ({router})");
+                        egress_dns = Some(ply_core::runtime::netns::EGRESS_DNS.to_string());
+                    }
+                    Err(e) => eprintln!("ply up: stack network, no outbound — {e}"),
+                }
+                Some(ns)
+            }
             Err(e) => {
                 eprintln!("ply up: {e}");
                 eprintln!("ply up: falling back to the host's network for this run");
@@ -133,6 +145,9 @@ pub fn exec(args: UpArgs) -> Result<()> {
         cmd.arg("--name").arg(&p.member);
         if let Some(ns) = &netns {
             cmd.arg("--netns").arg(ns.path());
+            if let Some(dns) = &egress_dns {
+                cmd.arg("--netns-dns").arg(dns);
+            }
             for peer in peers.iter().filter(|n| *n != &p.member) {
                 cmd.arg("--netns-peer").arg(peer);
             }

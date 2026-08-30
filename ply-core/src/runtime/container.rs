@@ -40,6 +40,10 @@ pub struct ContainerSpec {
     /// Running in a user namespace as an unprivileged user: /dev nodes are
     /// bind-mounted from the host (mknod is denied), devpts is best-effort.
     pub rootless: bool,
+    /// The resolver to use inside, when the caller knows better than the
+    /// host's file — a stack namespace reaches DNS through its user-mode
+    /// router, not through the host's loopback stub.
+    pub dns: Option<String>,
     /// Names that must resolve to loopback inside this container: the other
     /// members of a shared namespace. Rootful writes `<app>.ply` into the
     /// host's /etc/hosts against real bridge IPs; sharing a namespace, the
@@ -101,8 +105,10 @@ fn setup_and_exec(spec: &ContainerSpec) -> Result<isize> {
     let _ = std::fs::copy("/etc/hosts", root.join("etc/hosts"));
     let host_resolv = std::fs::read_to_string("/etc/resolv.conf").unwrap_or_default();
     let upstream = std::fs::read_to_string("/run/systemd/resolve/resolv.conf").ok();
-    let (resolv, warning) =
-        resolv_conf_for_instance(&host_resolv, upstream.as_deref(), spec.rootless);
+    let (resolv, warning) = match &spec.dns {
+        Some(server) => (resolv_conf_via(&host_resolv, server), None),
+        None => resolv_conf_for_instance(&host_resolv, upstream.as_deref(), spec.rootless),
+    };
     if let Some(w) = warning {
         eprintln!("ply: warning: {w}");
     }
@@ -460,6 +466,22 @@ fn setup_dev_mounts(rootless: bool) -> Result<()> {
         nix::mount::MsFlags::MS_NOEXEC | nix::mount::MsFlags::MS_NODEV,
     )?;
     Ok(())
+}
+
+/// The host's search/options, but one nameserver of our choosing. Inside a
+/// stack namespace the host's resolver is unreachable — a loopback stub
+/// most of all — and the user-mode router answers DNS itself.
+pub fn resolv_conf_via(host: &str, server: &str) -> String {
+    let mut out = format!("nameserver {server}\n");
+    for line in host.lines() {
+        let keep =
+            line.trim_start().starts_with("search") || line.trim_start().starts_with("options");
+        if keep {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
 }
 
 /// What the instance's /etc/resolv.conf should say. Rootless shares the

@@ -14,6 +14,20 @@ use nix::unistd::ForkResult;
 use crate::error::{Error, Result};
 use crate::runtime::state::{self, InstanceState};
 
+/// The user namespace that owns `ns`, via `NS_GET_USERNS`. The kernel is
+/// the only thing that knows this — walking /proc guesses.
+fn owning_userns(ns: &std::fs::File) -> Option<std::fs::File> {
+    // include/uapi/linux/nsfs.h: NSIO 0xb7, NS_GET_USERNS _IO(NSIO, 0x1)
+    const NS_GET_USERNS: u64 = 0xb701;
+    use std::os::fd::AsRawFd;
+    let fd = unsafe { nix::libc::ioctl(ns.as_raw_fd(), NS_GET_USERNS as _) };
+    if fd < 0 {
+        return None;
+    }
+    use std::os::fd::FromRawFd;
+    Some(unsafe { std::fs::File::from_raw_fd(fd) })
+}
+
 pub fn exec(target: &str, cmd: &[String]) -> Result<i32> {
     let instance = find_instance(target)?;
     let pid = instance.pid;
@@ -72,6 +86,19 @@ pub fn exec(target: &str, cmd: &[String]) -> Result<i32> {
         nix::sched::setns(file.as_fd(), flag)
             .map_err(|e| Error::Runtime(format!("setns {what}: {e}")))
     };
+    // The network namespace may be owned by an ANCESTOR of the instance's
+    // own user namespace — a stack's members share one network that `ply up`
+    // created, one level up. Joining a network namespace needs CAP_SYS_ADMIN
+    // in its owner AND in our current user namespace, and a process in a
+    // descendant has neither over its parent. So enter the network's OWNER
+    // first (the kernel will name it for us), then the network, and only
+    // then the instance's own user namespace, where we regain full rights.
+    if !same_ns("net") {
+        if let Some(owner) = owning_userns(&net) {
+            join(&owner, CloneFlags::CLONE_NEWUSER, "the network's user")?;
+        }
+        join(&net, CloneFlags::CLONE_NEWNET, "net")?;
+    }
     if let Some(userns) = &userns {
         join(userns, CloneFlags::CLONE_NEWUSER, "user")?;
     }
@@ -80,9 +107,6 @@ pub fn exec(target: &str, cmd: &[String]) -> Result<i32> {
     }
     if !same_ns("uts") {
         join(&uts, CloneFlags::CLONE_NEWUTS, "uts")?;
-    }
-    if !same_ns("net") {
-        join(&net, CloneFlags::CLONE_NEWNET, "net")?;
     }
     if !same_ns("pid") {
         join(&pidns, CloneFlags::CLONE_NEWPID, "pid")?; // children enter the pidns

@@ -86,13 +86,29 @@ Three traps this uncovered, all fixed and each worth remembering:
 - A guard comparing socket ADDRESSES must know whether two sockets share a
   network: `127.0.0.1:3001` inside and outside are different sockets.
 
-Remaining before the deletions in this item can happen:
+**Egress DONE — verified 2026-08-30.** `ply up` attaches a user-mode router
+to the namespace: a process that reads its packets off a tap device and
+re-sends them as ordinary sockets, so it needs no privilege. `pasta`
+preferred (podman's default, splices sockets), `slirp4netns` as fallback,
+started with `--ready-fd` so members never launch into a half-configured
+network, `--disable-host-loopback` so the machine's own services stay
+private, and killed with the stack. Containers get `nameserver 10.0.2.3`,
+because a host loopback stub is unreachable in there. With neither router
+installed the stack still runs and says outbound is missing.
 
-- egress (`pasta`): inside the namespace there is no route out, so an app
-  calling an external API at runtime fails. Fetching happens before the
-  join, so builds and pulls are fine.
+`ply exec` needed the same lesson from the other side: it joined the
+instance's user namespace first and then could not join a network namespace
+owned by an ANCESTOR (the stack's). It now asks the kernel who owns that
+network (`NS_GET_USERNS`), enters the owner, the network, and only then the
+instance's own user namespace.
+
+Remaining before the deletions in this item can happen:
 - discovery env still advertises the host-side published address
   (`DB_ADDR=127.0.0.1:5433`) instead of the in-namespace one.
+- `ply exec` starts with a bare PATH: the dependency layers' `/opt/<pkg>/bin`
+  is missing, so `ply exec app node …` is ENOENT while the app itself runs
+  node fine. Shelling in to use the app's own tools is the point of the
+  command.
 
 Superseded note, kept because it is why the design changed: The design
 below is now in place: `ply up` makes the namespace, and each `ply run`
