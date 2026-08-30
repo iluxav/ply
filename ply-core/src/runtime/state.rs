@@ -34,6 +34,11 @@ pub struct InstanceState {
     pub published_port: Option<u16>,
     #[serde(default)]
     pub published_addr: Option<String>,
+    /// The port the app itself listens on. Inside a stack's own network that
+    /// is what a sibling dials — the published pair is the HOST's side of
+    /// the proxy and means nothing in there.
+    #[serde(default)]
+    pub instance_port: Option<u16>,
     /// `--domain` hostnames the edge should route to this app's published
     /// address. Parent-owned like the published pair; every instance of an
     /// app records the same list. `ply proxy` turns these into vhosts.

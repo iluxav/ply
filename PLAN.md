@@ -102,13 +102,46 @@ owned by an ANCESTOR (the stack's). It now asks the kernel who owns that
 network (`NS_GET_USERNS`), enters the owner, the network, and only then the
 instance's own user namespace.
 
-Remaining before the deletions in this item can happen:
-- discovery env still advertises the host-side published address
-  (`DB_ADDR=127.0.0.1:5433`) instead of the in-namespace one.
-- `ply exec` starts with a bare PATH: the dependency layers' `/opt/<pkg>/bin`
-  is missing, so `ply exec app node …` is ENOENT while the app itself runs
-  node fine. Shelling in to use the app's own tools is the point of the
-  command.
+Discovery env and `ply exec` DONE (2026-08-30). Discovery advertises
+`<dep>.ply:<its own port>` inside a stack network — the published pair is
+the host's side of a proxy and reaches nothing from in there. `ply exec`
+reads the app's environment from the process the container's init started,
+not from the init itself, which is ply and carries ply's own PATH; when it
+cannot read it, it says so instead of handing over a default PATH.
+
+**The promised deletions were overstated — corrected here.** A rootless
+`ply run` now makes its own namespace too (verified: the app binds its
+declared 3001, invisible on the host, only the published 4001 exposed). But
+writing the deletions out changed the answer:
+
+`PORT` injection is not a HOST-network artifact, it is a SHARED-network one.
+Instances of a scaled app share one namespace, so at `--scale 2` they fight
+over the same port exactly as they did on the host. Injection, the
+allocator, the scale guard and `instance_port_explicit` therefore all stay;
+so does `connect_either_family`, because an app binding `[::]` is
+unreachable over IPv4 loopback inside a namespace just as it was outside.
+
+What DID change is when they apply: injection now happens only when
+instances actually share a network — scale > 1, or the fallback where no
+namespace could be created. The common case (one instance, its own
+namespace) binds its declared port, which is the whole user-visible win.
+Deleting the rest needs a namespace PER INSTANCE, which is the nested-bridge
+design in stage 2.
+
+Original text, kept because the reasoning still holds for stage 2:
+
+**The deletions need one more step first.** `PORT` injection, the loopback
+allocator, `instance_port_explicit`, `connect_either_family` and the scale
+guard all exist for rootless-on-the-host-network — which is still exactly
+what a plain `ply run` does. `ply up` makes a namespace; `ply run` does not.
+Until it does, every one of those remains load-bearing.
+
+So: give a rootless `ply run` its own namespace too. The machinery is built
+(`NetNs::create`, `enter_user`, `attach_egress`, and the join after
+`prepare_app`), but it lands in the most-used code path, so it wants a
+session where it can be exercised properly — and on this kernel only the
+AppArmor-profiled `/usr/local/bin/ply` can create a namespace at all, so
+every iteration costs an install.
 
 Superseded note, kept because it is why the design changed: The design
 below is now in place: `ply up` makes the namespace, and each `ply run`

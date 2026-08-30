@@ -22,6 +22,7 @@ use crate::runtime::{hosts, loopdev, mount, network, state};
 use crate::source::Source;
 use crate::store::Store;
 
+#[derive(Clone)]
 pub struct RunOptions {
     pub image: PathBuf,
     /// `--name`: override the app's identity (state pool, `.ply` DNS name,
@@ -84,6 +85,38 @@ struct PublishWiring {
 }
 
 pub fn run(opts: &RunOptions) -> Result<i32> {
+    // A rootless run with no namespace handed to it makes its own, so that
+    // ONE app is as isolated as a stack's members are: its own ports, no
+    // collision with whatever the machine already runs, a way out through a
+    // user-mode router. `ply up` passes its stack namespace instead, and
+    // rootful already gives every instance a bridge address.
+    let mut own_ns: Option<crate::runtime::netns::NetNs> = None;
+    let mut opts_owned;
+    let opts = if crate::paths::is_root() || opts.netns.is_some() {
+        opts
+    } else {
+        match crate::runtime::netns::NetNs::create().and_then(|ns| ns.enter_user().map(|()| ns)) {
+            Ok(mut ns) => {
+                let dns = match ns.attach_egress() {
+                    Ok(_) => Some(crate::runtime::netns::EGRESS_DNS.to_string()),
+                    Err(e) => {
+                        eprintln!("ply: no outbound network for this app — {e}");
+                        None
+                    }
+                };
+                opts_owned = opts.clone();
+                opts_owned.netns = Some(ns.path());
+                opts_owned.netns_dns = dns;
+                own_ns = Some(ns);
+                &opts_owned
+            }
+            Err(e) => {
+                eprintln!("ply: staying on the host network — {e}");
+                opts
+            }
+        }
+    };
+    let _own_ns = &own_ns; // the namespace lives as long as this run
     let rootless = !crate::paths::is_root();
     if opts.privileged {
         // Never quiet about this: the whole point of the runtime is that the
@@ -98,9 +131,14 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
         );
     }
     if rootless {
-        eprintln!(
-            "ply: rootless mode — extracted layers, host network (no .ply names), no cgroup limits"
-        );
+        // Say which network this actually got: with one of its own the app
+        // binds its declared ports and answers to `<name>.ply`, which is the
+        // opposite of what the old banner promised.
+        let net = match &opts.netns {
+            Some(_) => "own network",
+            None => "host network (no .ply names)",
+        };
+        eprintln!("ply: rootless mode — extracted layers, {net}, no cgroup limits");
         // Ubuntu >= 24.04 strips capabilities from unprivileged user
         // namespaces unless an AppArmor profile grants `userns`.
         let restricted =
@@ -246,7 +284,8 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
         // Resolved only now: the dependency is up, so its parent has recorded
         // where to reach it. Never overrides a value the author set — an
         // explicit [env] or -e wins, so this can only add.
-        for (key, value) in discovery_env(&opts.after) {
+        let in_stack_network = opts.netns.as_ref().is_some_and(|p| in_namespace(p));
+        for (key, value) in discovery_env(&opts.after, in_stack_network) {
             if ctx.env.iter().any(|(k, _)| *k == key) {
                 continue;
             }
@@ -1159,21 +1198,23 @@ fn launch_instance(
             }
         }
     }
-    // Published rootless pool: instances share the host netns, so each one
-    // gets its own loopback port, injected as PORT (the parent LBs across
-    // them). Overrides any manifest/CLI PORT — with --publish the parent
-    // owns the externally visible port.
-    // Skipped when the spec named the instance port: that is the author saying
-    // where the app listens, and an imported image cannot be talked out of it.
-    // In a namespace of ply's own, an instance is alone on its loopback:
-    // it binds the port it declares, exactly as it does on a bridge. The
-    // injection below exists only for the host-network case, where every
-    // instance would otherwise fight for the same number.
-    // The process either joined the stack's namespace or it did not; asking
-    // the kernel avoids threading a flag through every launch path, and
-    // cannot disagree with reality the way a remembered intention can.
-    let in_own_network = !rootless || opts.netns.as_ref().is_some_and(|p| in_namespace(p));
-    let injected_port = match (publish.first(), rootless && !in_own_network) {
+    // A published port has to reach ONE listener per instance, and rootless
+    // instances share a network — the host's, or the one ply made. Sharing
+    // is fine while there is a single instance: it binds the port it
+    // declares, exactly as it does on a bridge, and that is now the common
+    // case. Scale past one and they would fight over the same number, so
+    // each is handed its own via PORT and the parent balances across them.
+    //
+    // Skipped when the spec named the instance port: that is the author
+    // saying where the app listens, and an imported image cannot be talked
+    // out of it.
+    //
+    // Namespace membership is asked of the kernel rather than remembered —
+    // a failed join must never look like a successful one, or the pool ends
+    // up pointing at the proxy itself.
+    let alone_in_its_network =
+        !rootless || (opts.netns.as_ref().is_some_and(|p| in_namespace(p)) && opts.scale <= 1);
+    let injected_port = match (publish.first(), rootless && !alone_in_its_network) {
         (Some(w), true) if !w.spec.instance_port_explicit => {
             let port = crate::runtime::publish::allocate_loopback_port()?;
             match spec_env.iter_mut().find(|(k, _)| k == "PORT") {
@@ -1286,6 +1327,7 @@ fn launch_instance(
         // The first spec is the app's canonical address — what `--after`
         // hands to dependants and what `ply lb` emits.
         published_port: publish.first().map(|w| w.spec.host_port),
+        instance_port: publish.first().map(|w| w.spec.instance_port),
         published_addr: publish.first().map(|w| {
             format!(
                 "{}:{}",
@@ -1377,7 +1419,7 @@ pub fn env_stem(app: &str) -> String {
 ///
 /// Nothing is injected for an unpublished dependency: it has no address to
 /// give, and inventing one would fail later and further away.
-pub fn discovery_env(after: &[String]) -> Vec<(String, String)> {
+pub fn discovery_env(after: &[String], in_stack_network: bool) -> Vec<(String, String)> {
     let states = state::list().unwrap_or_default();
     let mut out = Vec::new();
     for dep in after {
@@ -1387,11 +1429,21 @@ pub fn discovery_env(after: &[String]) -> Vec<(String, String)> {
         else {
             continue;
         };
-        let addr = found.published_addr.clone().expect("filtered above");
+        // Sharing a stack's network, the dependency answers on its own port
+        // at its own name; the published pair is the HOST's side of a proxy
+        // and reaches nothing from in here.
+        let addr = match (in_stack_network, found.instance_port) {
+            (true, Some(port)) => format!("{dep}.ply:{port}"),
+            _ => found.published_addr.clone().expect("filtered above"),
+        };
         let stem = env_stem(dep);
         let host = addr.rsplit_once(':').map(|(h, _)| h.to_string());
+        let port = match (in_stack_network, found.instance_port) {
+            (true, Some(port)) => Some(port),
+            _ => found.published_port,
+        };
         out.push((format!("{stem}_ADDR"), addr));
-        if let (Some(host), Some(port)) = (host, found.published_port) {
+        if let (Some(host), Some(port)) = (host, port) {
             out.push((format!("{stem}_HOST"), host));
             out.push((format!("{stem}_PORT"), port.to_string()));
         }
@@ -1922,17 +1974,17 @@ enum ScaleGuard {
 
 fn rootless_scale_guard(rootless: bool, scale: u32, has_ports: bool, publish: bool) -> ScaleGuard {
     match (rootless, scale, has_ports, publish) {
-        // --publish makes the parent the listener and gives every rootless
-        // instance its own injected loopback PORT — no collision left.
+        // --publish makes the parent the listener; past one instance each
+        // gets its own injected PORT, so nothing collides.
         (_, _, _, true) | (false, _, _, _) | (true, 0 | 1, _, _) => ScaleGuard::Ok,
         (true, _, true, false) => ScaleGuard::Refuse(
-            "rootless instances share the host network, so every instance would bind the same declared port (EADDRINUSE for all but the first).\n\
+            "rootless instances share one network, so every instance would bind the same declared port (EADDRINUSE for all but the first).\n\
              publish the pool through the parent:  ply run --publish <port> --scale N …\n\
              or run it rootful for per-instance IPs:  sudo ply run --scale N …\n\
              or stay rootless with --scale 1",
         ),
         (true, _, false, false) => ScaleGuard::Warn(
-            "rootless instances share the host network — if these instances bind the same port they will collide (per-instance IPs need root, or use --publish)",
+            "rootless instances share one network — if these instances bind the same port they will collide (per-instance IPs need root, or use --publish)",
         ),
     }
 }

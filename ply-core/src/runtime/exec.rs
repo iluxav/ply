@@ -14,6 +14,12 @@ use nix::unistd::ForkResult;
 use crate::error::{Error, Result};
 use crate::runtime::state::{self, InstanceState};
 
+/// The process the container's init started — the app itself.
+fn first_child(pid: i32) -> Option<i32> {
+    let kids = std::fs::read_to_string(format!("/proc/{pid}/task/{pid}/children")).ok()?;
+    kids.split_whitespace().next()?.parse().ok()
+}
+
 /// The user namespace that owns `ns`, via `NS_GET_USERNS`. The kernel is
 /// the only thing that knows this — walking /proc guesses.
 fn owning_userns(ns: &std::fs::File) -> Option<std::fs::File> {
@@ -50,14 +56,6 @@ pub fn exec(target: &str, cmd: &[String]) -> Result<i32> {
         instance.app, instance.n
     );
     let _ = std::fs::write(cgroup_procs, std::process::id().to_string());
-
-    // Read the container's env before switching mount namespaces.
-    let environ = std::fs::read(format!("/proc/{pid}/environ")).unwrap_or_default();
-    let env: Vec<CString> = environ
-        .split(|b| *b == 0)
-        .filter(|s| !s.is_empty())
-        .filter_map(|s| CString::new(s.to_vec()).ok())
-        .collect();
 
     // Open all namespace fds first (paths vanish once we switch mnt ns).
     let ns = |name: &str| -> Result<std::fs::File> {
@@ -102,6 +100,29 @@ pub fn exec(target: &str, cmd: &[String]) -> Result<i32> {
     if let Some(userns) = &userns {
         join(userns, CloneFlags::CLONE_NEWUSER, "user")?;
     }
+
+    // The app's own environment — its composed PATH above all, which is how
+    // `ply exec app node …` finds node in /opt/node-<version>/bin.
+    //
+    // Not from `pid`: that is the container's init, which is ply itself
+    // (it forks the app rather than exec'ing it, so it can tee the logs),
+    // and its environment is ply's own. The composed env belongs to the
+    // process it started. Read it AFTER joining the user namespace — before
+    // that the instance runs as a mapped uid we may not read — and BEFORE
+    // the mount namespace, while /proc still describes the host's pids.
+    let app_pid = first_child(pid).unwrap_or(pid);
+    let environ = std::fs::read(format!("/proc/{app_pid}/environ")).unwrap_or_default();
+    if environ.is_empty() {
+        eprintln!(
+            "ply exec: could not read {}.{}'s environment — commands run with a default PATH",
+            instance.app, instance.n
+        );
+    }
+    let env: Vec<CString> = environ
+        .split(|b| *b == 0)
+        .filter(|s| !s.is_empty())
+        .filter_map(|s| CString::new(s.to_vec()).ok())
+        .collect();
     if !same_ns("ipc") {
         join(&ipc, CloneFlags::CLONE_NEWIPC, "ipc")?;
     }
