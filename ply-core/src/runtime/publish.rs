@@ -260,6 +260,7 @@ fn relay(client: TcpStream, upstream: TcpStream) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
 
     /// The allocator must skip a port an app could not bind.
     ///
@@ -311,9 +312,6 @@ mod tests {
     fn allocation_never_fails_closed() {
         assert!(allocate_loopback_port().is_ok());
     }
-
-    use super::*;
-    use std::io::{Read, Write};
 
     #[test]
     fn rotation_starts_one_later_each_call() {
