@@ -22,14 +22,23 @@ name = "db"                                # → --name db
 e    = ["POSTGRES_PASSWORD=$PW", "POSTGRES_DB=todos"]
 
 [[app]]
-run   = "./server"                         # → ply run ./server
-after = ["db"]                             # → --after db
-e     = ["PGPASSWORD=$PW"]
+run     = "./server"                       # → ply run ./server
+after   = ["db"]                           # → --after db (waits; see below)
+publish = ["internal:3001"]
+e = ["DATABASE_URL=postgres://postgres:$PW@db.ply:5432/todos"]
 
 [[app]]
-run   = "./web"
-after = ["server"]
+run     = "./web"
+after   = ["server"]
+publish = ["3000"]
+e = ["API_ORIGIN=http://server.ply:3001"]
 ```
+
+Note what wires the members: a line you wrote. `after` orders the start and
+waits for health; the address is `<member>.ply`, and saying so in the file
+beats hoping ply and your app agree on an invented variable name. (They
+also arrive as `DB_ADDR`/`DB_HOST`/`DB_PORT` — a convenience, and a quiet
+failure when an app reads different names.)
 
 ```sh
 PW=dev ply up        # everything, dependency-ordered; Ctrl-C stops it all
@@ -148,21 +157,26 @@ entrypoint. Nothing to remember, nothing to ship.
 `ply.dev.toml` fixes an app's dev behavior; a stack has its own version of
 the problem. The committed stack describes **production**: members reach
 each other by their `<name>.ply` bridge names and secrets are `$VAR` holes.
-On a laptop almost none of that is true — rootless shares the host network,
-so the address is loopback, and a published port may have to dodge whatever
-the machine already runs.
+A laptop differs in fewer ways than it used to: a rootless stack gets its
+own network too, so `<name>.ply` and the members' real ports mean the same
+thing here as there. What is still local is a dev password, a published
+port that has to dodge whatever the machine already runs, and building the
+checkout next door instead of pulling a release.
 
 Put those local truths in `stack.dev.toml`, beside the stack file:
 
 ```toml
 # stack.dev.toml   (add it to .gitignore)
 [[app]]
-name    = "db"                 # WHICH member — matched by name
-publish = ["internal:5433"]    # 5432 is this laptop's own postgres
+name    = "db"                      # WHICH member — matched by name
+publish = ["internal:5433:5432"]    # the container still serves 5432; only
+                                    # the HOST side moves, because this box
+                                    # runs its own postgres there
 
 [[app]]
 name = "server"
-e = ["DATABASE_URL=postgres://postgres:dev@127.0.0.1:5433/todos"]
+run  = "../server"                  # the checkout next door
+e = ["DATABASE_URL=postgres://postgres:dev@db.ply:5432/todos"]
 ```
 
 - Members are matched by `name`; overriding a name that is not in the stack

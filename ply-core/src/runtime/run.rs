@@ -1031,6 +1031,41 @@ fn volume_name_from_path(path: &str) -> String {
     }
 }
 
+/// Other instances' copies of this volume that already hold data.
+///
+/// A per-instance volume belongs to its instance number, so a second run of
+/// an app gets `data.2` while `data.1` keeps the bytes. That is right for a
+/// scaled app and catastrophic for a single database: it comes up empty,
+/// serves fine, and the only symptom is that everything it knew is gone.
+/// Nothing here changes what happens — it changes whether anyone is told.
+fn populated_siblings(app_dir: &Path, name: &str, suffix: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let prefix = format!("{name}.");
+    let Ok(entries) = std::fs::read_dir(app_dir) else {
+        return found;
+    };
+    for entry in entries.filter_map(|e| e.ok()) {
+        let file_name = entry.file_name();
+        let Some(dir_name) = file_name.to_str() else {
+            continue;
+        };
+        let Some(rest) = dir_name.strip_prefix(&prefix) else {
+            continue;
+        };
+        if rest == suffix {
+            continue;
+        }
+        let has_data = std::fs::read_dir(entry.path())
+            .map(|mut e| e.next().is_some())
+            .unwrap_or(false);
+        if has_data {
+            found.push(dir_name.to_string());
+        }
+    }
+    found.sort();
+    found
+}
+
 /// Is this process inside the namespace at `path`? Compared by identity,
 /// not by whether a join was attempted — believing a failed join is what
 /// turns a proxy into its own backend.
@@ -1099,13 +1134,26 @@ fn launch_instance(
         } else {
             n.to_string()
         };
-        let host_dir = crate::paths::volumes_dir()
-            .join(&app)
-            .join(format!("{name}.{suffix}"));
+        let app_volumes = crate::paths::volumes_dir().join(&app);
+        let host_dir = app_volumes.join(format!("{name}.{suffix}"));
+        let fresh = !host_dir.exists();
         std::fs::create_dir_all(&host_dir).map_err(|source| Error::Io {
             path: host_dir.clone(),
             source,
         })?;
+        // Starting empty next to a volume that is full is almost never what
+        // the operator meant, and a database that does it looks healthy.
+        if fresh && volume.scope != "shared" && !volume.ephemeral {
+            let siblings = populated_siblings(&app_volumes, name, &suffix);
+            if !siblings.is_empty() {
+                eprintln!(
+                    "ply: warning: {app}.{n} starts on an EMPTY volume {name}.{suffix} — {} already holds data.\n\
+                     ply:          Instances do not share a per-instance volume. If you meant to REPLACE\n\
+                     ply:          the running instance rather than add one beside it, stop it first.",
+                    siblings.join(", "),
+                );
+            }
+        }
         // The app's user must be able to write its own volumes. Rootful this
         // succeeds here; rootless it cannot — an unprivileged parent may not
         // chown to another uid, that needs CAP_CHOWN in the INITIAL namespace.
@@ -1992,6 +2040,34 @@ fn rootless_scale_guard(rootless: bool, scale: u32, has_ports: bool, publish: bo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The plybox-db outage: a second instance came up on data.2 while
+    /// data.1 held the registry, and nothing said so until the site had been
+    /// serving an empty database for hours.
+    #[test]
+    fn a_full_volume_from_another_instance_is_reported() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let app = dir.path().join("plybox-db");
+        std::fs::create_dir_all(app.join("data.1")).expect("data.1");
+        std::fs::write(app.join("data.1/PG_VERSION"), "17").expect("write");
+        std::fs::create_dir_all(app.join("data.2")).expect("data.2");
+
+        assert_eq!(
+            populated_siblings(&app, "data", "2"),
+            vec!["data.1".to_string()],
+            "instance 2 must be told that instance 1 holds the data",
+        );
+        // The instance that owns the data is not warned about itself, and an
+        // empty sibling is not worth a word.
+        assert!(populated_siblings(&app, "data", "1").is_empty());
+        // A different volume of the same app is not a sibling of this one.
+        std::fs::create_dir_all(app.join("backups.1")).expect("backups.1");
+        std::fs::write(app.join("backups.1/dump"), "x").expect("write");
+        assert_eq!(
+            populated_siblings(&app, "data", "2"),
+            vec!["data.1".to_string()]
+        );
+    }
 
     #[test]
     fn rootful_and_single_instance_pass() {

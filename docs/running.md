@@ -42,13 +42,20 @@ instance IPs:
 curl http://myapp.ply:3000        # rootful only
 ```
 
-`.ply` names have two limits worth knowing before building on them: they
-are **rootful only** (rootless instances share the host network and get no
-entries), and each instance copies `/etc/hosts` at launch, so a rolling
-deploy of one app leaves its callers holding the old IPs. For app-to-app
-traffic prefer `--publish` + `--after` below — the publishing parent owns
-one stable address and swaps the pool behind it, so nothing downstream goes
-stale.
+`.ply` names are **rootful only** — a rootless stack gets its own network
+namespace, where members resolve each other by the same names (see
+[stacks](stacks.md)).
+
+The names stay current. Each instance's `/etc/hosts` is a bind-mounted file
+that ply rewrites whenever an instance comes or goes, so an app that
+restarts on a new IP is reachable by name immediately, without restarting
+the apps that call it. (Earlier versions took a *copy* at launch, so callers
+held the old IP until they were restarted too.)
+
+For app-to-app traffic `--publish` + `--after` below is still the better
+default when an app is scaled: a name maps to instance IPs, while the
+publishing parent owns one stable address and balances across the pool
+behind it.
 
 Instances reach the internet through the host: each rootful run enables
 IPv4 forwarding and a source-NAT rule for `10.77.0.0/16` (nft, or iptables
@@ -248,28 +255,38 @@ on readiness.
 
 ### …and where to find it
 
-`--after` already knows the edge, so it also answers the next question. If
-the dependency is published, its address arrives as environment:
+`--after` waits; it does not wire. **Write the connection down** — the file
+then says what talks to what, and nothing depends on ply and your app
+having guessed the same variable name:
 
 ```sh
 ply run pgdb.img --publish internal:5432 &
-ply run api.img --scale 4 --publish internal:3000 --after pgdb &
-ply run web.img --scale 2 --publish 8080 --after api
-#   web sees:  API_ADDR=127.0.0.1:3000   API_HOST=127.0.0.1   API_PORT=3000
-#   api sees:  PGDB_ADDR=…               PGDB_HOST=…          PGDB_PORT=…
+ply run api.img --scale 4 --publish internal:3000 --after pgdb \
+    -e DATABASE_URL=postgres://app@pgdb.ply:5432/app &
+ply run web.img --scale 2 --publish 8080 --after api \
+    -e API_ORIGIN=http://api.ply:3000
 ```
 
-That is the whole multi-service story: three apps, no stack file, no DNS,
-no service registry. Each address points at the dependency's **parent**,
-which balances across its instances and drains them on deploy — so `web`
-keeps working while `api` rolls, and never learns an instance IP that can
-go stale.
+`<name>.ply` resolves to the dependency's **parent**, which balances across
+its instances and drains them on deploy — so `web` keeps working while
+`api` rolls, and never learns an instance IP that can go stale.
 
-The variable name is the app name upcased, with anything non-alphanumeric
-becoming `_` (`api-server` → `API_SERVER_ADDR`). ply computes the host part
-per mode, so you never hardcode loopback-vs-bridge. An explicit `[env]` or
-`-e` wins over the injected value, and an unpublished dependency injects
-nothing rather than inventing an address that fails further away.
+### The injected variables, and why they are not the wiring
+
+A published dependency's address also arrives as environment:
+`API_ADDR` / `API_HOST` / `API_PORT`, the app name upcased with anything
+non-alphanumeric becoming `_` (`api-server` → `API_SERVER_ADDR`). Handy
+when an app already reads those names.
+
+The catch is that it fails **quietly** when it does not. An app expecting
+`POSTGRES_HOST` will not see `PLYBOX_DB_HOST`; it finds nothing, concludes
+it has no database, and serves happily — no error, no log line, just a
+feature that never works. That is a real afternoon, spent once already.
+
+So treat the variables as a convenience, not a contract: name the address
+yourself, and an explicit `[env]` or `-e` always wins over the injected
+value. An unpublished dependency injects nothing rather than inventing an
+address that fails further away.
 
 ## Environment
 

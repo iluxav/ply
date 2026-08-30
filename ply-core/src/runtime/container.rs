@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use nix::sys::stat::{makedev, mknod, Mode, SFlag};
 
 use crate::error::Result;
-use crate::runtime::mount;
+use crate::runtime::{hosts, mount};
 
 pub struct ContainerSpec {
     /// Mounted layer dirs, top (app) first, base last.
@@ -99,10 +99,6 @@ fn setup_and_exec(spec: &ContainerSpec) -> Result<isize> {
         let _ = std::fs::create_dir(root.join(dir));
     }
 
-    // Containers see the host's name database: `<app>.ply` entries ply
-    // manages plus the host's DNS config. Written to the upperdir, so the
-    // image layers stay untouched.
-    let _ = std::fs::copy("/etc/hosts", root.join("etc/hosts"));
     let host_resolv = std::fs::read_to_string("/etc/resolv.conf").unwrap_or_default();
     let upstream = std::fs::read_to_string("/run/systemd/resolve/resolv.conf").ok();
     let (resolv, warning) = match &spec.dns {
@@ -113,22 +109,46 @@ fn setup_and_exec(spec: &ContainerSpec) -> Result<isize> {
         eprintln!("ply: warning: {w}");
     }
     let _ = std::fs::write(root.join("etc/resolv.conf"), resolv);
-    // The container's own hostname MUST resolve locally: anything calling
+
+    // Containers see the host's name database — the `<app>.ply` entries ply
+    // manages — through a bind-mounted file, so a peer that restarts on a
+    // new address is reachable here without restarting this one too.
+    //
+    // Its own hostname MUST resolve locally: anything calling
     // getfqdn()/gethostbyname(hostname) otherwise stalls ~5s in DNS
-    // (python's http.server does this at bind).
-    if let Ok(mut hosts) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(root.join("etc/hosts"))
-    {
-        use std::io::Write;
-        let _ = writeln!(hosts, "127.0.0.1\t{}", spec.hostname);
-        // Siblings sharing this namespace: `db.ply` means the same thing
-        // here as it does on a bridge, which is what lets one stack file
-        // serve a laptop and a droplet.
-        for alias in &spec.local_aliases {
-            let _ = writeln!(hosts, "127.0.0.1\t{alias}.ply");
+    // (python's http.server does this at bind). Siblings sharing this
+    // namespace resolve to loopback: `db.ply` means the same thing here as
+    // it does on a bridge, which is what lets one stack file serve a laptop
+    // and a droplet.
+    let mut local = format!("127.0.0.1\t{}\n", spec.hostname);
+    for alias in &spec.local_aliases {
+        local.push_str(&format!("127.0.0.1\t{alias}.ply\n"));
+    }
+    let target = root.join("etc/hosts");
+    let bound = hosts::write_instance_file(&spec.instance_dir, &local).is_ok() && {
+        let _ = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&target);
+        nix::mount::mount(
+            Some(&hosts::instance_file(&spec.instance_dir)),
+            &target,
+            None::<&str>,
+            nix::mount::MsFlags::MS_BIND,
+            None::<&str>,
+        )
+        .is_ok()
+    };
+    if !bound {
+        // Never leave a container without a name database: fall back to the
+        // start-time copy this replaced (stale on a peer's restart, but a
+        // container that can resolve nothing at all is worse).
+        let mut text = std::fs::read_to_string("/etc/hosts").unwrap_or_default();
+        if !text.ends_with('\n') {
+            text.push('\n');
         }
+        text.push_str(&local);
+        let _ = std::fs::write(&target, text);
     }
 
     // A declared run user gets a passwd/group entry (getpwuid must work —

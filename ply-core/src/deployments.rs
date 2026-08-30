@@ -29,6 +29,23 @@ pub const UNIT_MARKER: &str =
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Spec {
+    /// WHERE the built thing comes from, in one key.
+    ///
+    /// `app`, `image`, `url` and `github` are four spellings of "a built
+    /// artifact, somewhere", and a deployment only ever has two real
+    /// choices: fetch a built thing, or build one here (`repo`). `from`
+    /// says the first, and what it looks like says which kind:
+    ///
+    ///   from = "redis@8.0"                  a registry ref (namespaced too:
+    ///   from = "ply/plybox-web"             `<namespace>/<name>`)
+    ///   from = "/srv/deploy/app-1.0.0-linux-x64.img"    a file here
+    ///   from = "https://…/app-1.0.0-linux-x64.img"      a URL
+    ///   from = "github:org/app"             release assets
+    ///
+    /// The older keys still work and mean the same things — this normalizes
+    /// into them, so nothing already deployed has to change.
+    #[serde(default)]
+    pub from: Option<String>,
     /// A runnable app from the registry's apps namespace…
     #[serde(default)]
     pub app: Option<String>,
@@ -130,7 +147,8 @@ fn default_true() -> bool {
 
 impl Spec {
     pub fn parse(text: &str) -> Result<Spec> {
-        let spec: Spec = toml::from_str(text).map_err(|e| Error::Manifest(e.to_string()))?;
+        let mut spec: Spec = toml::from_str(text).map_err(|e| Error::Manifest(e.to_string()))?;
+        spec.normalize_from()?;
         let sources = spec.app.is_some() as u8
             + spec.image.is_some() as u8
             + spec.url.is_some() as u8
@@ -139,12 +157,53 @@ impl Spec {
         match sources {
             1 => Ok(spec),
             0 => Err(Error::Manifest(
-                "a deployment needs one of: `app` (registry), `image` (a file), `url` (a direct link), `github` (release assets), `repo` (build here)".into(),
+                "a deployment needs `from` (a registry ref, a path, a URL, or github:org/repo) or `repo` (build it here)".into(),
             )),
             _ => Err(Error::Manifest(
-                "a deployment names exactly one of `app`, `image`, `url`, `github`, `repo`".into(),
+                "a deployment names ONE source: `from` (or one of the older `app`/`image`/`url`/`github`), or `repo`".into(),
             )),
         }
+    }
+
+    /// Fold `from` into the lane it names. Shape decides: a scheme or a
+    /// `github:` prefix is explicit, a path is a path, and anything left is
+    /// a registry reference — the same reading `ply run` gives its argument.
+    fn normalize_from(&mut self) -> Result<()> {
+        let Some(from) = self.from.take() else {
+            return Ok(());
+        };
+        // `from` IS the source; naming another one alongside it is a
+        // mistake, and folding them together would hide it.
+        if self.app.is_some()
+            || self.image.is_some()
+            || self.url.is_some()
+            || self.github.is_some()
+            || self.repo.is_some()
+        {
+            return Err(Error::Manifest(
+                "`from` is the source — remove the `app`/`image`/`url`/`github`/`repo` beside it"
+                    .into(),
+            ));
+        }
+        if let Some(repo) = from.strip_prefix("github:") {
+            self.github = Some(repo.to_string());
+        } else if from.starts_with("https://") || from.starts_with("http://") {
+            self.url = Some(from);
+        } else if from.ends_with(".img") || from.starts_with('/') || from.starts_with('.') {
+            self.image = Some(from);
+        } else {
+            // `name`, `name@1.2`, `namespace/name`, `namespace/name@1.2`
+            match from.rsplit_once('@') {
+                Some((name, version)) => {
+                    self.app = Some(name.to_string());
+                    if self.version.is_none() {
+                        self.version = Some(version.to_string());
+                    }
+                }
+                None => self.app = Some(from),
+            }
+        }
+        Ok(())
     }
 
     /// The `ply run` flags the generated unit carries.
@@ -351,6 +410,55 @@ REDIS_PASSWORD = "s3cret"
             .windows(2)
             .any(|w| w == ["--domain", "cache.example.com"]));
         assert!(flags.windows(2).any(|w| w == ["--scale", "2"]));
+    }
+
+    /// One key, four shapes. The reading matches `ply run`'s, so a person
+    /// who knows one knows the other.
+    #[test]
+    fn from_names_the_lane_by_its_shape() {
+        let lane = |text: &str| Spec::parse(text).expect("parses");
+
+        let s = lane("from = \"redis@8.0\"\n");
+        assert_eq!(s.app.as_deref(), Some("redis"));
+        assert_eq!(s.version.as_deref(), Some("8.0"));
+
+        let s = lane("from = \"ply/plybox-web\"\n");
+        assert_eq!(
+            s.app.as_deref(),
+            Some("ply/plybox-web"),
+            "namespaced ref stays whole"
+        );
+        assert!(s.version.is_none());
+
+        let s = lane("from = \"/srv/deploy/app-1.0.0-linux-x64.img\"\n");
+        assert_eq!(
+            s.image.as_deref(),
+            Some("/srv/deploy/app-1.0.0-linux-x64.img")
+        );
+
+        let s = lane("from = \"https://cdn.example.com/app-1.0.0-linux-x64.img\"\n");
+        assert_eq!(
+            s.url.as_deref(),
+            Some("https://cdn.example.com/app-1.0.0-linux-x64.img")
+        );
+
+        let s = lane("from = \"github:org/app\"\n");
+        assert_eq!(s.github.as_deref(), Some("org/app"));
+
+        // an explicit version wins over one inside the ref
+        let s = lane("from = \"redis@8.0\"\nversion = \"8.1\"\n");
+        assert_eq!(s.version.as_deref(), Some("8.1"));
+    }
+
+    /// Every deployment written before `from` existed keeps working.
+    #[test]
+    fn the_older_keys_still_mean_what_they_meant() {
+        assert!(Spec::parse("app = \"redis\"\n").is_ok());
+        assert!(Spec::parse("image = \"/x.img\"\n").is_ok());
+        assert!(Spec::parse("url = \"https://x/a-1.0.0-linux-x64.img\"\n").is_ok());
+        assert!(Spec::parse("github = \"org/app\"\n").is_ok());
+        // and `from` alongside one of them is still exactly one too many
+        assert!(Spec::parse("from = \"redis\"\napp = \"redis\"\n").is_err());
     }
 
     #[test]

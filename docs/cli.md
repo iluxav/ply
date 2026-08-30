@@ -91,6 +91,8 @@ reach it:
 ply run web.img --after api --after db
 #   API_ADDR=10.77.0.1:8080   API_HOST=…   API_PORT=…
 #   DB_ADDR=…                 DB_HOST=…    DB_PORT=…
+# a convenience: an app reading other names sees nothing and fails quietly,
+# so prefer naming the address yourself — `-e DATABASE_URL=…@db.ply:5432/…`
 ```
 
 ply computes the address, so it is right rootless (loopback) and rootful

@@ -1,6 +1,6 @@
 ---
 title: Deployments & CD
-description: A deployment is a file. Five ways to say where truth lives — registry, image, a direct URL, GitHub releases, or a repo built on the host — and a timer that keeps reality converged. Zero resident processes.
+description: A deployment is a file. Two ways to say where truth lives — fetch a built thing, or build one here — and a timer that keeps reality converged. Zero resident processes.
 section: Guides
 order: 14.5
 ---
@@ -23,42 +23,19 @@ sudo ply setup --swap 2G     # small hosts that will build JS on-droplet
 
 ## A deployment names where truth lives
 
-Exactly one of five sources per file:
+Two choices, not five: **fetch a built thing**, or **build one here**.
 
 ```toml
-# 1 · registry — a runnable app from your registry, newest matching version.
-#     `app = "<namespace>/<name>"` looks in that namespace instead of the
-#     default one, which is how CI publishing becomes deployment.
-app = "redis"
-version = "8.0"
-publish = ["internal:6379"]
-
-[env]
-REDIS_PASSWORD = "change-me"
+# fetch — `from` says where, and its shape says which kind
+from = "redis@8.0"                                  # a registry ref
+from = "ply/plybox-web"                             # …namespaced
+from = "/srv/deploy/myapp-1.2.0-linux-x64.img"      # a file on this host
+from = "https://cdn.example.com/myapp-1.2.0-linux-x64.img"   # a URL
+from = "github:org/myapp"                           # release assets
 ```
 
 ```toml
-# 2 · image — a file already on this host (CI scp'd it, you built it, whatever)
-image = "/srv/deploy/myapp-1.2.0-linux-x64.img"
-```
-
-```toml
-# 3 · url — a direct link to a CI-built image on any static host. The URL is
-#     treated as immutable and fetched once; a new version is a new URL.
-url = "https://cdn.example.com/myapp-1.2.0-linux-x64.img"
-publish = ["internal:8080"]
-```
-
-```toml
-# 4 · github — your CI builds the image and attaches it to a GitHub release;
-#     the host pulls it. `version` blank = follow the latest release.
-github = "org/myapp"
-publish = ["internal:8080"]
-domain = ["app.example.com"]
-```
-
-```toml
-# 5 · repo — no CI at all: the host clones and builds the repo itself
+# build here — no CI at all: the host clones and builds the repo itself
 repo = "https://github.com/org/myapp"
 build = "npm ci && npm run build"
 runtime = "node@24"
@@ -69,19 +46,33 @@ publish = ["internal:3000"]
 domain = ["app.example.com"]
 ```
 
-If the repo carries its own `ply.toml`, lane 5 needs none of the manifest
-fields — `repo` plus a `build` command is enough; the repo's manifest rules.
+A whole deployment, then, is that one line plus how to run it:
+
+```toml
+from = "redis@8.0"
+publish = ["internal:6379"]
+
+[env]
+REDIS_PASSWORD = "change-me"
+```
+
+If the repo carries its own `ply.toml`, the build lane needs none of the
+manifest fields — `repo` plus a `build` command is enough; the repo's
+manifest rules.
+
+The older spellings — `app`, `image`, `url`, `github` — still work and mean
+exactly what they meant; `from` normalizes into them. They were four names
+for "a built artifact, somewhere", which is one idea.
 
 ## Continuous deployment is a pull
 
 Every following lane re-resolves on each reconcile run:
 
-- `app =` (and a stack member's `run =`) resolves the newest matching
-  version in the registry, including a namespaced ref like
-  `ply/ply-web` — CI publishes, the host converges, nothing on the host
-  names a version.
-- `github =` resolves the **latest release** (a `version = "1.2"` prefix
-  follows patch releases; an exact `"1.2.3"` pins).
+- a registry ref (and a stack member's `run =`) resolves the newest matching
+  version, including a namespaced one like `ply/plybox-web` — CI publishes,
+  the host converges, nothing on the host names a version.
+- `github:org/app` resolves the **latest release** (a `version = "1.2"`
+  prefix follows patch releases; an exact `"1.2.3"` pins).
 - `repo =` fetches the branch tip (`ref = "main"`, default: remote HEAD)
   and rebuilds only when the commit or the spec actually changed.
 
@@ -107,8 +98,8 @@ centrally orchestrated fleets). See [Deploys, health & restarts](/docs/deploy/).
 ## Private repos: one credential
 
 A fine-grained personal access token with **Contents: read** on that one
-repo covers everything: `https` clones for lane 5, release downloads for
-lane 4, and the dashboard's update checks.
+repo covers everything: `https` clones for the build lane, release
+downloads for `github:`, and the dashboard's update checks.
 
 ```toml
 repo = "https://github.com/org/private-app"
@@ -117,11 +108,12 @@ token_file = ".keys/private-app.token"      # root-owned file, 0600
 
 Relative `token_file` and `deploy_key` paths resolve against the
 deployments dir. The token is injected into git per-invocation — it never
-lands in `.git/config`. An SSH `deploy_key` remains supported for lane 5.
+lands in `.git/config`. An SSH `deploy_key` remains supported for the
+build lane.
 
 ## Building on the host
 
-Lane 5 builds run in a throwaway, memory-fenced container (a real ply app
+Builds run in a throwaway, memory-fenced container (a real ply app
 named `<name>-builder` — it shows up in `ply ps` and the dashboard, and its
 log ring is the build log). The checkout persists between builds, so
 `node_modules` and framework caches *are* the cache.
@@ -133,7 +125,8 @@ fence kept the builder at low CPU weight and ~60% of RAM.
 
 Rules of thumb: Go, Python and static sites build fine on 512 MB;
 JavaScript wants `ply setup --swap 2G` (ply refuses a JS build on a small
-host without swap, and tells you the fix); Rust belongs in CI — use lane 4.
+host without swap, and tells you the fix); Rust belongs in CI — build it
+there and deploy with `from`.
 
 ## What the host reports back
 
@@ -147,7 +140,7 @@ host without swap, and tells you the fix); Rust belongs in CI — use lane 4.
 
 | key | meaning |
 |---|---|
-| `app` / `image` / `url` / `github` / `repo` | the source — exactly one |
+| `from` / `repo` | the source — exactly one. `from` takes a registry ref, a path, a URL, or `github:org/repo`; `app`/`image`/`url`/`github` remain as older spellings |
 | `version` | registry/github lanes: exact pin, prefix follow, or blank = latest |
 | `asset` | github lane: app name in `<asset>-<ver>-linux-<arch>.img`; default = deployment name |
 | `ref` | repo lane: branch or committish; default = remote HEAD |
@@ -237,9 +230,12 @@ publish = ["internal:5432"]         after = ["postgres"]
 POSTGRES_PASSWORD = "…"             POSTGRES_PASSWORD = "…"
 ```
 
-`after` waits for the service to be healthy and injects the discovery
-variables — the app reads `POSTGRES_HOST` / `POSTGRES_PORT` from its
-environment, plus the shared password from `[env]`. `stack` is a label:
+`after` waits for the service to be healthy. Wiring is a line you write:
+`DATABASE_URL=postgres://postgres:$PW@todos-db.ply:5432/todos` says what
+talks to what, in the file, without depending on ply and the app having
+picked the same variable name (they injected `POSTGRES_HOST` here; an app
+reading something else would find nothing and quietly run without a
+database). `stack` is a label:
 members render grouped in the dashboard. Because a stack is just files,
 it inherits everything files already have: per-member rollback and
 freshness, fleet sync, git review.

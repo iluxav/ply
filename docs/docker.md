@@ -167,7 +167,7 @@ decision, not a gap — the third column says why.
 | `docker run -p 8080:80` | `ply run --publish 8080:80` | not a port *mapping*: the run parent load-balances the whole pool |
 | `docker run -v` / `volume` | `[volumes]` in ply.toml | volumes are declared per app; plain host directories underneath |
 | `docker run -e` / `--env-file` | same flags | identical on purpose |
-| `docker compose up` | `ply up` — a `[stack]` in ply.toml wires the members | registry apps + local dirs, `after` waits on the health gate **and injects the address** as `<APP>_ADDR` / `_HOST` / `_PORT`; see [Stacks](/docs/stacks/) |
+| `docker compose up` | `ply up` — a `[stack]` in ply.toml wires the members | registry apps + local dirs, `after` waits on the health gate; members reach each other at `<name>.ply` — write the connection down rather than relying on the injected `<APP>_ADDR`; see [Stacks](/docs/stacks/) |
 | `docker ps` / `exec` / `stats` | same verbs | identical on purpose |
 | `docker logs` | stdout / `journalctl -u ply-<app>` | apps are foreground processes; logging is the supervisor's job |
 | `docker pull` | — | lockfiles fetch exact hashes on demand; `ply sync` pre-fetches a host's policy set |

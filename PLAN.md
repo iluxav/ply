@@ -230,15 +230,35 @@ the reference the rootless path converges to.
 *inside the namespace already created here*. The outer plumbing (pasta, the
 setns relay) is unchanged, so nothing built now is wasted.
 
-## 2 · Collapse the deployment lanes, 5 → 2
+## 2 · Collapse the deployment lanes, 5 → 2 — DONE (2026-08-30)
 
-`app`, `image`, `url`, `github` are four spellings of "a built artifact,
-somewhere". One `from =` taking a registry ref, a path, a URL or
-`github:org/repo` leaves the two real concepts: **fetch it**, or **build it
-here** (`repo`). Adding the `url` lane today is what made the redundancy
-obvious.
+`from =` takes a registry ref (`redis@8.0`, `ply/plybox-web`), a path, a
+URL, or `github:org/repo`, and its SHAPE picks the lane — the same reading
+`ply run` gives its argument, so knowing one is knowing the other. With
+`repo` (build it here) that leaves the two real concepts.
 
-## 3 · Shrink the magic in wiring
+`from` normalizes into the old keys inside `Spec::parse`, so `app`, `image`,
+`url` and `github` keep working and every deployment already on a host is
+untouched. Naming `from` AND one of them is refused rather than merged: it
+is a mistake, and folding them would hide it.
+
+## 3 · Shrink the magic in wiring — DONE (2026-08-30)
+
+Docs and examples now teach explicit wiring: `after` orders the start and
+waits for health, and the address is `<member>.ply`, written down in the
+file. The injected `<APP>_ADDR`/`_HOST`/`_PORT` are documented as a
+convenience with their failure mode named — an app reading other names sees
+nothing, concludes it has no database, and serves happily, which is exactly
+what cost an afternoon. Changed in `running.md` (the discovery section
+rewritten), `stacks.md` (the canonical example wires `DATABASE_URL` and
+`API_ORIGIN`), `deployments.md`, `docker.md`, `agents.md`, `cli.md`.
+
+Injection itself stays: removing it would break apps that do read those
+names, and it is printed at launch, so it is visible rather than secret.
+
+Original reasoning:
+
+## 3 · (original) Shrink the magic in wiring
 
 `--after db` injects `DB_HOST`; the app read `POSTGRES_HOST`; the site
 served happily and every login answered "nodb". Explicit
@@ -251,16 +271,46 @@ convenience; stop treating it as the wiring mechanism.
 Users, tokens, namespaces, grants, reserved names, admin logins — a second
 product, built in a day. Two concrete follow-ups:
 
-- **the grant bug**: `RESERVED` is used both to *block* squatting and to
-  *grant* admins, so an admin now holds `api`, `www`, `docs`, `account`…
-  Split the lists (`RESERVED` to block, `OFFICIAL = {ply, apps}` to grant)
-  and clean the stray rows.
+- **the grant bug** — DONE (2026-08-30). Not by splitting the list but by
+  shortening it: `RESERVED = {ply, apps}`, the two official shelves. Every
+  other name was only ever a guess about words we might want, and each one
+  cost a grant row per admin login and made that name unclaimable. The stray
+  rows still need deleting once the database is back:
+  `DELETE FROM namespace_grants WHERE namespace IN
+   ('api','www','admin','registry','docs','account','login','new');`
 - **version deletion must be gated on nothing pinning it.** Today's
   registry rebuild orphaned `node 24.6.0` (broke plybox-web in production —
   the pin is unrecoverable, since rebuilding does not reproduce the digest)
   and `postgres 17.10.3` (still pinned in ply-labs' lock).
 
 ## 5 · Ops correctness (all found today)
+
+**The plybox outage (2026-08-30) — two of these, in series.** The self-update
+timer fired at 00:05. It brought up a SECOND `plybox-db` instance beside the
+running one: slot 2, and therefore volume `data.2`, freshly initialised and
+empty. The registry — users, tokens, packages, versions, grants — stayed in
+`data.1`, which instance 1 kept writing until it stopped at 00:48. Nothing
+warned. Then `plybox-web`, holding a start-time COPY of /etc/hosts, went on
+dialling instance 1's dead address (EHOSTUNREACH 10.77.0.3) until every
+DB-backed route returned 500: login, `ply push`, the whole API.
+
+Both causes are now fixed in the runtime:
+
+- a container's /etc/hosts is a **bind-mounted file**, not a copy, and
+  `hosts::add_entry`/`remove_entry` refresh every running instance's copy —
+  a peer that comes back on a new address is reachable without restarting
+  its siblings (`runtime/hosts.rs`, `runtime/container.rs`)
+- starting an instance on an **empty per-instance volume while another
+  instance's copy holds data** now says so, loudly (`runtime/run.rs`). It
+  does not change what happens — a second instance genuinely does not share
+  the first's data — only whether anyone is told. Worth deciding: should a
+  volume-declaring app refuse a second instance outright unless scaled?
+
+Still open, and the reason the catalog needs rebuilding at all: an
+`apps/postgres` push regenerated `index.json` from a database that had just
+lost its rows, unlisting `17.10.3` whose bytes are still in R2. **A catalog
+regenerated from an empty database silently unpublishes everything.** The
+regeneration should refuse to shrink a namespace it cannot account for.
 
 - the rootless extraction cache grows unbounded and `gc` will not reclaim
   it while an app record exists — 17 GB on this laptop

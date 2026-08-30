@@ -45,7 +45,9 @@ they are actually needed.
 - **Running** — `--scale`, and `--publish` as the only thing that claims a
   host port
 - **Wiring services** — `--publish internal:` plus `--after`, which injects
-  `<APP>_ADDR` / `_HOST` / `_PORT` so apps find each other without DNS or a
+  `<APP>_ADDR` / `_HOST` / `_PORT` as a convenience — prefer writing the
+  address down (`<name>.ply`), since an app that reads different variable
+  names finds nothing and fails silently. Apps find each other without DNS or a
   stack file
 - **TLS** — Caddy at the edge pointed at the published parent, and the
   certificate-volume trap that silently burns your Let's Encrypt quota
