@@ -747,8 +747,10 @@ fn wait_healthy(ctx: &AppContext, instance: &Instance) -> bool {
         }
         if let (Some(port), Some(ip)) = (port, ip) {
             let addr = std::net::SocketAddr::from((ip, port));
-            match std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300))
-            {
+            match crate::runtime::publish::connect_either_family(
+                addr,
+                std::time::Duration::from_millis(300),
+            ) {
                 Ok(_) => return true,
                 Err(e) => last_err = Some(e),
             }

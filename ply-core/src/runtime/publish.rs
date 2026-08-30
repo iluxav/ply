@@ -155,6 +155,32 @@ impl Pool {
     }
 }
 
+/// Connect to `addr`, falling back to the other loopback family.
+///
+/// Runtimes bind what they consider "everywhere", and for node, Next, Java
+/// and plenty of others that is `[::]`. When the kernel hands that socket
+/// out IPv6-only, `127.0.0.1` is refused — so a probe or a proxy that knows
+/// one family calls a perfectly healthy app dead. Ply picks the instance's
+/// address itself, so this is ply's problem to absorb, not something every
+/// app author should have to learn (and work around with `-H 0.0.0.0`).
+///
+/// Only loopback is retried: a bridge IP is a real address the app was told
+/// to bind, and guessing there would hide a genuine misconfiguration.
+pub fn connect_either_family(
+    addr: SocketAddr,
+    timeout: std::time::Duration,
+) -> std::io::Result<TcpStream> {
+    let first = TcpStream::connect_timeout(&addr, timeout);
+    if first.is_ok() || !addr.ip().is_loopback() {
+        return first;
+    }
+    let other = match addr {
+        SocketAddr::V4(_) => SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, addr.port())),
+        SocketAddr::V6(_) => SocketAddr::from((Ipv4Addr::LOCALHOST, addr.port())),
+    };
+    TcpStream::connect_timeout(&other, timeout).or(first)
+}
+
 /// Reserve a free loopback port (rootless: one per instance, injected as
 /// PORT). Bind-then-drop has a theoretical reuse race; in practice the
 /// instance rebinds it within milliseconds.
@@ -227,7 +253,7 @@ pub fn serve(listener: TcpListener, pool: Pool) {
         std::thread::spawn(move || {
             let _ = client.set_nodelay(true);
             for addr in pool.rotated() {
-                match TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(500)) {
+                match connect_either_family(addr, std::time::Duration::from_millis(500)) {
                     Ok(upstream) => {
                         let _ = upstream.set_nodelay(true);
                         relay(client, upstream);
@@ -302,6 +328,55 @@ mod tests {
             let port = allocate_loopback_port().expect("allocates");
             assert_ne!(port, taken, "handed out a port an app could not bind");
         }
+    }
+
+    /// An app that binds `[::]` IPv6-only must still look alive to a probe
+    /// aimed at IPv4 loopback — node and Next default to exactly that, and
+    /// ply chose the address, so ply absorbs the mismatch.
+    #[test]
+    fn loopback_connect_crosses_families() {
+        use nix::sys::socket::{
+            bind, listen, setsockopt, socket, sockopt, AddressFamily, Backlog, SockFlag,
+            SockProtocol, SockType, SockaddrIn6,
+        };
+        use std::net::{Ipv6Addr, SocketAddrV6};
+        use std::os::fd::AsRawFd;
+
+        let sock = socket(
+            AddressFamily::Inet6,
+            SockType::Stream,
+            SockFlag::empty(),
+            SockProtocol::Tcp,
+        )
+        .expect("ipv6 socket");
+        setsockopt(&sock, sockopt::Ipv6V6Only, &true).expect("v6only");
+        bind(
+            sock.as_raw_fd(),
+            &SockaddrIn6::from(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0)),
+        )
+        .expect("bind");
+        listen(&sock, Backlog::new(8).unwrap()).expect("listen");
+        let port = nix::sys::socket::getsockname::<SockaddrIn6>(sock.as_raw_fd())
+            .unwrap()
+            .port();
+
+        let v4 = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+        assert!(
+            TcpStream::connect_timeout(&v4, std::time::Duration::from_millis(300)).is_err(),
+            "premise: IPv4 alone cannot reach an IPv6-only listener"
+        );
+        assert!(
+            connect_either_family(v4, std::time::Duration::from_millis(300)).is_ok(),
+            "the fallback finds it on ::1"
+        );
+    }
+
+    /// The fallback is loopback-only: a bridge address is what the app was
+    /// told to bind, and retrying elsewhere would mask a real misconfiguration.
+    #[test]
+    fn non_loopback_addresses_are_not_retried() {
+        let addr = SocketAddr::from(([10, 77, 0, 99], 9));
+        assert!(connect_either_family(addr, std::time::Duration::from_millis(80)).is_err());
     }
 
     /// Filtering is a preference, never a gate: if no candidate is clean the

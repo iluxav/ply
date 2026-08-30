@@ -23,7 +23,7 @@ pub enum Readiness {
 /// TCP connect with the health gate's 300 ms budget.
 pub fn probe(ip: Ipv4Addr, port: u16) -> std::result::Result<(), String> {
     let addr = std::net::SocketAddr::from((ip, port));
-    std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(300))
+    crate::runtime::publish::connect_either_family(addr, Duration::from_millis(300))
         .map(drop)
         .map_err(|e| e.to_string())
 }
@@ -197,16 +197,18 @@ mod tests {
     use std::cell::Cell;
     use std::time::Duration;
 
+    /// A port nothing can be listening on. Not a freed ephemeral one: the
+    /// probe now also tries `::1` (apps bind `[::]`), and a sibling test
+    /// binding across the ephemeral range can occupy a just-freed number
+    /// between the drop and the probe.
+    const CLOSED_PORT: u16 = 9; // discard — unused, and never auto-assigned
+
     #[test]
     fn probe_distinguishes_open_and_closed_ports() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let open = listener.local_addr().unwrap().port();
         assert!(probe(Ipv4Addr::LOCALHOST, open).is_ok());
-        let closed = {
-            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-            l.local_addr().unwrap().port()
-        }; // dropped → closed
-        assert!(probe(Ipv4Addr::LOCALHOST, closed).is_err());
+        assert!(probe(Ipv4Addr::LOCALHOST, CLOSED_PORT).is_err());
     }
 
     #[test]
@@ -330,13 +332,7 @@ mod tests {
             readiness_of(&[(me, Ipv4Addr::LOCALHOST)], Some(open)),
             Readiness::Ready
         ));
-        let closed = {
-            std::net::TcpListener::bind("127.0.0.1:0")
-                .unwrap()
-                .local_addr()
-                .unwrap()
-                .port()
-        };
+        let closed = CLOSED_PORT;
         match readiness_of(&[(me, Ipv4Addr::LOCALHOST)], Some(closed)) {
             Readiness::Unhealthy(why) => assert!(why.contains(&format!("port {closed}")), "{why}"),
             other => panic!("expected Unhealthy, got {other:?}"),
