@@ -11,9 +11,15 @@ use crate::{Error, Result};
 /// The official registry, as a `[sources]` template.
 pub const OFFICIAL_SOURCE: &str = "https://registry.plybox.sh/ply/{package}";
 
-/// Where `ply run <name>` resolves names: the runnable-apps namespace.
-/// Kegs (libraries) live under `ply/`; prebuilt runnable apps under `apps/`.
-pub const OFFICIAL_RUN_SOURCE: &str = "https://registry.plybox.sh/apps/{package}";
+/// Where `ply run <name>` resolves a BARE name. The same shelf as
+/// `OFFICIAL_SOURCE`: a package is `<namespace>/<name>`, and whether it is
+/// runnable is a property of the package (it has an entrypoint), not an
+/// address. `apps/` used to hold the runnable ones, which made a type into a
+/// location — and forced redis to exist twice, once per shelf. Both constants
+/// remain because callers mean different things by them; they now name one
+/// namespace. `apps/` still serves its old copies for hosts released before
+/// this changed.
+pub const OFFICIAL_RUN_SOURCE: &str = "https://registry.plybox.sh/ply/{package}";
 
 /// The file a source publishes at its prefix. Same shape the website reads.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
