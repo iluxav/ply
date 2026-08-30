@@ -34,6 +34,17 @@ fn owning_userns(ns: &std::fs::File) -> Option<std::fs::File> {
     Some(unsafe { std::fs::File::from_raw_fd(fd) })
 }
 
+/// Whether `ns` is the user namespace this thread already belongs to.
+/// Namespace files are anonymous nsfs inodes, so identity is (dev, ino) —
+/// the same pairing `readlink /proc/self/ns/user` prints.
+fn is_own_userns(ns: &std::fs::File) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (std::fs::metadata("/proc/self/ns/user"), ns.metadata()) {
+        (Ok(ours), Ok(theirs)) => ours.dev() == theirs.dev() && ours.ino() == theirs.ino(),
+        _ => false,
+    }
+}
+
 pub fn exec(target: &str, cmd: &[String]) -> Result<i32> {
     let instance = find_instance(target)?;
     let pid = instance.pid;
@@ -91,8 +102,11 @@ pub fn exec(target: &str, cmd: &[String]) -> Result<i32> {
     // descendant has neither over its parent. So enter the network's OWNER
     // first (the kernel will name it for us), then the network, and only
     // then the instance's own user namespace, where we regain full rights.
+    // ... unless that owner is the user namespace we are already in, which
+    // is what a root-started instance gives us: its own netns, but the
+    // initial user namespace. Joining your own is EINVAL, not a no-op.
     if !same_ns("net") {
-        if let Some(owner) = owning_userns(&net) {
+        if let Some(owner) = owning_userns(&net).filter(|o| !is_own_userns(o)) {
             join(&owner, CloneFlags::CLONE_NEWUSER, "the network's user")?;
         }
         join(&net, CloneFlags::CLONE_NEWNET, "net")?;
@@ -206,4 +220,27 @@ fn find_instance(target: &str) -> Result<InstanceState> {
             running.join(", ")
         ))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A root-started instance shares the initial user namespace with us,
+    /// yet lives in its own netns — so `NS_GET_USERNS` on that netns names
+    /// the namespace we are already in. `setns(CLONE_NEWUSER)` onto your own
+    /// user namespace is EINVAL, so exec must recognise and skip it.
+    #[test]
+    fn own_user_namespace_is_recognised() {
+        let ours = std::fs::File::open("/proc/self/ns/user").unwrap();
+        assert!(is_own_userns(&ours));
+    }
+
+    /// A different namespace must not be mistaken for ours — otherwise the
+    /// rootless path would skip a join it genuinely needs.
+    #[test]
+    fn a_foreign_namespace_is_not_ours() {
+        let other = std::fs::File::open("/proc/self/ns/net").unwrap();
+        assert!(!is_own_userns(&other));
+    }
 }

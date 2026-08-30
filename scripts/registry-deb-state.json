@@ -527,5 +527,59 @@
     "version": "13.6.0"
    }
   ]
+ },
+ "manual:apps/postgres/postgres-17.10.5-linux-x64.img": {
+  "name": "postgres",
+  "version": "17.10.5",
+  "img": "postgres-17.10.5-linux-x64.img",
+  "upload_path": "apps/postgres/postgres-17.10.5-linux-x64.img",
+  "bytes": 110592,
+  "pushed_at": "2026-08-30T17:46:42.318Z",
+  "type": "app",
+  "volumes": [
+   "/var/lib/postgresql/data"
+  ],
+  "links": [],
+  "dependencies": [
+   {
+    "name": "rclone",
+    "version": "1.60.1"
+   },
+   {
+    "name": "postgresql17",
+    "version": "17.10.0"
+   },
+   {
+    "name": "debian",
+    "version": "13.6.0"
+   }
+  ]
+ },
+ "manual:apps/postgres/postgres-17.10.5-linux-arm64.img": {
+  "name": "postgres",
+  "version": "17.10.5",
+  "img": "postgres-17.10.5-linux-arm64.img",
+  "upload_path": "apps/postgres/postgres-17.10.5-linux-arm64.img",
+  "bytes": 110592,
+  "pushed_at": "2026-08-30T17:46:44.688Z",
+  "type": "app",
+  "volumes": [
+   "/var/lib/postgresql/data"
+  ],
+  "links": [],
+  "dependencies": [
+   {
+    "name": "postgresql17",
+    "version": "17.10.0"
+   },
+   {
+    "name": "rclone",
+    "version": "1.60.1"
+   },
+   {
+    "name": "debian",
+    "version": "13.6.0"
+   }
+  ]
  }
 }
