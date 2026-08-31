@@ -272,8 +272,18 @@ impl Spec {
             url,
             version,
             env,
-            publish: member.publish.clone(),
-            domain: member.domain.clone(),
+            publish: crate::stack::expand_member_list(
+                &member.publish,
+                &member.name,
+                "publish",
+                lookup,
+            )?,
+            domain: crate::stack::expand_member_list(
+                &member.domain,
+                &member.name,
+                "domain",
+                lookup,
+            )?,
             volumes: member.volume.clone(),
             after: member.after.clone(),
             scale: member.scale,
@@ -542,5 +552,23 @@ REDIS_PASSWORD = "s3cret"
             .unwrap_err()
             .to_string();
         assert!(err.contains("local path"), "{err}");
+    }
+
+    /// The host path must fill publish/domain holes too — this is where a
+    /// published stack meets the machine that will actually serve it, and a
+    /// `$VAR` reaching a systemd unit is a domain nobody can resolve.
+    #[test]
+    fn a_stack_members_publish_and_domain_holes_reach_the_spec() {
+        let stack = stack_of(
+            "[[app]]\nrun=\"web@1\"\nname=\"web\"\npublish=[\"internal:$PORT\"]\ndomain=[\"$SITE\"]\n",
+        );
+        let env = BTreeMap::from([
+            ("PORT".to_string(), "3000".to_string()),
+            ("SITE".to_string(), "todos.plybox.sh".to_string()),
+        ]);
+        let lookup = |k: &str| env.get(k).cloned();
+        let spec = Spec::from_stack_member(&stack.members[0], Some("todos"), &lookup).unwrap();
+        assert_eq!(spec.publish, vec!["internal:3000"]);
+        assert_eq!(spec.domain, vec!["todos.plybox.sh"]);
     }
 }

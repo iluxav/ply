@@ -79,9 +79,12 @@ pub fn exec(args: UpArgs) -> Result<()> {
             target,
             env,
             after: member.after.clone(),
-            publish: member.publish.clone(),
+            // publish and domain carry holes too: a stack published for
+            // other people cannot know their hostname or which ports are
+            // already taken on their box.
+            publish: stack::expand_member_list(&member.publish, &member.name, "publish", &lookup)?,
             volume: member.volume.clone(),
-            domain: member.domain.clone(),
+            domain: stack::expand_member_list(&member.domain, &member.name, "domain", &lookup)?,
             scale: member.scale,
         });
     }

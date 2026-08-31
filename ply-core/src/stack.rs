@@ -654,6 +654,26 @@ fn resolve_var(name: &str, who: &str, lookup: &impl Fn(&str) -> Option<String>) 
     })
 }
 
+/// Expand every `$VAR` in one of a member's string lists — `publish` or
+/// `domain`. These are holes for the same reason a password is: a stack
+/// published for other people to run cannot know the hostname of the host
+/// that will run it, nor which ports are already spoken for there. Without
+/// this, a shared stack has to hard-code somebody else's domain.
+///
+/// The catalog keeps these RAW: what is published is the template, holes
+/// intact, and filling them is the deployer's business.
+pub fn expand_member_list(
+    values: &[String],
+    member: &str,
+    what: &str,
+    lookup: &impl Fn(&str) -> Option<String>,
+) -> Result<Vec<String>> {
+    values
+        .iter()
+        .map(|v| expand_vars(v, &format!("member `{member}` {what}"), lookup))
+        .collect()
+}
+
 /// Expand every `$VAR` in a member's env, returning launch-ready pairs.
 pub fn expand_member_env(
     member: &Member,
@@ -1263,6 +1283,74 @@ mod stack_ref_tests {
             parse("stack = \"iluxav/todos\"\n", std::path::Path::new("t.toml"))
                 .unwrap()
                 .is_none()
+        );
+    }
+}
+
+#[cfg(test)]
+mod member_hole_tests {
+    use super::*;
+
+    fn member(publish: &[&str], domain: &[&str]) -> Member {
+        Member {
+            name: "web".into(),
+            source: MemberSource::Run {
+                name: "web".into(),
+                version: None,
+            },
+            env: vec![],
+            after: vec![],
+            publish: publish.iter().map(|s| s.to_string()).collect(),
+            volume: vec![],
+            domain: domain.iter().map(|s| s.to_string()).collect(),
+            scale: None,
+        }
+    }
+
+    /// A published stack cannot know the hostname of whoever deploys it, so
+    /// `domain` has to be a hole like any secret. Without this a shared stack
+    /// must hard-code someone else's domain.
+    #[test]
+    fn a_domain_hole_is_filled() {
+        let m = member(&[], &["$SITE"]);
+        let lookup = |k: &str| (k == "SITE").then(|| "todos.plybox.sh".to_string());
+        let got = expand_member_list(&m.domain, &m.name, "domain", &lookup).unwrap();
+        assert_eq!(got, vec!["todos.plybox.sh"]);
+    }
+
+    /// Ports collide differently on every host, so `publish` is a hole too.
+    #[test]
+    fn a_publish_hole_is_filled() {
+        let m = member(&["internal:$PORT"], &[]);
+        let lookup = |k: &str| (k == "PORT").then(|| "3000".to_string());
+        let got = expand_member_list(&m.publish, &m.name, "publish", &lookup).unwrap();
+        assert_eq!(got, vec!["internal:3000"]);
+    }
+
+    /// An unset hole must fail loudly and name where it was, exactly as an
+    /// unset env hole does — a blank domain would silently serve nowhere.
+    #[test]
+    fn an_unset_hole_names_the_member_and_the_field() {
+        let m = member(&[], &["$SITE"]);
+        let err = expand_member_list(&m.domain, &m.name, "domain", &|_: &str| None)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("web"), "{err}");
+        assert!(err.contains("domain"), "{err}");
+    }
+
+    /// Untouched values pass through — the common case must not change.
+    #[test]
+    fn a_plain_value_is_unchanged() {
+        let m = member(&["internal:3000"], &["todos.example.com"]);
+        let lookup = |_: &str| None;
+        assert_eq!(
+            expand_member_list(&m.publish, &m.name, "publish", &lookup).unwrap(),
+            vec!["internal:3000"]
+        );
+        assert_eq!(
+            expand_member_list(&m.domain, &m.name, "domain", &lookup).unwrap(),
+            vec!["todos.example.com"]
         );
     }
 }
