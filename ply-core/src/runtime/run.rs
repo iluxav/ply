@@ -274,7 +274,8 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
     // one place that overrides has to be loud about it. Scale is exactly when
     // nobody is watching a single instance's environment.
     if let Some(first) = opts.publish.first() {
-        let injecting = rootless && !alone_in_its_network(rootless, opts) && !first.instance_port_explicit;
+        let injecting =
+            rootless && !alone_in_its_network(rootless, opts) && !first.instance_port_explicit;
         if injecting {
             if let Some((_, set)) = ctx.env.iter().find(|(k, _)| k == "PORT") {
                 eprintln!(
@@ -1887,12 +1888,18 @@ mod discovery_tests {
             parse_env_file(&f).unwrap().into_iter().collect();
 
         assert_eq!(got["PLAIN"], "abc");
-        assert_eq!(got["TRAILING"], "abc", "value must be trimmed, not just the key");
+        assert_eq!(
+            got["TRAILING"], "abc",
+            "value must be trimmed, not just the key"
+        );
         assert_eq!(got["DQ"], "s3cret", "double quotes are stripped");
         assert_eq!(got["SQ"], "s3cret", "single quotes are stripped");
         assert_eq!(got["KEEPS_SPACE"], "  padded  ", "quoting preserves spaces");
         assert_eq!(got["INNER"], "a\"b", "an unmatched inner quote is literal");
-        assert_eq!(got["URL"], "postgres://u:p@host:5432/db?x=1", "splits on the FIRST =");
+        assert_eq!(
+            got["URL"], "postgres://u:p@host:5432/db?x=1",
+            "splits on the FIRST ="
+        );
         assert_eq!(got["HASH"], "pa#ss", "# is only a comment at line start");
 
         // shell-isms are refused, not silently turned into weird keys
@@ -1941,7 +1948,10 @@ mod discovery_tests {
         assert!(!alone_in_its_network(true, &opts(4, None)));
         // rootless WITH a namespace still loses it past one instance: they
         // all share that one namespace.
-        assert!(!alone_in_its_network(true, &opts(2, Some("/proc/1/ns/net"))));
+        assert!(!alone_in_its_network(
+            true,
+            &opts(2, Some("/proc/1/ns/net"))
+        ));
     }
 
     #[test]

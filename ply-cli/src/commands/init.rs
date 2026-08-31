@@ -442,7 +442,10 @@ mod tests {
             Some(&["python3".to_string(), "app.py".to_string()][..])
         );
         assert_eq!(m.ports["http"], 8000);
-        assert!(m.sources.is_empty(), "init must not emit a [sources] stanza");
+        assert!(
+            m.sources.is_empty(),
+            "init must not emit a [sources] stanza"
+        );
         assert!(text.contains("# include = [\"dist/\"]"));
         assert!(text.contains("[dependencies]\npython3 = \"3.12\""));
     }

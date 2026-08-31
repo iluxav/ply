@@ -193,7 +193,10 @@ pub fn build(opts: &BuildOptions) -> Result<BuildOutcome> {
     // 200 MB of node_modules can report a few KiB, so size is no signal).
     let (packed_files, packed_bytes, secrets) = audit_tree(&opts.dir, &filter, &include);
     if !secrets.is_empty() && !opts.allow_secrets {
-        let list: Vec<String> = secrets.iter().map(|p| format!("  {}", p.display())).collect();
+        let list: Vec<String> = secrets
+            .iter()
+            .map(|p| format!("  {}", p.display()))
+            .collect();
         return Err(Error::Build(format!(
             "refusing to pack credential-shaped files into {}:\n{}\n\n\
              An image is distributable — `ply push` puts it on a public registry.\n\
@@ -516,10 +519,16 @@ mod tests {
             .files()
             .map(|n| n.fullpath.to_string_lossy().into_owned())
             .collect();
-        assert!(listing.iter().any(|p| p.ends_with("app/main.py")), "{listing:?}");
+        assert!(
+            listing.iter().any(|p| p.ends_with("app/main.py")),
+            "{listing:?}"
+        );
         // the depth-1 test used to let both of these through
         assert!(!listing.iter().any(|p| p.contains(".git")), "{listing:?}");
-        assert!(!listing.iter().any(|p| p.contains("__pycache__")), "{listing:?}");
+        assert!(
+            !listing.iter().any(|p| p.contains("__pycache__")),
+            "{listing:?}"
+        );
     }
 
     #[test]

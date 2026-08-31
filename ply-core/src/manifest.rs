@@ -715,7 +715,10 @@ mod shorthand_tests {
         assert_eq!(ep[0], "/bin/sh");
         assert_eq!(ep[1], "-c");
         assert!(ep[2].contains("exec caddy run"), "{ep:?}");
-        assert!(ep[2].starts_with('['), "leading blank line must be trimmed: {ep:?}");
+        assert!(
+            ep[2].starts_with('['),
+            "leading blank line must be trimmed: {ep:?}"
+        );
 
         // both link spellings normalise to HOST:CONTAINER
         assert_eq!(

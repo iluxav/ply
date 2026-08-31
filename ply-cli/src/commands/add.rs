@@ -117,10 +117,7 @@ pub(crate) fn apply_add(
     }
     let key = toml_edit::Key::new(name).to_string();
     let line = format!("{} = {}", key.trim(), render_value(&new_item));
-    Ok(Edit {
-        outcome,
-        line,
-    })
+    Ok(Edit { outcome, line })
 }
 
 fn write_atomic(path: &Path, text: &str) -> Result<()> {

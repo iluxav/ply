@@ -588,7 +588,11 @@ fn warn_orphaned_env_files(app_names: &BTreeSet<String>) {
         if path.extension().and_then(|e| e.to_str()) != Some("env") {
             continue;
         }
-        let stem = path.file_stem().unwrap_or_default().to_string_lossy().into_owned();
+        let stem = path
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
         if app_names.contains(&stem) || referenced.contains(&path.display().to_string()) {
             continue;
         }
