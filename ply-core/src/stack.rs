@@ -282,6 +282,15 @@ fn parse_overlay(text: &str, path: &Path) -> Result<StackOverlay> {
 /// STRING. Same key, different types, so the two can never be confused.
 pub fn parse_ref(text: &str) -> Option<String> {
     let doc: toml::Value = text.parse().ok()?;
+    // `stack` is TWO things: this reference, and the cosmetic grouping label
+    // on a single-app spec. Tell them apart structurally rather than by the
+    // string's shape — a bare `stack = "todos"` is a valid reference (it
+    // resolves against the default source), so shape says nothing. A file
+    // that names where an app comes from is that spec; nothing is both.
+    const SOURCE_KEYS: [&str; 6] = ["from", "app", "image", "url", "github", "repo"];
+    if SOURCE_KEYS.iter().any(|k| doc.get(k).is_some()) {
+        return None;
+    }
     match doc.get("stack") {
         Some(toml::Value::String(s)) if !s.trim().is_empty() => Some(s.trim().to_string()),
         _ => None,
@@ -1055,6 +1064,33 @@ scale = 2
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
         move |k: &str| map.get(k).cloned()
+    }
+
+    #[test]
+    fn stack_label_on_an_app_spec_is_not_a_stack_reference() {
+        // A published-stack reference: nothing else in the file.
+        assert_eq!(
+            parse_ref("stack = \"iluxav/todos\"\n").as_deref(),
+            Some("iluxav/todos")
+        );
+        // A bare name is a valid reference too (resolves against the default
+        // source), so the shape of the string cannot be the discriminator.
+        assert_eq!(parse_ref("stack = \"todos\"\n").as_deref(), Some("todos"));
+
+        // …but the same key on a single-app spec is a cosmetic GROUPING
+        // label. Before this, such a file was hijacked into the stack-ref
+        // lane, reconcile tried to fetch a published stack called "plybox",
+        // and the app never deployed.
+        for text in [
+            "from = \"redis@8\"\nstack = \"plybox\"\n",
+            "app = \"redis\"\nstack = \"plybox\"\n",
+            "repo = \"https://github.com/o/a\"\nstack = \"plybox\"\n",
+            "image = \"/srv/x.img\"\nstack = \"plybox\"\n",
+            "url = \"https://h/x.img\"\nstack = \"plybox\"\n",
+            "github = \"o/a\"\nstack = \"plybox\"\n",
+        ] {
+            assert_eq!(parse_ref(text), None, "{text}");
+        }
     }
 
     #[test]
