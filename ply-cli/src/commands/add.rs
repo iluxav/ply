@@ -21,8 +21,6 @@ pub(crate) struct Edit {
     pub outcome: Outcome,
     /// The line as written, e.g. `ffmpeg = "6.1"`.
     pub line: String,
-    /// True when `[sources] default = OFFICIAL_SOURCE` was inserted too.
-    pub sources_added: bool,
 }
 
 /// `name` or `name@range`.
@@ -74,7 +72,6 @@ pub(crate) fn apply_add(
     range: &str,
     source: Option<&str>,
 ) -> Result<Edit> {
-    let mut sources_added = false;
     if let Some(src) = source {
         let have: Vec<String> = doc
             .get("sources")
@@ -87,12 +84,10 @@ pub(crate) fn apply_add(
                 have.join(", ")
             );
         }
-    } else if doc.get("sources").and_then(Item::as_table).is_none() {
-        let mut t = Table::new();
-        t["default"] = value(OFFICIAL_SOURCE);
-        doc["sources"] = Item::Table(t);
-        sources_added = true;
     }
+    // Nothing to insert when no `source` was named: the official registry is
+    // the resolver's fallback, so a plain `ply add redis` leaves the manifest
+    // with just the dependency line.
 
     let new_item: Item = match source {
         None => value(range),
@@ -125,7 +120,6 @@ pub(crate) fn apply_add(
     Ok(Edit {
         outcome,
         line,
-        sources_added,
     })
 }
 
@@ -201,9 +195,6 @@ pub fn exec(args: AddArgs) -> Result<()> {
         Outcome::Updated { ref from } => println!("{name} \"{from}\" → \"{range}\" in ply.toml"),
         Outcome::Added => println!("added {} to ply.toml", edit.line),
     }
-    if edit.sources_added {
-        println!("added [sources] default = \"{OFFICIAL_SOURCE}\"");
-    }
     write_atomic(&path, &doc.to_string())?;
     println!("run ply build to resolve and lock");
     Ok(())
@@ -225,7 +216,6 @@ mod tests {
         let e = apply_add(&mut d, "ffmpeg", "6.1", None).unwrap();
         assert!(matches!(e.outcome, Outcome::Added));
         assert_eq!(e.line, r#"ffmpeg = "6.1""#);
-        assert!(!e.sources_added);
         let out = d.to_string();
         let pkg = out.find("[package]").unwrap();
         let deps = out.find("[dependencies]").unwrap();
@@ -283,17 +273,16 @@ mod tests {
     }
 
     #[test]
-    fn adds_sources_table_when_missing() {
+    fn add_leaves_the_manifest_without_a_sources_stanza() {
         let mut d = doc("[package]\nname = \"a\"\nversion = \"0.1.0\"\nbase = \"alpine@3.20\"\n");
-        let e = apply_add(&mut d, "ffmpeg", "6.1", None).unwrap();
-        assert!(e.sources_added);
+        apply_add(&mut d, "ffmpeg", "6.1", None).unwrap();
         let out = d.to_string();
-        assert!(
-            out.contains(&format!("[sources]\ndefault = \"{OFFICIAL_SOURCE}\"")),
-            "{out}"
-        );
+        // The official registry is the resolver's fallback, so there is
+        // nothing to write down — one less concept in a first manifest.
+        assert!(!out.contains("[sources]"), "{out}");
         let m = ply_core::manifest::Manifest::parse(&out).unwrap();
-        assert_eq!(m.sources["default"], OFFICIAL_SOURCE);
+        assert!(m.sources.is_empty());
+        assert_eq!(m.dependencies.len(), 1);
     }
 
     #[test]

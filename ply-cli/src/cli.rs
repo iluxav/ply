@@ -197,6 +197,11 @@ pub struct BuildArgs {
     /// Allow plain-http sources on public hosts (hash still verifies content)
     #[arg(long)]
     pub insecure_source: bool,
+
+    /// Pack credential-shaped files (.env, *.key, .npmrc …) that were swept
+    /// in implicitly. Refused by default: an image is distributable.
+    #[arg(long)]
+    pub allow_secrets: bool,
 }
 
 #[derive(Args)]

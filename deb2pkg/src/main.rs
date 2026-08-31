@@ -304,6 +304,9 @@ fn main() -> Result<()> {
                 .join(format!("{ply_name}-{ply_version}-linux-{ply_arch}.img")),
         ),
         allow_insecure: false,
+        // Converting a trusted upstream package, not a user's app dir: a
+        // keyring or private key inside the .deb/.apk is its own content.
+        allow_secrets: true,
         arch: match ply_arch {
             "arm64" => Some(ply_core::image::name::Arch::Arm64),
             _ => Some(ply_core::image::name::Arch::X64),

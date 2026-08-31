@@ -156,12 +156,27 @@ there and deploy with `from`.
 ## Shared env files
 
 Secrets never belong in a spec — a fleet repo is at its best public.
-The convention: env files live in `deployments/.env/<name>.env` (0600,
-host-local, never synced), and specs carry the *reference*:
+Env files live in `deployments/.env/<name>.env` (0600, host-local, never
+synced), and **a deployment picks up the file named after it automatically**:
 
 ```toml
-env_file = ".env/site.env"
+# site.toml — no env_file key needed; .env/site.env is found by name
+app = "myapp"
 ```
+
+Reconcile says so when it happens (`site: using .env/site.env (by
+convention)`), so an implicit binding is still visible in the log.
+
+Name a file explicitly when it is **not** the one named after this
+deployment — an absolute path, or one file shared by several apps:
+
+```toml
+env_file = ".env/shared-db.env"
+```
+
+An env file that nothing reads — no deployment of that name, and no spec
+naming it — is reported on every beat. That is what catches a renamed
+deployment quietly leaving its secrets behind.
 
 Relative paths resolve against the deployments dir, exactly like
 `token_file` and `deploy_key`. Several apps sharing one file is the

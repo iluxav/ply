@@ -252,9 +252,10 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
         );
         publishing.push(PublishWiring { pool, spec: *spec });
     }
-    // Rootless instances share the host netns, so they cannot all bind the
-    // same port — ply hands each one its own loopback port as PORT. PORT is a
-    // single variable, so only the FIRST spec can be satisfied that way; the
+    // Every instance of a rootless run shares that run's ONE namespace, so
+    // they cannot all bind the same port — ply hands each one its own loopback
+    // port as PORT. PORT is a single variable, so only the FIRST spec can be
+    // satisfied that way; the
     // rest expect the app to bind their instance_port itself (an edge reads
     // its ports from its own config, not from PORT).
     if rootless && opts.publish.len() > 1 && opts.scale > 1 {
@@ -266,6 +267,24 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
             opts.publish.len(),
             opts.publish[0].instance_port,
         );
+    }
+    // Say it when a computed PORT is about to beat one the operator SET.
+    // Everywhere else in this runtime an explicit value wins (`HOME`/`TERM`
+    // use or_insert; `--after` discovery skips keys already present), so the
+    // one place that overrides has to be loud about it. Scale is exactly when
+    // nobody is watching a single instance's environment.
+    if let Some(first) = opts.publish.first() {
+        let injecting = rootless && !alone_in_its_network(rootless, opts) && !first.instance_port_explicit;
+        if injecting {
+            if let Some((_, set)) = ctx.env.iter().find(|(k, _)| k == "PORT") {
+                eprintln!(
+                    "ply: warning: PORT={set} is being overridden — {} instance(s) share this \
+                     run's namespace and cannot all bind {set}, so each gets its own loopback \
+                     port. To keep {set}, publish it explicitly: --publish {}:{set}",
+                    opts.scale, first.host_port,
+                );
+            }
+        }
     }
 
     // --after: block until the named apps pass their health gates. Placed
@@ -1099,6 +1118,14 @@ fn populated_siblings(app_dir: &Path, name: &str, suffix: &str) -> Vec<String> {
 /// Is this process inside the namespace at `path`? Compared by identity,
 /// not by whether a join was attempted — believing a failed join is what
 /// turns a proxy into its own backend.
+/// Is this instance the only thing in its network? Rootful, always (its own
+/// bridge address). Rootless, only when the run has a namespace it is really
+/// in AND there is one instance — every instance of a run shares that one
+/// namespace, so past the first they contend for the same ports.
+fn alone_in_its_network(rootless: bool, opts: &RunOptions) -> bool {
+    !rootless || (opts.netns.as_ref().is_some_and(|p| in_namespace(p)) && opts.scale <= 1)
+}
+
 fn in_namespace(path: &std::path::Path) -> bool {
     let ino = |p: &std::path::Path| {
         std::fs::metadata(p)
@@ -1300,8 +1327,7 @@ fn launch_instance(
     // Namespace membership is asked of the kernel rather than remembered —
     // a failed join must never look like a successful one, or the pool ends
     // up pointing at the proxy itself.
-    let alone_in_its_network =
-        !rootless || (opts.netns.as_ref().is_some_and(|p| in_namespace(p)) && opts.scale <= 1);
+    let alone_in_its_network = alone_in_its_network(rootless, opts);
     let injected_port = match (publish.first(), rootless && !alone_in_its_network) {
         (Some(w), true) if !w.spec.instance_port_explicit => {
             let port = crate::runtime::publish::allocate_loopback_port()?;
@@ -1839,6 +1865,86 @@ mod discovery_tests {
     use super::*;
 
     #[test]
+    fn env_file_strips_quotes_trims_and_refuses_shellisms() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("secrets.env");
+
+        std::fs::write(
+            &f,
+            "# a comment\n\
+             \n\
+             PLAIN=abc\n\
+             TRAILING=abc   \n\
+             DQ=\"s3cret\"\n\
+             SQ='s3cret'\n\
+             KEEPS_SPACE=\"  padded  \"\n\
+             INNER=a\"b\n\
+             URL=postgres://u:p@host:5432/db?x=1\n\
+             HASH=pa#ss\n",
+        )
+        .unwrap();
+        let got: std::collections::BTreeMap<String, String> =
+            parse_env_file(&f).unwrap().into_iter().collect();
+
+        assert_eq!(got["PLAIN"], "abc");
+        assert_eq!(got["TRAILING"], "abc", "value must be trimmed, not just the key");
+        assert_eq!(got["DQ"], "s3cret", "double quotes are stripped");
+        assert_eq!(got["SQ"], "s3cret", "single quotes are stripped");
+        assert_eq!(got["KEEPS_SPACE"], "  padded  ", "quoting preserves spaces");
+        assert_eq!(got["INNER"], "a\"b", "an unmatched inner quote is literal");
+        assert_eq!(got["URL"], "postgres://u:p@host:5432/db?x=1", "splits on the FIRST =");
+        assert_eq!(got["HASH"], "pa#ss", "# is only a comment at line start");
+
+        // shell-isms are refused, not silently turned into weird keys
+        std::fs::write(&f, "export FOO=1\n").unwrap();
+        let err = parse_env_file(&f).unwrap_err().to_string();
+        assert!(err.contains("export"), "{err}");
+        assert!(err.contains("FOO=…"), "{err}");
+
+        std::fs::write(&f, "no equals here\n").unwrap();
+        assert!(parse_env_file(&f)
+            .unwrap_err()
+            .to_string()
+            .contains("expected KEY=VALUE"));
+    }
+
+    #[test]
+    fn alone_in_its_network_matches_when_port_is_injected() {
+        // The PORT-override WARNING and the injection itself read this one
+        // predicate, so they cannot drift apart. Rootful is always alone (its
+        // own bridge address); rootless with no namespace never is — which is
+        // why the host-network fallback injects even at scale 1.
+        let opts = |scale: u32, netns: Option<&str>| RunOptions {
+            image: std::path::PathBuf::from("x.img"),
+            name: None,
+            cli_env: vec![],
+            allow_insecure: false,
+            scale,
+            links: vec![],
+            publish: vec![],
+            netns_peers: vec![],
+            netns_dns: None,
+            netns: netns.map(std::path::PathBuf::from),
+            after: vec![],
+            after_timeout: std::time::Duration::from_secs(60),
+            privileged: false,
+            entrypoint: None,
+            domains: vec![],
+            volumes: vec![],
+        };
+        // rootful: alone at any scale
+        assert!(alone_in_its_network(false, &opts(1, None)));
+        assert!(alone_in_its_network(false, &opts(8, None)));
+        // rootless, no namespace (the fallback): never alone, so PORT is
+        // injected and the warning fires — at scale 1 too.
+        assert!(!alone_in_its_network(true, &opts(1, None)));
+        assert!(!alone_in_its_network(true, &opts(4, None)));
+        // rootless WITH a namespace still loses it past one instance: they
+        // all share that one namespace.
+        assert!(!alone_in_its_network(true, &opts(2, Some("/proc/1/ns/net"))));
+    }
+
+    #[test]
     fn env_stems_are_shell_safe() {
         assert_eq!(env_stem("api-server"), "API_SERVER");
         assert_eq!(env_stem("postgres"), "POSTGRES");
@@ -2056,6 +2162,17 @@ impl Drop for InstanceGuard {
 }
 
 /// Parse an --env-file: KEY=VALUE lines, `#` comments, blanks ignored.
+///
+/// The value is trimmed, and a matched pair of surrounding quotes is removed
+/// (`PW="s3cret"` → `s3cret`). Both matter because these files hold
+/// credentials: an untrimmed trailing space or a literal `"` in a password
+/// produces an auth failure far from its cause, and every other tool people
+/// arrive from — dotenv, docker-compose — strips them. `account.rs` already
+/// parsed its own KEY=VALUE file this way.
+///
+/// A `#` only starts a comment at the beginning of a line. Inline comments
+/// are genuinely ambiguous in a file where `#` can be part of a password, so
+/// they stay part of the value — quote the value to make that explicit.
 pub fn parse_env_file(path: &Path) -> Result<Vec<(String, String)>> {
     let text = std::fs::read_to_string(path).map_err(|source| Error::Io {
         path: path.to_path_buf(),
@@ -2067,16 +2184,36 @@ pub fn parse_env_file(path: &Path) -> Result<Vec<(String, String)>> {
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        let (k, v) = line.split_once('=').ok_or_else(|| {
-            Error::Runtime(format!(
-                "{}:{}: expected KEY=VALUE",
-                path.display(),
-                lineno + 1
-            ))
-        })?;
-        pairs.push((k.trim().to_string(), v.to_string()));
+        let at = |msg: String| Error::Runtime(format!("{}:{}: {msg}", path.display(), lineno + 1));
+        let (k, v) = line
+            .split_once('=')
+            .ok_or_else(|| at("expected KEY=VALUE".into()))?;
+        let key = k.trim();
+        if let Some(rest) = key.strip_prefix("export ") {
+            return Err(at(format!(
+                "`{line}` — this is an env file, not a shell script; drop the `export ` (just `{}=…`)",
+                rest.trim()
+            )));
+        }
+        if key.is_empty() || key.split_whitespace().count() != 1 {
+            return Err(at(format!("`{k}` is not a usable key")));
+        }
+        pairs.push((key.to_string(), unquote(v.trim()).to_string()));
     }
     Ok(pairs)
+}
+
+/// Strip one matched pair of surrounding quotes; anything else is returned
+/// as is. The inside is never trimmed — quoting is how a value KEEPS its
+/// leading or trailing spaces.
+fn unquote(v: &str) -> &str {
+    let bytes = v.as_bytes();
+    match (bytes.first(), bytes.last()) {
+        (Some(a), Some(b)) if a == b && (*a == b'"' || *a == b'\'') && v.len() >= 2 => {
+            &v[1..v.len() - 1]
+        }
+        _ => v,
+    }
 }
 
 /// Can `--scale N` work in this mode? Rootless instances share the host

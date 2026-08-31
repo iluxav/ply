@@ -15,6 +15,7 @@ pub fn run(args: BuildArgs) -> Result<()> {
         output: args.output,
         allow_insecure: args.insecure_source,
         arch,
+        allow_secrets: args.allow_secrets,
     })?;
     for (name, version) in &outcome.locked {
         println!("locked {name} {version}");

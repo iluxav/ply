@@ -29,6 +29,49 @@ pub struct BuildOptions {
     /// dependency graph for the target arch and names the image accordingly;
     /// packing is arch-independent, so any host can build for any arch.
     pub arch: Option<Arch>,
+    /// Pack credential-shaped files that were swept in implicitly. Off by
+    /// default: an image is a distributable artifact, so shipping a `.env`
+    /// is a refusal, not a warning.
+    pub allow_secrets: bool,
+}
+
+/// Never ships, at ANY depth. Deliberately short: only files that cannot be
+/// part of a running app. `node_modules` and `target` are NOT here — a plain
+/// Node app needs the former at run time and Maven puts its artifact in the
+/// latter, so guessing would break real builds. Those are surfaced by the
+/// size summary instead, and excluded with `include` when unwanted.
+fn is_never_packed(name: &str) -> bool {
+    matches!(
+        name,
+        ".git" | "__pycache__" | ".mypy_cache" | ".pytest_cache" | ".DS_Store"
+    )
+}
+
+/// Credential-shaped names. An image is distributable — `ply push` puts it on
+/// a public registry — so these refuse the build unless the operator either
+/// named the file in `include` (an explicit choice) or passed
+/// `--allow-secrets`. `.pem` is absent on purpose: a CA bundle is a public
+/// certificate and ships legitimately (see `services/postgres`).
+fn is_secret_name(name: &str) -> bool {
+    matches!(
+        name,
+        ".npmrc"
+            | ".netrc"
+            | ".pgpass"
+            | ".git-credentials"
+            | ".htpasswd"
+            | "id_rsa"
+            | "id_dsa"
+            | "id_ecdsa"
+            | "id_ed25519"
+    ) || name == ".env"
+        || name.starts_with(".env.")
+        || name.starts_with(".ssh")
+        || name.starts_with(".aws")
+        || name.ends_with(".key")
+        || name.ends_with(".p12")
+        || name.ends_with(".pfx")
+        || name.ends_with(".keystore")
 }
 
 #[derive(Debug)]
@@ -115,26 +158,59 @@ pub fn build(opts: &BuildOptions) -> Result<BuildOutcome> {
         path: opts.dir.clone(),
         source,
     })?;
+    let inc = include.clone();
     let filter = move |rel: &Path| -> bool {
+        let name = rel
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
         if rel.components().count() == 1 {
-            let name = rel.file_name().unwrap_or_default().to_string_lossy();
-            if name == "ply.toml" || name == "ply.lock" || name == ".git" || name.ends_with(".img")
-            {
+            if name == "ply.toml" || name == "ply.lock" || name.ends_with(".img") {
                 return false;
             }
             if dir_abs.join(rel) == output_abs {
                 return false;
             }
         }
-        if include.is_empty() {
+        // Build detritus never ships, at any depth — a vendored `.git` used to
+        // sail through because this test was depth-1 only. An EXACT include
+        // entry still wins: naming it is the operator's decision.
+        if is_never_packed(&name) && !inc.iter().any(|e| e == rel) {
+            return false;
+        }
+        if inc.is_empty() {
             return true;
         }
         // Inside an included subtree, or an ancestor dir the walker must
         // descend through to reach one.
-        include
-            .iter()
+        inc.iter()
             .any(|entry| rel.starts_with(entry) || entry.starts_with(rel))
     };
+
+    // What would ship, before it ships: credential-shaped files refuse the
+    // build, and an implicit pack says how much it swept up (a squashfs of
+    // 200 MB of node_modules can report a few KiB, so size is no signal).
+    let (packed_files, packed_bytes, secrets) = audit_tree(&opts.dir, &filter, &include);
+    if !secrets.is_empty() && !opts.allow_secrets {
+        let list: Vec<String> = secrets.iter().map(|p| format!("  {}", p.display())).collect();
+        return Err(Error::Build(format!(
+            "refusing to pack credential-shaped files into {}:\n{}\n\n\
+             An image is distributable — `ply push` puts it on a public registry.\n\
+             Move them out of the app dir, or name what SHOULD ship:\n\
+             \n    [package]\n    include = [\"...\"]\n\n\
+             Pass --allow-secrets to override.",
+            opts.dir.display(),
+            list.join("\n")
+        )));
+    }
+    if include.is_empty() {
+        eprintln!(
+            "ply: packing {packed_files} files ({}) — no `include` in ply.toml, so everything in {} ships",
+            human_bytes(packed_bytes),
+            opts.dir.display()
+        );
+    }
 
     let prefix = if manifest.package.is_base() {
         String::new() // base owns the image root
@@ -261,6 +337,66 @@ pub fn up_to_date_image(dir: &Path, arch: Option<Arch>) -> Result<Option<PathBuf
     Ok(Some(image))
 }
 
+/// Walk exactly what `filter` would pack: (files, uncompressed bytes,
+/// credential-shaped paths). Symlinks count as files and are never followed,
+/// so a link out of the tree cannot smuggle a directory in.
+fn audit_tree(
+    dir: &Path,
+    filter: &dyn Fn(&Path) -> bool,
+    exact_includes: &[PathBuf],
+) -> (u64, u64, Vec<PathBuf>) {
+    let (mut files, mut bytes, mut secrets) = (0u64, 0u64, Vec::new());
+    let mut stack = vec![PathBuf::new()];
+    while let Some(rel) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(dir.join(&rel)) else {
+            continue;
+        };
+        for entry in entries.filter_map(|e| e.ok()) {
+            let child = if rel.as_os_str().is_empty() {
+                PathBuf::from(entry.file_name())
+            } else {
+                rel.join(entry.file_name())
+            };
+            if !filter(&child) {
+                continue;
+            }
+            let Ok(md) = entry.path().symlink_metadata() else {
+                continue;
+            };
+            if md.is_dir() {
+                stack.push(child);
+                continue;
+            }
+            files += 1;
+            bytes += md.len();
+            let name = child
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
+            if is_secret_name(&name) && !exact_includes.iter().any(|e| e == &child) {
+                secrets.push(child);
+            }
+        }
+    }
+    (files, bytes, secrets)
+}
+
+fn human_bytes(n: u64) -> String {
+    const UNITS: [&str; 4] = ["B", "KiB", "MiB", "GiB"];
+    let mut v = n as f64;
+    let mut u = 0;
+    while v >= 1024.0 && u < UNITS.len() - 1 {
+        v /= 1024.0;
+        u += 1;
+    }
+    if u == 0 {
+        format!("{n} B")
+    } else {
+        format!("{v:.1} {}", UNITS[u])
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -287,6 +423,7 @@ mod tests {
             dir: dir.path().to_path_buf(),
             output: None,
             allow_insecure: false,
+            allow_secrets: false,
             arch: None,
         };
         let one = build(&opts).unwrap();
@@ -297,6 +434,92 @@ mod tests {
         let two = build(&opts).unwrap();
         assert_eq!(one.digest, two.digest, "rebuild must be byte-identical");
         assert_eq!(one.size_bytes, two.size_bytes);
+    }
+
+    #[test]
+    fn secrets_refuse_the_build_unless_named_or_overridden() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("server"), b"#!/bin/sh\n").unwrap();
+        std::fs::write(dir.path().join(".env"), b"AWS_SECRET_ACCESS_KEY=hunter2\n").unwrap();
+        std::fs::write(
+            dir.path().join("ply.toml"),
+            r#"
+            [package]
+            name = "app"
+            version = "1.0.0"
+            entrypoint = ["./server"]
+            "#,
+        )
+        .unwrap();
+        let mut opts = BuildOptions {
+            dir: dir.path().to_path_buf(),
+            output: None,
+            allow_insecure: false,
+            allow_secrets: false,
+            arch: None,
+        };
+
+        // swept in implicitly → refused, and the message names the file
+        let err = build(&opts).unwrap_err().to_string();
+        assert!(err.contains(".env"), "{err}");
+        assert!(err.contains("--allow-secrets"), "{err}");
+
+        // explicit override ships it
+        opts.allow_secrets = true;
+        build(&opts).unwrap();
+
+        // naming it in `include` is also an explicit choice
+        opts.allow_secrets = false;
+        std::fs::write(
+            dir.path().join("ply.toml"),
+            r#"
+            [package]
+            name = "app"
+            version = "1.0.0"
+            entrypoint = ["./server"]
+            include = ["server", ".env"]
+            "#,
+        )
+        .unwrap();
+        build(&opts).unwrap();
+    }
+
+    #[test]
+    fn nested_git_and_caches_never_pack() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("vendor/foo/.git")).unwrap();
+        std::fs::create_dir_all(dir.path().join("app/__pycache__")).unwrap();
+        std::fs::write(dir.path().join("vendor/foo/.git/config"), b"x").unwrap();
+        std::fs::write(dir.path().join("app/__pycache__/m.pyc"), b"x").unwrap();
+        std::fs::write(dir.path().join("app/main.py"), b"print(1)").unwrap();
+        std::fs::write(
+            dir.path().join("ply.toml"),
+            r#"
+            [package]
+            name = "app"
+            version = "1.0.0"
+            entrypoint = ["python", "app/main.py"]
+            "#,
+        )
+        .unwrap();
+        let outcome = build(&BuildOptions {
+            dir: dir.path().to_path_buf(),
+            output: None,
+            allow_insecure: false,
+            allow_secrets: false,
+            arch: None,
+        })
+        .unwrap();
+        let file = std::fs::File::open(&outcome.image_path).unwrap();
+        let fs = backhand::FilesystemReader::from_reader(std::io::BufReader::new(file)).unwrap();
+        let listing: Vec<String> = fs
+            .files()
+            .map(|n| n.fullpath.to_string_lossy().into_owned())
+            .collect();
+        assert!(listing.iter().any(|p| p.ends_with("app/main.py")), "{listing:?}");
+        // the depth-1 test used to let both of these through
+        assert!(!listing.iter().any(|p| p.contains(".git")), "{listing:?}");
+        assert!(!listing.iter().any(|p| p.contains("__pycache__")), "{listing:?}");
     }
 
     #[test]
@@ -320,6 +543,7 @@ mod tests {
             dir: dir.path().to_path_buf(),
             output: None,
             allow_insecure: false,
+            allow_secrets: false,
             arch: None,
         };
         let outcome = build(&opts).unwrap();
@@ -370,6 +594,7 @@ mod tests {
             dir: dir.path().to_path_buf(),
             output: None,
             allow_insecure: false,
+            allow_secrets: false,
             arch: None,
         })
         .unwrap();

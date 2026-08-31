@@ -20,9 +20,9 @@ pub enum BindScope {
     /// `0.0.0.0` — anyone who can reach this host. What a public web port
     /// wants, and what a database never does.
     Public,
-    /// Other ply apps on this host only: loopback rootless (instances share
-    /// the host netns), the bridge gateway rootful (instances reach the host
-    /// there). Same address the depending app is told to use.
+    /// Other ply apps on this host only: loopback rootless, the bridge
+    /// gateway rootful (instances reach the host there). Same address the
+    /// depending app is told to use.
     Internal,
     /// An explicit address, for anything the two presets do not cover.
     Addr(Ipv4Addr),

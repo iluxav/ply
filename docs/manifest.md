@@ -32,7 +32,7 @@ NODE_ENV = "production"
 web = 3000                        # label of what the app binds — not a host claim
 
 [volumes]
-data   = { path = "/var/lib/myapp" }                      # per-instance
+data   = "/var/lib/myapp"                                 # per-instance
 shared = { path = "/srv/uploads", scope = "shared" }      # opt-in shared
 cache  = { path = "/var/cache/myapp", ephemeral = true }  # GC-able
 
@@ -53,9 +53,8 @@ max_backoff = "60s"               # …up to this cap; resets after healthy upti
 [requires]
 abi = "linux-x64-gnu"             # what the app layer's native deps were built against
 
-[sources]
-default = "https://registry.plybox.sh/ply/{package}"
-alias   = "github:org/repo"
+[sources]                         # OPTIONAL — omit it and the official
+alias = "github:org/repo"         # registry is used
 ```
 
 ## Key notes
@@ -135,6 +134,13 @@ Without the flag the requests are listed and not mounted.
 **`[sources]`** — URL templates; see
 [Registries & publishing](/docs/registries/). `{package}` expands to the
 package name, letting one base URL serve per-package directories.
+**The whole table is optional:** a dependency with no `source`, in a manifest
+with no `[sources] default`, resolves from the official registry. Declare
+`[sources]` when you actually fetch from somewhere else.
+
+**`[volumes]`** — `name = "/path"` is the common form. The table form
+(`{ path, scope, ephemeral }`) is for when you need `scope = "shared"` or
+`ephemeral = true`.
 
 ## Two more files, same grammar
 

@@ -52,11 +52,15 @@ rootful).
 
 ## Ports, rootless
 
-Rootless instances share the host network, so postgres binds the host
-directly. If something already owns 5432 (a system postgres is the classic),
-move the service: `-e PGPORT=5442` — and connect to 5442. A host process on
-the same port silently shadows your container otherwise; this is a rootless
-fact of life, not a ply quirk.
+A rootless run gets its **own** network namespace, so postgres binds 5432
+in there and never fights a system postgres on the host. What can still
+collide is the HOST side of `--publish`: if 5432 is taken, move that side and
+leave the container's port alone — `--publish internal:5442:5432`, then
+connect to 5442.
+
+(If namespace creation fails, ply says `staying on the host network` and
+falls back to sharing it — there postgres *does* bind the host directly, and
+the note above about a host process shadowing your container applies.)
 
 ## Production
 

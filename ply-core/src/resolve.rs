@@ -108,7 +108,7 @@ impl<'a> Resolver<'a> {
             for (package, reqs) in &constraints {
                 let source_spec = sources.get(package).cloned().ok_or_else(|| {
                     Error::Resolve(format!(
-                        "no source for package `{package}` — set `[sources] default = \"…\"` in ply.toml or give the dependency an explicit `source`"
+                        "no source for package `{package}` — give the dependency an explicit `source`, or set `[sources] default` (without either, ply uses the official registry)"
                     ))
                 })?;
                 let version = self.pick_min(package, &source_spec, reqs)?;
@@ -145,13 +145,20 @@ impl<'a> Resolver<'a> {
     }
 
     /// Explicit dep source, else the requesting manifest's default, else the
-    /// root manifest's default.
+    /// root manifest's default, else the official registry.
+    ///
+    /// The last step is why `[sources]` is optional: the official source is a
+    /// constant this binary already ships (`catalog::OFFICIAL_SOURCE`), and
+    /// making every manifest restate it taught `[sources]` to people who have
+    /// no second registry and no reason to care. A manifest declares
+    /// `[sources]` when it actually has somewhere else to fetch from.
     fn source_spec_for(&self, requester: &Manifest, spec: &DepSpec) -> Option<String> {
         let alias_or_literal = spec
             .source
             .clone()
             .or_else(|| requester.sources.get("default").cloned())
-            .or_else(|| self.root.sources.get("default").cloned())?;
+            .or_else(|| self.root.sources.get("default").cloned())
+            .unwrap_or_else(|| crate::catalog::OFFICIAL_SOURCE.to_string());
         // A source value may be an alias defined in [sources].
         let resolved = requester
             .sources

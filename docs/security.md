@@ -84,9 +84,10 @@ setuid → no_new_privs → seccomp).
 ply runs fully unprivileged: build, fetch, run, exec — no root, no setuid
 helpers. The store lives in your home directory; squashfs images extract to
 plain directories when loop-mounting isn't available (same hash identity
-either way). Rootless instances share the host network (no per-instance
-IPs), so `--scale` needs [`--publish`](/docs/running/) — the run parent
-gives each instance its own loopback port and balances the published one.
+either way). A rootless run gets its own network namespace, but every instance of that
+run shares it — so there are still no per-instance IPs, and `--scale` needs
+[`--publish`](/docs/running/): the run parent gives each instance its own
+loopback port and balances the published one.
 
 Three host-level facts decide how far rootless gets, and `ply setup`
 reports all three.

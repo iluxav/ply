@@ -25,13 +25,13 @@ e    = ["POSTGRES_PASSWORD=$PW", "POSTGRES_DB=todos"]
 run     = "./server"                       # → ply run ./server
 after   = ["db"]                           # → --after db (waits; see below)
 publish = ["internal:3001"]
-e = ["DATABASE_URL=postgres://postgres:$PW@db.ply:5432/todos"]
+env = ["DATABASE_URL=postgres://postgres:$PW@db.ply:5432/todos"]
 
 [[app]]
 run     = "./web"
 after   = ["server"]
 publish = ["3000"]
-e = ["API_ORIGIN=http://server.ply:3001"]
+env = ["API_ORIGIN=http://server.ply:3001"]
 ```
 
 Note what wires the members: a line you wrote. `after` orders the start and
@@ -45,7 +45,8 @@ PW=dev ply up        # everything, dependency-ordered; Ctrl-C stops it all
 PW=dev ply up db     # just the database (dependencies of named members come along)
 ```
 
-Every field is a `ply run` flag: `run`→the image, `name`→`--name`, `e`→`-e`,
+Every field is a `ply run` flag: `run`→the image, `name`→`--name`, `env`→`-e`
+(spelled `e` in older files; both work, but not both on one member),
 `after`→`--after`, `publish`→`--publish`, `volume`→`--volume`,
 `domain`→`--domain`, `scale`→`--scale`. There is no stack concept beyond
 "these runs, in dependency order." See the full [model](/docs/model/).
@@ -73,7 +74,7 @@ build error, not a hang.
 
 ## Secrets are holes, never values
 
-A `$VAR` in an `e` value is filled from the environment at launch — from your
+A `$VAR` in an `env` value is filled from the environment at launch — from your
 shell, or from an `--env-file`:
 
 ```sh
@@ -176,12 +177,12 @@ publish = ["internal:5433:5432"]    # the container still serves 5432; only
 [[app]]
 name = "server"
 run  = "../server"                  # the checkout next door
-e = ["DATABASE_URL=postgres://postgres:dev@db.ply:5432/todos"]
+env = ["DATABASE_URL=postgres://postgres:dev@db.ply:5432/todos"]
 ```
 
 - Members are matched by `name`; overriding a name that is not in the stack
   is an error, not a silent no-op.
-- `e` **merges by key** — the override adds `DATABASE_URL` and leaves the
+- `env` **merges by key** — the override adds `DATABASE_URL` and leaves the
   member's other variables alone. `publish`, `domain`, `volume`, `scale` and
   `run` replace outright; `[stack] env_file` replaces too.
 - Overlays override members, they never add them.

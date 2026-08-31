@@ -106,6 +106,9 @@ pub fn exec(args: RunArgs) -> Result<()> {
                     output: None,
                     allow_insecure: false,
                     arch: None,
+                    // CD lanes are non-interactive: a repo that carries a .env
+                    // must fail loudly, never ship it.
+                    allow_secrets: false,
                 })?;
                 eprintln!("ply: built {}", outcome.image_name);
                 outcome.image_path

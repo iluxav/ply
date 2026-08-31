@@ -251,8 +251,10 @@ pub(crate) fn render_manifest(a: &Answers) -> String {
         t.push_str("\n[ports]\n");
         t.push_str(&format!("http = {port}\n"));
     }
-    t.push_str("\n[sources]\n");
-    t.push_str(&format!("default = {}\n", toml_str(OFFICIAL_SOURCE)));
+    // No [sources]: the official registry is the resolver's fallback
+    // (`resolve::source_spec_for`). A manifest declares [sources] when it
+    // actually has somewhere else to fetch from — restating the default in
+    // every new project taught the concept to people who did not need it.
     t
 }
 
@@ -440,7 +442,7 @@ mod tests {
             Some(&["python3".to_string(), "app.py".to_string()][..])
         );
         assert_eq!(m.ports["http"], 8000);
-        assert_eq!(m.sources["default"], OFFICIAL_SOURCE);
+        assert!(m.sources.is_empty(), "init must not emit a [sources] stanza");
         assert!(text.contains("# include = [\"dist/\"]"));
         assert!(text.contains("[dependencies]\npython3 = \"3.12\""));
     }

@@ -64,8 +64,12 @@ pub struct Manifest {
 #[serde(deny_unknown_fields)]
 pub struct Requests {
     /// Bind mounts as "HOST:CONTAINER", both absolute. The dashboard's
-    /// read surfaces are the canonical example.
-    #[serde(default)]
+    /// read surfaces are the canonical example. Also accepts the spelled-out
+    /// form `{ host = "/run/ply", at = "/ply/host/run" }` — a colon-packed
+    /// pair is a shell-ism, and this is a config file with structure
+    /// available. Both normalise to "HOST:CONTAINER" here, so nothing
+    /// downstream sees the difference.
+    #[serde(default, deserialize_with = "de_links")]
     pub links: Vec<String>,
 }
 
@@ -144,7 +148,22 @@ pub struct Package {
     pub version: Version,
     /// argv of the process to exec, e.g. ["node", "server.js"].
     /// Absent = this is a library/runtime package, not an app.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ///
+    /// A STRING is shell form and becomes `["/bin/sh", "-c", <string>]` —
+    /// which is what a long entrypoint was already doing by hand, on one
+    /// unreadable line. A TOML multi-line string then makes it diffable:
+    ///
+    /// ```toml
+    /// entrypoint = """
+    ///   [ -f /etc/caddy/Caddyfile ] || cp /opt/edge/Caddyfile /etc/caddy/
+    ///   exec caddy run --config /etc/caddy/Caddyfile --watch
+    /// """
+    /// ```
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "de_entrypoint"
+    )]
     pub entrypoint: Option<Vec<String>>,
     /// ABI a runtime package provides, e.g. "linux-x64-musl" (matched
     /// against app [requires] abi).
@@ -332,17 +351,96 @@ impl Dependency {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Volume {
     /// Mount path inside the instance.
     pub path: String,
     /// "instance" (default) or "shared" — shared is an explicit opt-in.
-    #[serde(default = "default_scope")]
     pub scope: String,
     /// GC-able cache contract.
-    #[serde(default)]
     pub ephemeral: bool,
+}
+
+/// `data = "/var/lib/x"` is the same as `data = { path = "/var/lib/x" }`.
+/// Every volume in this repo used the table form to set one key; the extra
+/// braces bought nothing. The table form stays for `scope` and `ephemeral`,
+/// which is when it says something.
+impl<'de> Deserialize<'de> for Volume {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Table {
+            path: String,
+            #[serde(default = "default_scope")]
+            scope: String,
+            #[serde(default)]
+            ephemeral: bool,
+        }
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Repr {
+            Path(String),
+            Table(Table),
+        }
+        Ok(match Repr::deserialize(d)? {
+            Repr::Path(path) => Volume {
+                path,
+                scope: default_scope(),
+                ephemeral: false,
+            },
+            Repr::Table(t) => Volume {
+                path: t.path,
+                scope: t.scope,
+                ephemeral: t.ephemeral,
+            },
+        })
+    }
+}
+
+/// `entrypoint`: an argv array, or a string meaning `sh -c`.
+fn de_entrypoint<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> std::result::Result<Option<Vec<String>>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Repr {
+        Shell(String),
+        Argv(Vec<String>),
+    }
+    Ok(match Option::<Repr>::deserialize(d)? {
+        None => None,
+        Some(Repr::Argv(v)) => Some(v),
+        Some(Repr::Shell(script)) => Some(vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            script.trim().to_string(),
+        ]),
+    })
+}
+
+/// `links` entries: `"HOST:CONTAINER"` or `{ host = "…", at = "…" }`.
+fn de_links<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Vec<String>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Pair {
+        host: String,
+        at: String,
+    }
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Entry {
+        Packed(String),
+        Pair(Pair),
+    }
+    Ok(Vec::<Entry>::deserialize(d)?
+        .into_iter()
+        .map(|e| match e {
+            Entry::Packed(s) => s,
+            // Validated like any other entry by `validate()` below, so a
+            // relative path is rejected in both spellings alike.
+            Entry::Pair(p) => format!("{}:{}", p.host, p.at),
+        })
+        .collect())
 }
 
 fn default_scope() -> String {
@@ -585,6 +683,112 @@ pub fn validate_package_name(name: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod shorthand_tests {
+    use super::*;
+
+    #[test]
+    fn entrypoint_string_is_shell_form_and_links_take_a_table() {
+        let m = Manifest::parse(
+            r#"
+            [package]
+            name = "edge"
+            version = "1.0.0"
+            base = "debian@13"
+            entrypoint = """
+              [ -f /etc/caddy/Caddyfile ] || cp /opt/edge/Caddyfile /etc/caddy/Caddyfile
+              exec caddy run --config /etc/caddy/Caddyfile --watch
+            """
+
+            [requests]
+            links = [
+              "/run/ply:/ply/host/run",
+              { host = "/var/lib/ply/apps", at = "/ply/host/apps" },
+            ]
+            "#,
+        )
+        .unwrap();
+
+        let ep = m.package.entrypoint.as_ref().unwrap();
+        assert_eq!(ep[0], "/bin/sh");
+        assert_eq!(ep[1], "-c");
+        assert!(ep[2].contains("exec caddy run"), "{ep:?}");
+        assert!(ep[2].starts_with('['), "leading blank line must be trimmed: {ep:?}");
+
+        // both link spellings normalise to HOST:CONTAINER
+        assert_eq!(
+            m.requests.unwrap().links,
+            vec!["/run/ply:/ply/host/run", "/var/lib/ply/apps:/ply/host/apps"]
+        );
+    }
+
+    #[test]
+    fn a_relative_link_is_rejected_in_the_table_form_too() {
+        let err = Manifest::parse(
+            r#"
+            [package]
+            name = "x"
+            version = "1.0.0"
+            entrypoint = ["./x"]
+
+            [requests]
+            links = [{ host = "run/ply", at = "/ply/host/run" }]
+            "#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("abs"), "{err}");
+    }
+}
+
+#[cfg(test)]
+mod volume_shorthand_tests {
+    use super::*;
+
+    #[test]
+    fn volume_accepts_a_bare_path_or_a_table() {
+        let m = Manifest::parse(
+            r#"
+            [package]
+            name = "app"
+            version = "1.0.0"
+            entrypoint = ["./x"]
+
+            [volumes]
+            data = "/var/lib/app"
+            cache = { path = "/cache", ephemeral = true }
+            shared = { path = "/shared", scope = "shared" }
+            "#,
+        )
+        .unwrap();
+
+        // shorthand gets the same defaults the long form would
+        assert_eq!(m.volumes["data"].path, "/var/lib/app");
+        assert_eq!(m.volumes["data"].scope, "instance");
+        assert!(!m.volumes["data"].ephemeral);
+
+        assert_eq!(m.volumes["cache"].path, "/cache");
+        assert!(m.volumes["cache"].ephemeral);
+        assert_eq!(m.volumes["shared"].scope, "shared");
+
+        // a typo in the table form still fails loudly rather than defaulting
+        let err = Manifest::parse(
+            r#"
+            [package]
+            name = "app"
+            version = "1.0.0"
+            entrypoint = ["./x"]
+
+            [volumes]
+            data = { path = "/d", ephemerall = true }
+            "#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("data"), "{err}");
+    }
 }
 
 #[cfg(test)]

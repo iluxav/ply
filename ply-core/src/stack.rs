@@ -106,11 +106,13 @@ pub fn discover(dir: &Path) -> Result<Option<(Stack, PathBuf)>> {
 /// the stack-level twin of `ply.dev.toml`.
 ///
 /// A committed stack describes production — members reach each other by
-/// their `<name>.ply` bridge names, secrets are `$VAR` holes. On a laptop
-/// almost none of that is true: rootless shares the host network, so the
-/// address is loopback and a published port may have to dodge whatever the
-/// machine already runs. The overlay is where those local truths live, so
-/// the production file never has to carry a dev-shaped lie.
+/// their `<name>.ply` bridge names, secrets are `$VAR` holes. A laptop
+/// differs in fewer ways than it used to — a rootless stack gets its own
+/// network, so `<name>.ply` and the members' real ports mean the same thing
+/// there. What is still local is a dev password, and a published port that
+/// may have to dodge whatever the machine already runs. The overlay is where
+/// those local truths live, so the production file never has to carry a
+/// dev-shaped lie.
 ///
 /// Applied by `ply up` only. A host reconciling a deployment never reads it
 /// — same rule as `ply.dev.toml`, and the reason a stack stays publishable.
@@ -252,7 +254,7 @@ fn parse_overlay(text: &str, path: &Path) -> Result<StackOverlay> {
                 .get("run")
                 .and_then(|v| v.as_str())
                 .map(str::to_string),
-            env: parse_env(table.get("e"), &name, path)?,
+            env: parse_env(member_env(table)?, &name, path)?,
             publish: list("publish")?,
             domain: list("domain")?,
             volume: list("volume")?,
@@ -388,8 +390,22 @@ pub fn parse(text: &str, path: &Path) -> Result<Option<Stack>> {
 }
 
 const MEMBER_KEYS: &[&str] = &[
-    "run", "name", "e", "after", "publish", "volume", "domain", "scale",
+    "run", "name", "env", "e", "after", "publish", "volume", "domain", "scale",
 ];
+
+/// A member's environment: `env` is the spelling, `e` the original alias.
+/// Every other member key is written out in full (`publish`, `domain`,
+/// `volume`, `scale`), so `e` — borrowed from the `-e` flag — was the one
+/// key a reader had to look up. Both are accepted; naming both is an error
+/// rather than a silent winner.
+fn member_env(table: &toml::value::Table) -> Result<Option<&toml::Value>> {
+    match (table.get("env"), table.get("e")) {
+        (Some(_), Some(_)) => Err(Error::Manifest(
+            "a member sets both `env` and `e` — they are the same key; keep `env`".into(),
+        )),
+        (some @ Some(_), None) | (None, some) => Ok(some),
+    }
+}
 
 fn parse_member(index: usize, entry: &toml::Value, path: &Path) -> Result<Member> {
     let table = entry.as_table().ok_or_else(|| {
@@ -442,7 +458,7 @@ fn parse_member(index: usize, entry: &toml::Value, path: &Path) -> Result<Member
         })?,
     };
 
-    let env = parse_env(table.get("e"), &name, path)?;
+    let env = parse_env(member_env(table)?, &name, path)?;
     let after = string_list(table.get("after"), "after", &name, path)?;
     let publish = string_list(table.get("publish"), "publish", &name, path)?;
     let volume = string_list(table.get("volume"), "volume", &name, path)?;
@@ -1039,6 +1055,52 @@ scale = 2
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
         move |k: &str| map.get(k).cloned()
+    }
+
+    #[test]
+    fn member_env_accepts_env_and_e_but_not_both() {
+        let stack = parse(
+            r#"
+            [[app]]
+            run  = "postgres@17"
+            name = "db"
+            env  = ["POSTGRES_PASSWORD=dev"]
+
+            [[app]]
+            run  = "redis@7"
+            name = "cache"
+            e    = ["MAXMEM=64mb"]
+            "#,
+            std::path::Path::new("stack.toml"),
+        )
+        .unwrap()
+        .unwrap();
+        let by = |n: &str| {
+            stack
+                .members
+                .iter()
+                .find(|m| m.name == n)
+                .unwrap()
+                .env
+                .clone()
+        };
+        assert_eq!(by("db"), vec![("POSTGRES_PASSWORD".into(), "dev".into())]);
+        assert_eq!(by("cache"), vec![("MAXMEM".into(), "64mb".into())]);
+
+        // both spellings on one member is a mistake, not a silent winner
+        let err = parse(
+            r#"
+            [[app]]
+            run  = "redis@7"
+            name = "cache"
+            env  = ["A=1"]
+            e    = ["A=2"]
+            "#,
+            std::path::Path::new("stack.toml"),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("both `env` and `e`"), "{err}");
     }
 
     #[test]

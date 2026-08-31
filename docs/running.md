@@ -61,11 +61,13 @@ Instances reach the internet through the host: each rootful run enables
 IPv4 forwarding and a source-NAT rule for `10.77.0.0/16` (nft, or iptables
 where that is all the host has) and gives the instance the host's real
 upstream resolvers — a `127.0.0.53` systemd-resolved stub is replaced by
-what it forwards to. Rootless instances share the host network and need
+what it forwards to. A rootless run makes its own namespace and reaches the
+internet through a user-mode router (`pasta`, or `slirp4netns`), so it needs
 none of this.
 
 Ports in the manifest are **labels** of what the app binds internally —
-not host port claims. Two apps both declaring port 3000 never conflict.
+not host port claims. Two apps both declaring port 3000 never conflict: each
+gets its own namespace rootless, its own bridge IP rootful.
 
 For pretty URLs, TLS, and load balancing, ply deliberately does not proxy —
 it emits config for tools that already do it well:
@@ -81,7 +83,9 @@ on deploy, so the emitted config survives scale, rolls and restarts without
 being regenerated.
 
 An app running rootless without `--publish` has no address a proxy can
-reach: its instances share the host network and all report `127.0.0.1`.
+reach: its instances live inside the run's own namespace and report
+`127.0.0.1` **there** — which is not an address anything on the host can
+dial.
 Naming such an app is an error; a bare `ply proxy` sweep skips it with a
 note and still emits everything else.
 
@@ -146,10 +150,18 @@ XDG_DATA_HOME = "/data"
 data = { path = "/data" }
 ```
 
-**Something has to bind :80 and :443.** The tidiest topology is a **rootless
-edge over rootful pools**: rootless shares the host network, so Caddy binds
-those ports directly with no splice in front, while the pools get
-per-instance IPs on the bridge and Caddy reaches them via the gateway.
+**Something has to bind :80 and :443.** A rootless run now gets its own
+network namespace, so a rootless edge can no longer bind those ports on the
+host directly — nothing inside a namespace is reachable from outside it.
+Publish them instead, and the run parent (which stays on the host network)
+binds the real ports and splices inward:
+
+```sh
+ply run edge.img --publish 80:80 --publish 443:443
+```
+
+For a pool on the same host, rootful gives every instance its own bridge IP
+and Caddy reaches them through the gateway.
 
 ```sh
 sudo ply setup --unprivileged-ports        # once: lets rootless bind :80/:443
@@ -182,10 +194,13 @@ construction; an unreachable backend is skipped per connection.
 
 The two modes differ in who picks the instance-side port:
 
-- **Rootless** — `--publish` makes `--scale` work without root. Instances
-  share the host network, so ply gives each one its own loopback port,
-  injected as `PORT` (overriding manifest/CLI values) — a bare
-  `--publish 3100` always lines up, provided the app honors `PORT`.
+- **Rootless** — `--publish` makes `--scale` work without root. At
+  `--scale 1` the app keeps the port it chose: an explicit `[env] PORT` or
+  `-e PORT` is left alone. Past one instance they would all be in the run's
+  single namespace fighting for that port, so ply gives each its own loopback
+  port and injects it as `PORT`, **overriding manifest and `-e` values** — a
+  bare `--publish 3100` always lines up, provided the app honors `PORT`. Pin
+  the port with `--publish 3100:3000` to opt out of the injection entirely.
 - **Rootful** — instances bind whatever the app decides on their bridge
   IPs; tell the parent where the backends are with `HOST:INSTANCE`
   (`--publish 80:3000` for an app serving :3000), or align the app with
@@ -208,10 +223,11 @@ cannot silently repoint your callers.
 Two specs claiming the same host port is refused up front, rather than
 losing a race at bind time with a confusing "address in use".
 
-Rootless has one limit: instances share the host netns, so ply hands each
-its own loopback port as `PORT` — and `PORT` is a single variable. Only the
-first spec can be satisfied that way, so `--scale N` with several published
-ports warns, and the app must bind the rest itself. An edge reads its ports
+Rootless has one limit: every instance of a run shares that run's ONE
+namespace, so they cannot all bind the same port — ply hands each its own
+loopback port as `PORT`, and `PORT` is a single variable. Only the first spec
+can be satisfied that way, so `--scale N` with several published ports warns,
+and the app must bind the rest itself. An edge reads its ports
 from its own config rather than `PORT`, so scale-1 edges are unaffected.
 
 ### Who can reach it

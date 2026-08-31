@@ -65,13 +65,38 @@ pub fn exec() -> Result<()> {
                     );
                     continue;
                 }
-                let spec = match Spec::parse(&text) {
+                let mut spec = match Spec::parse(&text) {
                     Ok(spec) => spec,
                     Err(e) => {
                         deployments::write_status(&name, false, &format!("spec: {e}"));
                         continue;
                     }
                 };
+                // `.env/<name>.env` by convention when the spec names no
+                // env_file. docs/deployments.md already TELLS people the file
+                // is named after the deployment; restating it in the spec was
+                // pure redundancy. Applied before the lookup below so the
+                // conventional file fills `$VAR` holes too.
+                if spec.env_file.is_none() {
+                    let rel = format!(".env/{name}.env");
+                    if std::path::Path::new(&resolve_secret(&rel)).is_file() {
+                        // Announced, not silent: with the binding implicit,
+                        // reading the spec no longer tells you the app takes
+                        // secrets, so the reconcile beat has to.
+                        eprintln!("ply: {name}: using {rel} (by convention)");
+                        spec.env_file = Some(rel);
+                    }
+                }
+                // `$VAR` holes, filled exactly as a stack member's are: from
+                // this deployment's own env_file, then the process
+                // environment. Without this a standalone deployment had no
+                // way to say "I need SUPER_SECRET" — an unexpanded `$VAR`
+                // was injected as the literal string, silently.
+                if let Err(e) = expand_spec_holes(&spec_env_lookup(&spec, &name), &mut spec) {
+                    deployments::write_status(&name, false, &format!("{e:#}"));
+                    desired.insert(name.clone());
+                    continue;
+                }
                 // Cadence discipline. A spec file touched at/after its last
                 // status is an explicit order — converge it. Untouched specs
                 // on a background beat (the timer, another app's change):
@@ -109,6 +134,8 @@ pub fn exec() -> Result<()> {
             }
         }
     }
+
+    warn_orphaned_env_files(&app_names);
 
     // Managed units whose spec is gone: stop and remove. Only ours — the
     // marker keeps hand-written ply-*.service units untouchable.
@@ -536,6 +563,77 @@ fn image_only_change(existing: &str, fresh: &str) -> bool {
 /// A relative secret path (deploy_key, token_file) resolves against the
 /// deployments dir — the one path a spec author (the dashboard included)
 /// always knows.
+/// A secret nothing reads. Now that `.env/<name>.env` is picked up BY NAME,
+/// renaming a deployment silently orphans its env file — the app would come
+/// up with none of its secrets and no diagnostic. So say it: any `.env/*.env`
+/// whose stem matches no deployment and that no spec references by path.
+/// Catches the rename, the typo, and the stale secret left after a teardown.
+fn warn_orphaned_env_files(app_names: &BTreeSet<String>) {
+    let dir = deployments::dir().join(".env");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return; // no .env/ at all is the normal case, not a problem
+    };
+    // Every path any spec names explicitly, so a shared env file (several
+    // apps, one file — the documented reason `env_file` stays explicit) is
+    // never reported as an orphan.
+    let referenced: BTreeSet<String> = deployments::list()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|(_, spec)| spec.ok()?.env_file)
+        .map(|f| resolve_secret(&f))
+        .collect();
+
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("env") {
+            continue;
+        }
+        let stem = path.file_stem().unwrap_or_default().to_string_lossy().into_owned();
+        if app_names.contains(&stem) || referenced.contains(&path.display().to_string()) {
+            continue;
+        }
+        eprintln!(
+            "ply: warning: {} is read by nothing — no deployment named `{stem}`, and no spec \
+             names it in `env_file`. A renamed deployment leaves its secrets behind like this.",
+            path.display()
+        );
+    }
+}
+
+/// The `$VAR` lookup for a single-app deployment: its own `env_file` first,
+/// then the process environment — the same order `converge_stack` uses.
+/// A missing or unreadable env_file yields an empty table, so the error the
+/// operator sees is the specific `$VAR` that could not be filled.
+fn spec_env_lookup(spec: &Spec, name: &str) -> impl Fn(&str) -> Option<String> {
+    let mut file_env: std::collections::BTreeMap<String, String> = Default::default();
+    if let Some(ef) = &spec.env_file {
+        let path = resolve_secret(ef);
+        match ply_core::runtime::run::parse_env_file(std::path::Path::new(&path)) {
+            Ok(pairs) => file_env = pairs.into_iter().collect(),
+            Err(e) => {
+                deployments::write_status(name, false, &format!("env_file {path}: {e:#}"));
+            }
+        }
+    }
+    move |k: &str| file_env.get(k).cloned().or_else(|| std::env::var(k).ok())
+}
+
+/// Expand `$VAR` in a single-app deployment's `env`, `publish` and `domain`,
+/// matching what a stack member already gets. `$$` is a literal `$`, and an
+/// undefined variable is an error naming the key.
+fn expand_spec_holes(lookup: &impl Fn(&str) -> Option<String>, spec: &mut Spec) -> Result<()> {
+    use ply_core::stack::{expand_member_list, expand_vars};
+    let who = |k: &str| format!("deployment env {k}");
+    let mut env = std::collections::BTreeMap::new();
+    for (k, v) in &spec.env {
+        env.insert(k.clone(), expand_vars(v, &who(k), lookup)?);
+    }
+    spec.env = env;
+    spec.publish = expand_member_list(&spec.publish, "deployment", "publish", lookup)?;
+    spec.domain = expand_member_list(&spec.domain, "deployment", "domain", lookup)?;
+    Ok(())
+}
+
 fn resolve_secret(path: &str) -> String {
     if path.starts_with('/') {
         path.to_string()
@@ -687,6 +785,9 @@ fn build_from_repo(name: &str, spec: &Spec) -> Result<(PathBuf, String, bool)> {
             output: None,
             allow_insecure: false,
             arch: None,
+            // CD lanes are non-interactive: a repo that carries a .env
+            // must fail loudly, never ship it.
+            allow_secrets: false,
         })
         .context("building the builder image")?;
 
@@ -780,6 +881,9 @@ fn build_from_repo(name: &str, spec: &Spec) -> Result<(PathBuf, String, bool)> {
         output: None,
         allow_insecure: false,
         arch: None,
+        // CD lanes are non-interactive: a repo that carries a .env
+        // must fail loudly, never ship it.
+        allow_secrets: false,
     })
     .context("packing the app image")?;
     // same path every build — remember the digest so a new commit forces a
@@ -940,6 +1044,46 @@ fn repo_version(checkout: &std::path::Path, spec: &Spec) -> String {
 
 #[cfg(test)]
 mod token_tests {
+    use super::{expand_spec_holes, Spec};
+
+    #[test]
+    fn standalone_deployment_expands_var_holes() {
+        let mut spec = Spec::parse(
+            r#"
+            app = "myapp"
+            publish = ["$WEB_PORT:3000"]
+            domain = ["$SITE"]
+
+            [env]
+            SUPER_SECRET = "$SUPER_SECRET"
+            LITERAL = "cost is $$5"
+            "#,
+        )
+        .unwrap();
+
+        let table: std::collections::BTreeMap<String, String> = [
+            ("SUPER_SECRET", "s3cret"),
+            ("WEB_PORT", "8080"),
+            ("SITE", "example.com"),
+        ]
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let lookup = |k: &str| table.get(k).cloned();
+
+        expand_spec_holes(&lookup, &mut spec).unwrap();
+        assert_eq!(spec.env["SUPER_SECRET"], "s3cret");
+        assert_eq!(spec.env["LITERAL"], "cost is $5", "$$ is a literal $");
+        assert_eq!(spec.publish, vec!["8080:3000"]);
+        assert_eq!(spec.domain, vec!["example.com"]);
+
+        // a missing hole is an error naming the key — never a silent literal
+        let mut spec = Spec::parse("app = \"myapp\"\n\n[env]\nX = \"$NOPE\"\n").unwrap();
+        let err = expand_spec_holes(&|_: &str| None, &mut spec)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("NOPE"), "{err}");
+    }
     #[test]
     fn base64_matches_reference() {
         assert_eq!(

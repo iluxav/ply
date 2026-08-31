@@ -24,6 +24,7 @@ fn build_dir(dir: &Path, ply_toml: &str, files: &[(&str, &str)]) -> PathBuf {
         dir: dir.to_path_buf(),
         output: None,
         allow_insecure: false,
+        allow_secrets: false,
         arch: None,
     })
     .unwrap()
@@ -136,6 +137,7 @@ fn resolves_via_file_source() {
         dir: app_dir.clone(),
         output: None,
         allow_insecure: false,
+        allow_secrets: false,
         arch: None,
     };
     let one = build(&opts).unwrap();
@@ -191,6 +193,7 @@ fn resolves_via_http_source() {
         dir: app_dir.clone(),
         output: None,
         allow_insecure: false,
+        allow_secrets: false,
         arch: None,
     });
     server.kill().ok();
@@ -237,6 +240,7 @@ fn resolves_base_only_app() {
         dir: app_dir.clone(),
         output: None,
         allow_insecure: false,
+        allow_secrets: false,
         arch: None,
     })
     .unwrap();

@@ -150,9 +150,9 @@ fn render_apps(selected: &[String], render: RenderFn, sweeping: bool) -> Result<
 /// and restarts, so the emitted file never needs regenerating for them.
 ///
 /// Only an unpublished app falls back to per-instance addresses. That path is
-/// rootful-only by nature: rootless instances share the host netns, so they
-/// all report `127.0.0.1` and the manifest's declared port, which would emit
-/// N identical, wrong backends.
+/// rootful-only by nature: rootless instances share their run's namespace,
+/// so they all report `127.0.0.1` and the manifest's declared port — N
+/// identical backends naming an address nothing on the host can reach.
 fn backends_and_domains(app: &str) -> Result<(Vec<String>, Vec<String>)> {
     let alive: Vec<InstanceState> = state::list()?
         .into_iter()
@@ -172,8 +172,8 @@ fn backends_and_domains(app: &str) -> Result<(Vec<String>, Vec<String>)> {
     let rootless = !ply_core::paths::is_root();
     if rootless && alive.len() > 1 {
         bail!(
-            "`{app}` runs {} rootless instances without --publish: they share the host network, \
-             so there is no per-instance address to emit.\n\
+            "`{app}` runs {} rootless instances without --publish: they share one \
+             namespace, so there is no per-instance address to emit.\n\
              Publish the pool and the parent becomes the single backend: \
              ply run --publish internal:<port> --scale N …",
             alive.len()
