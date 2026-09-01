@@ -11,7 +11,8 @@ use ply_core::deployments::{self, Spec, UNIT_MARKER};
 
 const UNIT_DIR: &str = "/etc/systemd/system";
 
-pub fn exec() -> Result<()> {
+pub fn exec(args: crate::cli::ReconcileArgs) -> Result<()> {
+    let force = args.force;
     if !ply_core::paths::is_root() {
         bail!("ply reconcile writes systemd units — run as root");
     }
@@ -39,7 +40,7 @@ pub fn exec() -> Result<()> {
             Ok(Some(stack)) => {
                 // Cadence at the stack-file granularity; held → keep the
                 // member units alive but don't re-converge this beat.
-                if held(&name, true) {
+                if held(&name, true, force) {
                     for m in &stack.members {
                         desired.insert(m.name.clone());
                     }
@@ -55,10 +56,11 @@ pub fn exec() -> Result<()> {
             }
             Ok(None) => {
                 // …or it NAMES a published stack: `stack = "<ns>/<name>"`.
-                if let Some(reference) = ply_core::stack::parse_ref(&text) {
+                if let Some(r) = ply_core::stack::parse_ref(&text) {
                     converge_stack_ref(
                         &name,
-                        &reference,
+                        &r,
+                        force,
                         &mut desired,
                         &mut app_names,
                         &mut changed_units,
@@ -68,14 +70,30 @@ pub fn exec() -> Result<()> {
                 let mut spec = match Spec::parse(&text) {
                     Ok(spec) => spec,
                     Err(e) => {
+                        // A file that no longer parses is NOT a removed file.
+                        // The unit it owns stays desired, or a one-character
+                        // typo saved into a live deployment's spec would have
+                        // the sweep below disable and delete it.
+                        desired.insert(name.clone());
                         deployments::write_status(&name, false, &format!("spec: {e}"));
                         continue;
                     }
                 };
+                // Cadence discipline FIRST — before anything that can write
+                // a status. A spec file touched at/after its last status is
+                // an explicit order; untouched, auto = false holds and a
+                // recent failure backs off. The env_file read below used to
+                // run ahead of this and stamp a fresh failure every beat,
+                // which meant the back-off never expired and `touch` could
+                // not break it.
+                if held(&name, spec.auto, force) {
+                    desired.insert(name.clone());
+                    continue;
+                }
                 // `.env/<name>.env` by convention when the spec names no
                 // env_file. docs/deployments.md already TELLS people the file
                 // is named after the deployment; restating it in the spec was
-                // pure redundancy. Applied before the lookup below so the
+                // pure redundancy. Applied before the lookup so the
                 // conventional file fills `$VAR` holes too.
                 if spec.env_file.is_none() {
                     let rel = format!(".env/{name}.env");
@@ -87,22 +105,25 @@ pub fn exec() -> Result<()> {
                         spec.env_file = Some(rel);
                     }
                 }
+                // An unreadable or malformed env_file is this deployment's
+                // failure — its own message, not a downstream "$X is not set"
+                // that hides the cause.
+                let lookup = match spec_env_lookup(&spec) {
+                    Ok(l) => l,
+                    Err(e) => {
+                        desired.insert(name.clone());
+                        deployments::write_status(&name, false, &e);
+                        eprintln!("ply: reconcile {name}: {e}");
+                        continue;
+                    }
+                };
                 // `$VAR` holes, filled exactly as a stack member's are: from
                 // this deployment's own env_file, then the process
                 // environment. Without this a standalone deployment had no
                 // way to say "I need SUPER_SECRET" — an unexpanded `$VAR`
                 // was injected as the literal string, silently.
-                if let Err(e) = expand_spec_holes(&spec_env_lookup(&spec, &name), &mut spec) {
+                if let Err(e) = expand_spec_holes(&lookup, &mut spec) {
                     deployments::write_status(&name, false, &format!("{e:#}"));
-                    desired.insert(name.clone());
-                    continue;
-                }
-                // Cadence discipline. A spec file touched at/after its last
-                // status is an explicit order — converge it. Untouched specs
-                // on a background beat (the timer, another app's change):
-                // auto = false holds at the current artifact, and a recent
-                // failure backs off instead of rebuilding every minute.
-                if held(&name, spec.auto) {
                     desired.insert(name.clone());
                     continue;
                 }
@@ -128,7 +149,18 @@ pub fn exec() -> Result<()> {
                 }
             }
             Err(e) => {
-                // has [[app]] but malformed, or the file is not valid TOML
+                // has [[app]] but malformed, or the file is not valid TOML.
+                // Same rule: a broken file is not a deleted one. We do not
+                // know which units it owned, so keep whatever the stack
+                // remembered last time it converged (as the stack-ref lane
+                // does) — and at minimum the unit under this file's own name.
+                desired.insert(name.clone());
+                let remembered = deployments::status_dir().join(format!("{name}.members"));
+                if let Ok(text) = std::fs::read_to_string(&remembered) {
+                    for m in text.lines().map(str::trim).filter(|m| !m.is_empty()) {
+                        desired.insert(m.to_string());
+                    }
+                }
                 deployments::write_status(&name, false, &format!("{e:#}"));
                 continue;
             }
@@ -222,8 +254,12 @@ struct Applied {
 /// its last status and either it's manual (`auto = false`) or a recent
 /// failure is still backing off. A stack file is always `auto = true` (its
 /// members are registry apps that follow the latest, like an `app=` spec).
-fn held(name: &str, auto: bool) -> bool {
-    if touched_since_status(name) {
+fn held(name: &str, auto: bool, force: bool) -> bool {
+    // `ply reconcile --force`: a person is at the keyboard saying "now".
+    // Skips the failure back-off (and an auto = false pin) for this beat
+    // only — the status a failed attempt writes is unchanged, so the next
+    // timer beat backs off again as it should.
+    if force || touched_since_status(name) {
         return false;
     }
     match deployments::read_status(name) {
@@ -249,7 +285,8 @@ fn held(name: &str, auto: bool) -> bool {
 /// indistinguishable from a deletion.
 fn converge_stack_ref(
     name: &str,
-    reference: &str,
+    r: &ply_core::stack::StackRef,
+    force: bool,
     desired: &mut BTreeSet<String>,
     app_names: &mut BTreeSet<String>,
     changed_units: &mut bool,
@@ -263,12 +300,13 @@ fn converge_stack_ref(
         }
     };
 
-    if held(name, true) {
+    let reference = r.reference.as_str();
+    if held(name, r.auto, force) {
         keep_known_members(desired);
         return;
     }
 
-    let stack =
+    let mut stack =
         match ply_core::catalog::fetch_stack(reference, ply_core::catalog::OFFICIAL_RUN_SOURCE) {
             Ok(stack) => stack,
             Err(e) => {
@@ -277,6 +315,14 @@ fn converge_stack_ref(
                 return;
             }
         };
+    // The published stack is the PUBLISHER's template; its `$VAR` holes are
+    // this host's business. A deployer's `env_file` on the reference is how
+    // they get filled — it replaces whatever `[stack] env_file` the publisher
+    // baked in, which named a path on THEIR machine. Before this the key was
+    // silently dropped and every hole failed as "not set".
+    if let Some(ef) = &r.env_file {
+        stack.env_file = Some(ef.clone());
+    }
 
     let members: Vec<String> = stack.members.iter().map(|m| m.name.clone()).collect();
     converge_stack(name, stack, desired, app_names, changed_units);
@@ -435,9 +481,21 @@ fn apply(name: &str, spec: &Spec, app_names: &mut BTreeSet<String>) -> Result<Ap
                 .source
                 .clone()
                 .unwrap_or_else(|| ply_core::catalog::OFFICIAL_RUN_SOURCE.to_string());
-            let (path, resolved, _digest) =
-                ply_core::catalog::fetch_app_image(app, spec.version.as_deref(), &source)
-                    .with_context(|| format!("fetching `{app}` from the registry"))?;
+            // Ask the deploys dir before downloading: the last beat left the
+            // deployed image hardlinked under its own filename. Same version
+            // → same file → no fetch. This is what stops an `auto = true`
+            // deployment pulling its whole image every minute.
+            let deploys = PathBuf::from("/var/lib/ply/deploys").join(name);
+            let (path, resolved, _digest) = ply_core::catalog::fetch_app_image_unless(
+                app,
+                spec.version.as_deref(),
+                &source,
+                |image| {
+                    let p = deploys.join(image.to_string());
+                    p.is_file().then_some(p)
+                },
+            )
+            .with_context(|| format!("fetching `{app}` from the registry"))?;
             println!("{name}: {resolved}");
             let shown = resolved.to_string();
             (named_image(name, &path, &shown)?, shown)
@@ -568,24 +626,53 @@ fn image_only_change(existing: &str, fresh: &str) -> bool {
 /// up with none of its secrets and no diagnostic. So say it: any `.env/*.env`
 /// whose stem matches no deployment and that no spec references by path.
 /// Catches the rename, the typo, and the stale secret left after a teardown.
-fn warn_orphaned_env_files(app_names: &BTreeSet<String>) {
+fn warn_orphaned_env_files(_app_names: &BTreeSet<String>) {
     let dir = deployments::dir().join(".env");
     let Ok(entries) = std::fs::read_dir(&dir) else {
         return; // no .env/ at all is the normal case, not a problem
     };
-    // Every path any spec names explicitly, so a shared env file (several
-    // apps, one file — the documented reason `env_file` stays explicit) is
-    // never reported as an orphan.
-    let referenced: BTreeSet<String> = deployments::list()
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|(_, spec)| spec.ok()?.env_file)
-        .map(|f| resolve_secret(&f))
-        .collect();
+    // What reads an env file, across every deployment file SHAPE — not just
+    // the specs that reached apply() this beat. The first version built this
+    // from `deployments::list()`, which Spec::parse-fails every stack file,
+    // so a `[stack] env_file` was reported as an orphan on every beat.
+    //   - a single-app spec:  its `env_file`, or `.env/<name>.env` by convention
+    //   - a stack file:       its `[stack] env_file`
+    //   - a stack reference:  its `env_file`
+    // Compared as canonical paths, so `./.env/x.env` and `.env/x.env` agree.
+    let canon = |p: &str| {
+        let p = std::path::PathBuf::from(resolve_secret(p));
+        std::fs::canonicalize(&p).unwrap_or(p)
+    };
+    let mut referenced: BTreeSet<std::path::PathBuf> = BTreeSet::new();
+    for (name, path) in deployments::list_files().unwrap_or_default() {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        // every deployment name claims its conventional file, whether or not
+        // it converged this beat (held, auto = false, backing off…)
+        referenced.insert(canon(&format!(".env/{name}.env")));
+        if let Ok(Some(stack)) = ply_core::stack::parse(&text, &path) {
+            if let Some(ef) = stack.env_file {
+                referenced.insert(canon(&ef));
+            }
+        } else if let Some(r) = ply_core::stack::parse_ref(&text) {
+            if let Some(ef) = r.env_file {
+                referenced.insert(canon(&ef));
+            }
+        } else if let Ok(spec) = Spec::parse(&text) {
+            if let Some(ef) = spec.env_file {
+                referenced.insert(canon(&ef));
+            }
+        }
+    }
 
     for entry in entries.filter_map(|e| e.ok()) {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("env") {
+            continue;
+        }
+        let here = std::fs::canonicalize(&path).unwrap_or(path.clone());
+        if referenced.contains(&here) {
             continue;
         }
         let stem = path
@@ -593,9 +680,6 @@ fn warn_orphaned_env_files(app_names: &BTreeSet<String>) {
             .unwrap_or_default()
             .to_string_lossy()
             .into_owned();
-        if app_names.contains(&stem) || referenced.contains(&path.display().to_string()) {
-            continue;
-        }
         eprintln!(
             "ply: warning: {} is read by nothing — no deployment named `{stem}`, and no spec \
              names it in `env_file`. A renamed deployment leaves its secrets behind like this.",
@@ -606,20 +690,19 @@ fn warn_orphaned_env_files(app_names: &BTreeSet<String>) {
 
 /// The `$VAR` lookup for a single-app deployment: its own `env_file` first,
 /// then the process environment — the same order `converge_stack` uses.
-/// A missing or unreadable env_file yields an empty table, so the error the
-/// operator sees is the specific `$VAR` that could not be filled.
-fn spec_env_lookup(spec: &Spec, name: &str) -> impl Fn(&str) -> Option<String> {
+/// A missing or unreadable env_file is an error in its own right, returned
+/// to the caller to record — never a silent empty table that later fails as
+/// "`$X` is not set" far from the cause.
+fn spec_env_lookup(spec: &Spec) -> std::result::Result<impl Fn(&str) -> Option<String>, String> {
     let mut file_env: std::collections::BTreeMap<String, String> = Default::default();
     if let Some(ef) = &spec.env_file {
         let path = resolve_secret(ef);
         match ply_core::runtime::run::parse_env_file(std::path::Path::new(&path)) {
             Ok(pairs) => file_env = pairs.into_iter().collect(),
-            Err(e) => {
-                deployments::write_status(name, false, &format!("env_file {path}: {e:#}"));
-            }
+            Err(e) => return Err(format!("env_file {path}: {e:#}")),
         }
     }
-    move |k: &str| file_env.get(k).cloned().or_else(|| std::env::var(k).ok())
+    Ok(move |k: &str| file_env.get(k).cloned().or_else(|| std::env::var(k).ok()))
 }
 
 /// Expand `$VAR` in a single-app deployment's `env`, `publish` and `domain`,

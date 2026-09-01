@@ -61,7 +61,7 @@ pub enum Command {
     /// Fleet hosts sync the dir from git first. Fired automatically by
     /// ply-deployments.path and the 1-minute timer; safe to run by hand.
     /// Root only.
-    Reconcile,
+    Reconcile(ReconcileArgs),
 
     /// Set an app's instance count (the run parent grows/shrinks the pool)
     ///
@@ -202,6 +202,15 @@ pub struct BuildArgs {
     /// in implicitly. Refused by default: an image is distributable.
     #[arg(long)]
     pub allow_secrets: bool,
+}
+
+#[derive(Args)]
+pub struct ReconcileArgs {
+    /// Converge every deployment NOW, ignoring the failure back-off and
+    /// `auto = false` pins for this run. The timer never passes this; it is
+    /// for a person who has just fixed something and does not want to wait.
+    #[arg(long)]
+    pub force: bool,
 }
 
 #[derive(Args)]

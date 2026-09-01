@@ -19,7 +19,7 @@ name = "todos"
 [[app]]
 run  = "postgres@17"                       # → ply run postgres@17
 name = "db"                                # → --name db
-e    = ["POSTGRES_PASSWORD=$PW", "POSTGRES_DB=todos"]
+env  = ["POSTGRES_PASSWORD=$PW", "POSTGRES_DB=todos"]
 
 [[app]]
 run     = "./server"                       # → ply run ./server

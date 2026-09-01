@@ -34,12 +34,30 @@ Add a dependency to `./ply.toml`. Without a range, takes the latest
 Then `ply build` to resolve and lock.
 
 ```sh
-ply build [DIR] [-o FILE] [--arch x64|arm64] [--insecure-source]
+ply build [DIR] [-o FILE] [--arch x64|arm64] [--insecure-source] [--allow-secrets]
 ```
 Resolve dependencies (writing `ply.lock`), produce a deterministic image
 named `<name>-<version>-<os>-<arch>.img`. `--arch` cross-builds: packing is
 arch-independent and dependencies resolve for the target, so an x64 laptop
 builds arm64 droplet images.
+
+**What ships.** `[package] include` is a whitelist — name a path and only that
+ships, and a typo is a hard error. **With no `include`, everything in the
+directory ships**, and the build says how much:
+
+```
+ply: packing 412 files (18.4 MiB) — no `include` in ply.toml, so everything … ships
+```
+
+That line matters because squashfs compresses junk away: 200 MB of
+`node_modules` can report a few KiB, so image size is no signal.
+
+Credential-shaped files swept in that way (`.env`, `.env.*`, `*.key`, `.npmrc`,
+`.netrc`, `.pgpass`, `.ssh*`, `id_rsa`…) **refuse the build**, because an image
+is distributable and `ply push` puts it on a public registry. Naming one in
+`include` is an explicit choice and is allowed; `--allow-secrets` overrides
+wholesale. `.git`, `__pycache__` and other build detritus never ship, at any
+depth.
 
 ```sh
 ply check IMAGE [--against policy.toml]

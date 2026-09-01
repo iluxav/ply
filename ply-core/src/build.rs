@@ -138,11 +138,20 @@ pub fn build(opts: &BuildOptions) -> Result<BuildOutcome> {
     })?;
 
     // `[package] include` whitelist: only listed paths ship. Typos fail loudly.
+    // Normalised as PATHS: `./dist`, `dist/` and `dist` are one entry. The
+    // filter below compares components (`Path::starts_with`), and a leading
+    // `./` component used to pass the existence check yet match nothing —
+    // an empty image, no error, no summary line.
     let include: Vec<PathBuf> = manifest
         .package
         .include
         .iter()
-        .map(|e| PathBuf::from(e.trim_end_matches('/')))
+        .map(|e| {
+            Path::new(e)
+                .components()
+                .filter(|c| !matches!(c, std::path::Component::CurDir))
+                .collect::<PathBuf>()
+        })
         .collect();
     for entry in &include {
         if opts.dir.join(entry).symlink_metadata().is_err() {
@@ -174,9 +183,11 @@ pub fn build(opts: &BuildOptions) -> Result<BuildOutcome> {
             }
         }
         // Build detritus never ships, at any depth — a vendored `.git` used to
-        // sail through because this test was depth-1 only. An EXACT include
-        // entry still wins: naming it is the operator's decision.
-        if is_never_packed(&name) && !inc.iter().any(|e| e == rel) {
+        // sail through because this test was depth-1 only. An include entry
+        // that names it, or points INTO it (`include = [".git/config"]`), is
+        // the operator's decision and wins; an include of an enclosing dir
+        // (`include = ["vendor"]`) does not — that is the vendored-.git case.
+        if is_never_packed(&name) && !inc.iter().any(|e| e.starts_with(rel)) {
             return false;
         }
         if inc.is_empty() {
@@ -346,7 +357,7 @@ pub fn up_to_date_image(dir: &Path, arch: Option<Arch>) -> Result<Option<PathBuf
 fn audit_tree(
     dir: &Path,
     filter: &dyn Fn(&Path) -> bool,
-    exact_includes: &[PathBuf],
+    includes: &[PathBuf],
 ) -> (u64, u64, Vec<PathBuf>) {
     let (mut files, mut bytes, mut secrets) = (0u64, 0u64, Vec::new());
     let mut stack = vec![PathBuf::new()];
@@ -366,20 +377,29 @@ fn audit_tree(
             let Ok(md) = entry.path().symlink_metadata() else {
                 continue;
             };
+            // Credential-shaped names are checked BEFORE the dir/file split:
+            // `.ssh/` and `.aws/` are directories, and the old file-only check
+            // let `.aws/credentials` ship. A secret directory is reported once
+            // and never descended. The exemption is "the operator named it OR
+            // named a subtree containing it" — `include = ["config"]` is a
+            // decision about config/.env too; making the user repeat the file
+            // defeated the point of the whitelist.
+            let name = child
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
+            let named = includes.iter().any(|e| child.starts_with(e));
+            if is_secret_name(&name) && !named {
+                secrets.push(child);
+                continue;
+            }
             if md.is_dir() {
                 stack.push(child);
                 continue;
             }
             files += 1;
             bytes += md.len();
-            let name = child
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned();
-            if is_secret_name(&name) && !exact_includes.iter().any(|e| e == &child) {
-                secrets.push(child);
-            }
         }
     }
     (files, bytes, secrets)
@@ -485,6 +505,107 @@ mod tests {
         )
         .unwrap();
         build(&opts).unwrap();
+    }
+
+    #[test]
+    fn credential_directories_are_refused_not_just_files() {
+        // .ssh/ and .aws/ are DIRECTORIES; the first version of this check
+        // only looked at files and let .aws/credentials ship.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".aws")).unwrap();
+        std::fs::create_dir_all(dir.path().join(".ssh")).unwrap();
+        std::fs::write(
+            dir.path().join(".aws/credentials"),
+            b"aws_secret_access_key=x",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join(".ssh/config"), b"Host x").unwrap();
+        std::fs::write(dir.path().join("server"), b"#!/bin/sh\n").unwrap();
+        std::fs::write(
+            dir.path().join("ply.toml"),
+            "[package]\nname = \"app\"\nversion = \"1.0.0\"\nentrypoint = [\"./server\"]\n",
+        )
+        .unwrap();
+        let err = build(&BuildOptions {
+            dir: dir.path().to_path_buf(),
+            output: None,
+            allow_insecure: false,
+            allow_secrets: false,
+            arch: None,
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains(".aws"), "{err}");
+        assert!(err.contains(".ssh"), "{err}");
+        // reported once each, as the directory — not once per file inside
+        assert!(!err.contains("credentials"), "{err}");
+    }
+
+    #[test]
+    fn dot_slash_include_is_the_same_include() {
+        // `./dist` passed the existence check but never matched the
+        // component-based filter: an empty image, no error, no summary.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("dist")).unwrap();
+        std::fs::write(dir.path().join("dist/a.js"), b"js").unwrap();
+        std::fs::write(
+            dir.path().join("ply.toml"),
+            "[package]\nname = \"app\"\nversion = \"1.0.0\"\nentrypoint = [\"node\", \"dist/a.js\"]\ninclude = [\"./dist/\"]\n",
+        )
+        .unwrap();
+        let out = build(&BuildOptions {
+            dir: dir.path().to_path_buf(),
+            output: None,
+            allow_insecure: false,
+            allow_secrets: false,
+            arch: None,
+        })
+        .unwrap();
+        let file = std::fs::File::open(&out.image_path).unwrap();
+        let fs = backhand::FilesystemReader::from_reader(std::io::BufReader::new(file)).unwrap();
+        assert!(
+            fs.files().any(|n| n.fullpath.ends_with("dist/a.js")),
+            "./dist must ship dist/a.js"
+        );
+    }
+
+    #[test]
+    fn including_a_subtree_is_a_decision_about_secrets_inside_it() {
+        // `include = ["config"]` with config/.env: the operator named the
+        // subtree. Refusing — and advising them to add `include` — was
+        // circular. Naming the dir is the explicit choice.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("config")).unwrap();
+        std::fs::write(dir.path().join("config/.env"), b"K=v").unwrap();
+        std::fs::write(dir.path().join("config/app.toml"), b"x").unwrap();
+        std::fs::write(dir.path().join(".env"), b"TOP=secret").unwrap(); // NOT included
+        std::fs::write(
+            dir.path().join("ply.toml"),
+            "[package]\nname = \"app\"\nversion = \"1.0.0\"\nentrypoint = [\"./x\"]\ninclude = [\"config\"]\n",
+        )
+        .unwrap();
+        let out = build(&BuildOptions {
+            dir: dir.path().to_path_buf(),
+            output: None,
+            allow_insecure: false,
+            allow_secrets: false,
+            arch: None,
+        })
+        .unwrap();
+        let file = std::fs::File::open(&out.image_path).unwrap();
+        let fs = backhand::FilesystemReader::from_reader(std::io::BufReader::new(file)).unwrap();
+        let listing: Vec<String> = fs
+            .files()
+            .map(|n| n.fullpath.to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            listing.iter().any(|p| p.ends_with("config/.env")),
+            "{listing:?}"
+        );
+        assert!(
+            !listing.iter().any(|p| p.ends_with("/app/.env")),
+            "top-level .env was not included: {listing:?}"
+        );
     }
 
     #[test]

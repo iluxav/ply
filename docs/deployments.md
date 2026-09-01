@@ -148,7 +148,8 @@ there and deploy with `from`.
 | `entrypoint`, `include`, `port` | repo lane, when the repo has no `ply.toml` |
 | `token_file` / `deploy_key` | private-repo credential (PAT file / SSH key) |
 | `publish`, `domain`, `env`, `env_file`, `scale`, `after` | passed through to `ply run` |
-| | a relative `env_file` (`.env/site.env`) resolves against the deployments dir |
+| | a relative `env_file` (`.env/site.env`) resolves against the deployments dir; omit it and `.env/<name>.env` is used when present |
+| | `$VAR` in `env`, `publish` and `domain` is filled from `env_file` + the environment; an undefined one is a hard error naming the key |
 | `grant_links` | mount the `[requests]` links the image asks for (dashboard-style apps) |
 | `auto` | `false` = converge only when the file is touched |
 | `source` | registry override for the `app` lane |
@@ -239,18 +240,19 @@ An app plus its database plus its cache is not a special object — it is
 # shop-db.toml                      # shop.toml
 app = "postgres"                    repo = "https://github.com/you/shop"
 stack = "shop"                      stack = "shop"
-publish = ["internal:5432"]         after = ["postgres"]
+publish = ["internal:5432"]         after = ["shop-db"]
                                     publish = ["internal:3000"]
 [env]                               [env]
 POSTGRES_PASSWORD = "…"             POSTGRES_PASSWORD = "…"
 ```
 
 `after` waits for the service to be healthy. Wiring is a line you write:
-`DATABASE_URL=postgres://postgres:$PW@todos-db.ply:5432/todos` says what
+`DATABASE_URL=postgres://postgres:$PW@shop-db.ply:5432/shop` says what
 talks to what, in the file, without depending on ply and the app having
-picked the same variable name (they injected `POSTGRES_HOST` here; an app
-reading something else would find nothing and quietly run without a
-database). `stack` is a label:
+picked the same variable name (`after` injects `SHOP_DB_HOST` / `SHOP_DB_PORT`
+/ `SHOP_DB_ADDR` here — named after the **member**, and only because
+`shop-db` is published; an app reading `POSTGRES_HOST` would find nothing and
+quietly run without a database). `stack` is a label:
 members render grouped in the dashboard. Because a stack is just files,
 it inherits everything files already have: per-member rollback and
 freshness, fleet sync, git review.

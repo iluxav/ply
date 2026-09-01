@@ -425,6 +425,13 @@ pub fn parse_run_ref(spec: &str) -> Option<(String, Option<String>)> {
 /// `17` matches 17.x.y, `17.10` matches 17.10.x, `17.10.0` exactly.
 fn version_matches(version: &semver::Version, want: &str) -> bool {
     let parts: Vec<u64> = want.split('.').filter_map(|p| p.parse().ok()).collect();
+    // `@latest`, `@stable`, `@v17`: nothing numeric parsed, so the zip below
+    // would be empty and `all` vacuously true — matching EVERY version and
+    // silently handing back the newest. A pin that says nothing is a typo,
+    // not a wildcard; matching nothing turns it into "no published X@latest".
+    if parts.is_empty() && !want.is_empty() {
+        return false;
+    }
     let actual = [version.major, version.minor, version.patch];
     parts.iter().zip(actual.iter()).all(|(w, a)| w == a)
 }
@@ -587,6 +594,25 @@ pub fn fetch_app_image(
     want: Option<&str>,
     source_spec: &str,
 ) -> Result<(PathBuf, crate::image::name::ImageName, String)> {
+    fetch_app_image_unless(name, want, source_spec, |_| None)
+}
+
+/// `fetch_app_image`, but the caller may already HAVE the resolved image
+/// somewhere ply trusts — reconcile keeps the last deployed one hardlinked
+/// under `/var/lib/ply/deploys/<name>/<filename>`. `have` is asked once the
+/// version is known and before any bytes move; `Some(path)` short-circuits
+/// the download entirely.
+///
+/// Without this, every `auto = true` deployment re-downloaded and re-hashed
+/// its full image on every 1-minute beat, only for `store.insert` to find
+/// the digest already present and discard the bytes. Resolution (one catalog
+/// read) is the cheap part and still runs, so a new version is still seen.
+pub fn fetch_app_image_unless(
+    name: &str,
+    want: Option<&str>,
+    source_spec: &str,
+    have: impl Fn(&crate::image::name::ImageName) -> Option<PathBuf>,
+) -> Result<(PathBuf, crate::image::name::ImageName, String)> {
     use crate::image::name::{Arch, ImageName, Os};
 
     // `<namespace>/<name>` looks in that namespace's catalog; a bare name
@@ -623,6 +649,12 @@ pub fn fetch_app_image(
         }));
     };
     let image = ImageName::new(name, version, os, arch)?;
+    if let Some(path) = have(&image) {
+        // Already on this host under its own name: it was fetched, verified
+        // and hardlinked by a previous beat. Its digest is the store's.
+        let digest = crate::digest::sha256_file(&path)?;
+        return Ok((path, image, digest));
+    }
     let (digest, path) = source.fetch(&image, None, &store)?;
     let manifest = crate::image::read::read_manifest(&path)?;
     if !manifest.is_app() {
@@ -658,6 +690,21 @@ pub fn fetch_app_image_pinned(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_non_numeric_pin_matches_nothing_not_everything() {
+        use super::version_matches;
+        let v = semver::Version::parse("17.10.6").unwrap();
+        assert!(version_matches(&v, "17"));
+        assert!(version_matches(&v, "17.10"));
+        assert!(version_matches(&v, "17.10.6"));
+        assert!(!version_matches(&v, "16"));
+        // `@latest` parsed to zero numeric parts, so `all()` over an empty
+        // zip was vacuously true and it matched every version — silently
+        // handing back the newest. A pin that says nothing is a typo.
+        assert!(!version_matches(&v, "latest"));
+        assert!(!version_matches(&v, "stable"));
+    }
     use super::*;
     use crate::source::Source;
 

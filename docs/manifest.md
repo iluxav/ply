@@ -61,8 +61,17 @@ alias = "github:org/repo"         # registry is used
 
 **`[package]`** — `name` + `version` produce the canonical filename
 `<name>-<version>-<os>-<arch>.img`. Names may not contain `-` followed by a
-digit (filename-parsing ambiguity). `entrypoint` is exec-style (no shell
-unless you ask for one). `user` makes ply create the passwd/group entry,
+digit (filename-parsing ambiguity). `entrypoint` is exec-style — an argv
+array, no shell. To ask for one, write a **string** instead and it becomes
+`["/bin/sh", "-c", <string>]`, which a TOML multi-line string makes readable:
+
+```toml
+entrypoint = """
+[ -f /etc/caddy/Caddyfile ] || cp /opt/edge/Caddyfile /etc/caddy/Caddyfile
+exec caddy run --config /etc/caddy/Caddyfile --watch
+"""
+```
+ `user` makes ply create the passwd/group entry,
 chown volumes, and drop privileges in the correct order. `base` names the
 package that owns `/` (FHS, libc, `/bin/sh`) — `"name@range"`, or
 `{ name, version, source }` to pin a source alias; it resolves, locks, and
@@ -125,8 +134,10 @@ default; `scope = "shared"` and `ephemeral = true` are the two modifiers.
 built against; the resolver refuses mismatched runtimes loudly instead of
 letting you segfault at 2am.
 
-**`[requests]`** — host access the image asks for: `links = ["/abs/host:/abs/container", …]`.
-Never applied on its own (a manifest ships inside the image — an image must
+**`[requests]`** — host access the image asks for:
+`links = ["/abs/host:/abs/container", …]`, or the spelled-out
+`links = [{ host = "/abs/host", at = "/abs/container" }]`. Both paths must be
+absolute in either spelling. Never applied on its own (a manifest ships inside the image — an image must
 not grant itself host access); `ply run --grant-links` is the operator's
 explicit yes, `ply systemd --grant-links` bakes the expansion into a unit.
 Without the flag the requests are listed and not mounted.
@@ -144,10 +155,12 @@ with no `[sources] default`, resolves from the official registry. Declare
 
 ## Two more files, same grammar
 
-**`[stack]`** — a ply.toml with a `[stack]` table (and no `[package]`) is a
-stack file: several apps wired for `ply up`. Members are
-`{ run = "postgres@17" }` (registry app) or `{ path = "./server" }` (local
-app dir), plus `env` and `after`. Registry members pin into the stack dir's
+**`[[app]]`** — a file with `[[app]]` blocks is a stack file: several apps
+wired for `ply up`, optionally headed by a `[stack]` table (name, version,
+`env_file`). It is the `[[app]]` array that makes it a stack — a `[stack]`
+table alone does not. Each member is `run = "postgres@17"` (registry app) or
+`run = "./server"` (local app dir), plus `env`, `after`, `publish`, `domain`,
+`volume`, `scale`. Registry members pin into the stack dir's
 `ply.lock` (`ref`, `version`, `digest.<arch>`). See
 [Stacks & local dev](/docs/stacks/).
 

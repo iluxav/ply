@@ -137,12 +137,31 @@ prints the hint only when a host actually needs it.
 
 ## Secrets
 
-Never in the image — it's a file that gets copied around. Pass secrets at
-run time from a root-only file:
+Never in the image — it's a file that gets copied around, and its manifest is
+readable with `unsquashfs` in one command. `[env]` in `ply.toml` is therefore
+the wrong place for a password. `ply build` refuses to pack credential-shaped
+files that were swept in implicitly (see [CLI reference](/docs/cli/#build-validate)).
+
+Pass secrets at run time from a root-only file:
 
 ```sh
 ply run --env-file /etc/myapp/secrets.env myapp.img
 ```
+
+**Env-file format.** `KEY=VALUE` per line; `#` starts a comment only at the
+beginning of a line; blank lines are ignored. The value is trimmed, and one
+matched pair of surrounding quotes is removed — so `PW="s3cret"` delivers
+`s3cret`, and quoting is how a value *keeps* deliberate spaces
+(`PW="  padded  "`). Splitting is on the **first** `=`, so a URL with `=` in
+its query survives. A leading `export ` is an error, not a weird key name:
+this is an env file, not a shell script.
+
+On a host, a deployment's `env_file` holds the values while the spec holds
+only the *reference* — which is what keeps a fleet repo publishable. For a
+single-app spec, a file named `.env/<deployment>.env` is picked up
+automatically; a stack file names its own with `[stack] env_file`, and a
+stack *reference* takes `env_file` beside `stack =`. See
+[Deployments & CD](/docs/deployments/).
 
 ## Supply-chain posture
 

@@ -18,7 +18,7 @@ An instance's filesystem has three write tiers:
 
 ```toml
 [volumes]
-data   = { path = "/var/lib/myapp" }                       # per-instance (default)
+data   = "/var/lib/myapp"                                  # per-instance (default)
 shared = { path = "/srv/uploads", scope = "shared" }       # opt-in shared
 cache  = { path = "/var/cache/myapp", ephemeral = true }   # GC-able
 ```

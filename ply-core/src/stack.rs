@@ -278,23 +278,36 @@ fn parse_overlay(text: &str, path: &Path) -> Result<StackOverlay> {
 /// member added, a port moved, an `after` edge changed) converges the same
 /// way a new member image does.
 ///
-/// A spelled-out stack file has a `[stack]` TABLE; a reference has a `stack`
-/// STRING. Same key, different types, so the two can never be confused.
-pub fn parse_ref(text: &str) -> Option<String> {
-    let doc: toml::Value = text.parse().ok()?;
-    // `stack` is TWO things: this reference, and the cosmetic grouping label
-    // on a single-app spec. Tell them apart structurally rather than by the
-    // string's shape — a bare `stack = "todos"` is a valid reference (it
-    // resolves against the default source), so shape says nothing. A file
-    // that names where an app comes from is that spec; nothing is both.
-    const SOURCE_KEYS: [&str; 6] = ["from", "app", "image", "url", "github", "repo"];
-    if SOURCE_KEYS.iter().any(|k| doc.get(k).is_some()) {
-        return None;
-    }
-    match doc.get("stack") {
-        Some(toml::Value::String(s)) if !s.trim().is_empty() => Some(s.trim().to_string()),
-        _ => None,
-    }
+/// `env_file` fills the published stack's `$VAR` holes on this host — the
+/// deployer's secrets for the publisher's template. `auto = false` pins the
+/// shape until the file is touched, exactly as on a single-app spec.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StackRef {
+    #[serde(rename = "stack")]
+    pub reference: String,
+    #[serde(default)]
+    pub env_file: Option<String>,
+    #[serde(default = "default_true")]
+    pub auto: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Is this deployment file a stack REFERENCE?
+///
+/// Decided by positive shape: the file deserialises as a `StackRef` — `stack`
+/// plus at most `env_file` and `auto` — and nothing else. `stack` is also the
+/// cosmetic grouping label on a single-app spec, so the first version of this
+/// check used a denylist of source keys, which meant a misspelled `form =`
+/// still hijacked the file into this lane and tore the app down. Any key a
+/// reference does not own now sends the file to `Spec::parse`, whose
+/// `deny_unknown_fields` error names the typo.
+pub fn parse_ref(text: &str) -> Option<StackRef> {
+    let r: StackRef = toml::from_str(text).ok()?;
+    (!r.reference.trim().is_empty()).then_some(r)
 }
 
 pub fn parse(text: &str, path: &Path) -> Result<Option<Stack>> {
@@ -1068,29 +1081,26 @@ scale = 2
 
     #[test]
     fn stack_label_on_an_app_spec_is_not_a_stack_reference() {
-        // A published-stack reference: nothing else in the file.
-        assert_eq!(
-            parse_ref("stack = \"iluxav/todos\"\n").as_deref(),
-            Some("iluxav/todos")
-        );
-        // A bare name is a valid reference too (resolves against the default
-        // source), so the shape of the string cannot be the discriminator.
-        assert_eq!(parse_ref("stack = \"todos\"\n").as_deref(), Some("todos"));
+        // bare name is a valid reference (resolves against the default source)
+        assert_eq!(parse_ref("stack = \"todos\"\n").unwrap().reference, "todos");
 
-        // …but the same key on a single-app spec is a cosmetic GROUPING
-        // label. Before this, such a file was hijacked into the stack-ref
-        // lane, reconcile tried to fetch a published stack called "plybox",
-        // and the app never deployed.
-        for text in [
-            "from = \"redis@8\"\nstack = \"plybox\"\n",
-            "app = \"redis\"\nstack = \"plybox\"\n",
-            "repo = \"https://github.com/o/a\"\nstack = \"plybox\"\n",
-            "image = \"/srv/x.img\"\nstack = \"plybox\"\n",
-            "url = \"https://h/x.img\"\nstack = \"plybox\"\n",
-            "github = \"o/a\"\nstack = \"plybox\"\n",
-        ] {
-            assert_eq!(parse_ref(text), None, "{text}");
-        }
+        // the same key on a single-app spec is a cosmetic GROUPING label.
+        // Before this, such a file was hijacked into the stack-ref lane and
+        // the app never deployed.
+        assert_eq!(parse_ref("from = \"redis@8\"\nstack = \"plybox\"\n"), None);
+        assert_eq!(
+            parse_ref("repo = \"https://github.com/o/a\"\nstack = \"plybox\"\n"),
+            None
+        );
+
+        // and — the case a denylist could not catch — a MISSPELLED source
+        // key. `form =` is not a reference either; it goes to Spec::parse,
+        // which names the typo instead of tearing the app down.
+        assert_eq!(parse_ref("form = \"redis@8\"\nstack = \"plybox\"\n"), None);
+        assert_eq!(
+            parse_ref("stack = \"plybox\"\npublish = [\"3000\"]\n"),
+            None
+        );
     }
 
     #[test]
@@ -1346,10 +1356,16 @@ mod stack_ref_tests {
     /// A deployment file that NAMES a published stack.
     #[test]
     fn a_reference_file_yields_the_reference() {
-        assert_eq!(
-            parse_ref("stack = \"iluxav/todos\"\n").as_deref(),
-            Some("iluxav/todos")
-        );
+        let r = parse_ref("stack = \"iluxav/todos\"\n").unwrap();
+        assert_eq!(r.reference, "iluxav/todos");
+        assert!(r.auto && r.env_file.is_none());
+        // a reference may carry the deployer's env_file and a pin — keys the
+        // old string-returning parser silently dropped
+        let r =
+            parse_ref("stack = \"iluxav/todos\"\nenv_file = \".env/todos.env\"\nauto = false\n")
+                .unwrap();
+        assert_eq!(r.env_file.as_deref(), Some(".env/todos.env"));
+        assert!(!r.auto);
     }
 
     /// A real stack file spells its members out and carries a `[stack]`

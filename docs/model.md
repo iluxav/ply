@@ -67,26 +67,30 @@ description = "Privacy-first web analytics — app + its database."
 run    = "postgres@17"                 # → ply run postgres@17
 name   = "umami-db"                    # → --name umami-db   (default: image name)
 volume = ["/var/lib/postgresql/data"]  # → --volume …
-e      = ["POSTGRES_PASSWORD=$PW", "POSTGRES_DB=umami"]
+env    = ["POSTGRES_PASSWORD=$PW", "POSTGRES_DB=umami"]
 
 [[app]]
 run     = "umami@3"
 after   = ["umami-db"]                 # → --after umami-db   (a member name)
 publish = ["internal:3000"]            # → --publish internal:3000
-e       = ['DATABASE_URL=postgresql://postgres:$PW@umami-db.ply:5432/umami']
+env     = ['DATABASE_URL=postgresql://postgres:$PW@umami-db.ply:5432/umami']
 ```
 
 Every `[[app]]` block is exactly one `ply run`. Fields map 1:1 to flags:
-`run`→the image, `name`→`--name`, `e`→`-e`, `publish`→`--publish`,
+`run`→the image, `name`→`--name`, `env`→`-e` (older files spell it `e`;
+both work, but not both on one member), `publish`→`--publish`,
 `after`→`--after`, `volume`→`--volume`, `domain`→`--domain`,
 `scale`→`--scale`. There is no stack concept beyond "these runs, ordered."
 
 ### Filling `$VAR`
 
-`$VAR` in a stack file is substituted from the environment at launch:
+`$VAR` is substituted at launch — in a stack file's `env`, `publish` and
+`domain`, **and in a single-app deployment's** too:
 
 - **`ply up`** — from the shell environment (and any `--env-file`).
-- **host** — from the deployment's own `env` / `env_file`.
+- **host** — from the deployment's own `env_file`, then the process
+  environment. A stack uses `[stack] env_file`; a single-app spec uses its
+  own `env_file`, which defaults to `.env/<name>.env` when that file exists.
 
 An undefined `$VAR` is a **hard error at launch**, never a silent empty
 value. A missing password fails loudly at deploy — not at 3am.
