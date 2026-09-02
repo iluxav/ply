@@ -15,6 +15,10 @@
 # Data persists in the `data` volume (RDB snapshots in /data).
 
 [package]
+owner = "ply"
+description = "Redis in-memory data store (docker-library env contract)"
+license = "RSALv2/SSPLv1"
+homepage = "https://redis.io"
 user = "redis:100:100"
 entrypoint = ["/bin/sh", "-c", """
 set -e
@@ -42,3 +46,8 @@ policy = "on-failure"
 # for a package with no entrypoint).
 [sources]
 default = "https://registry.plybox.sh/ply/{package}"
+
+# Params: what a stack can reference (`{redis.url}`); host/port are built-in
+# facts. No secret — redis auth stays opt-in via REDIS_PASSWORD.
+[params]
+url = "redis://{host}:{port}"

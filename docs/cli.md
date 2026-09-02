@@ -165,6 +165,38 @@ ply bundle IMAGE -o FILE                          # flatten to fat mode
 ply import docker://image:tag -o FILE             # OCI bridge (fat mode)
 ```
 
+```sh
+ply inspect postgres@17 | owner/name@1.2 | ./the.img | ./dir | stack.toml
+                         [--json] [--manifest]
+```
+Show what a package declares, read straight off its manifest — a registry
+ref resolves and fetches into the store exactly like `ply run`; a `.img`,
+a `.toml`, or a directory's `ply.toml` reads directly, no build. Default
+output:
+
+```
+$ ply inspect postgres@17
+postgres 17.10.7  app  owner: ply
+volumes:      /var/lib/postgresql/data
+links:        —
+dependencies: postgresql17 17, rclone 1.60
+params:       reference as {postgres.<name>} from a stack; set with params = { <name> = "…" }
+  database  default   postgres
+  password  secret, minted
+  url       computed  postgres://{user}:{password}@{host}:{port}/{database}
+  user      default   postgres
+facts:        name version host port addr base_url scale arch image   (built-in, read-only)
+live:         state instances started_at restarts   (after conditions only)
+```
+
+`owner: ply` shows once the image was built from a manifest declaring
+`[package] owner` — an image built before that field existed prints
+`owner: —` instead, same as any manifest that omits it.
+
+`--json` prints the record — the same shape `ply push` sends, and what
+`ply push --dry-run` prints; `--manifest` prints the embedded
+`manifest_toml` verbatim.
+
 ## Package authoring
 
 ```sh
@@ -200,8 +232,47 @@ ply sync                          # pre-fetch the host policy's packages
 ```sh
 ply login                         # GitHub device flow; first sign-in chooses a username
 ply whoami                        # your namespace, and any others you may publish to
-ply push myapp-1.0.0-linux-x64.img   # publish under <you>/ (append-only)
-ply push https://github.com/you/app/releases/download/v1.0.0/myapp-1.0.0-linux-x64.img
+ply push .                        # app/keg dir, or a stack dir/stack.toml
+ply push myapp-1.0.0-linux-x64.img   # a built image (append-only)
+ply push myapp-1.0.0-linux-x64.img --src https://…/myapp-{version}-linux-{arch}.img
+```
+
+The manifest embedded in what you push (or the stack file's own text) IS
+the record `ply push` sends — never the working-copy `ply.toml` for an
+app, which may differ from what got built.
+
+| `ply push TARGET …` | build | upload | publish |
+|---|---|---|---|
+| `TARGET` = app/keg dir | yes | yes | manifest read off the built image; artifact `verified: true` |
+| `TARGET` = `.img` | no | yes | same |
+| `TARGET` (dir) `--src URL` | yes, for sha256/bytes | no | `verified: false`; `URL` may template `{version}`/`{arch}` |
+| `TARGET` = `.img` `--src URL` | no | no | same |
+| `TARGET` = stack dir / `stack.toml` | no | no | `type = "stack"`, no artifacts; members must be registry refs or URLs |
+| `… --arch arm64` | cross-builds a DIR, as `ply build --arch` | yes/no | appends the arm64 artifact to the version |
+| `… --dry-run` | as above | no | prints the record instead of sending it |
+| `… --as NAMESPACE` | | | sets `owner` when the manifest has none; conflicts with a different `[package] owner` |
+
+An existing `.img` already knows its arch — its name says so — so `--arch`
+there may only confirm it: `ply push ./a-1.0.0-linux-arm64.img --arch x64`
+is refused rather than publishing arm64 bytes as x64. `--dry-run` is the
+plan and nothing else: it needs no key, no credentials file and no network,
+so CI can print exactly what a push would send before anything is
+configured (the `owner` the server derives from your key is left unset
+unless the manifest or `--as` names one).
+
+A bare `https://` target carries no manifest and is refused: `ply push
+./the.img --src https://…` instead. Owner resolution: `[package] owner`
+(or `[stack] owner`) wins; `--as` fills a manifest that names none; the two
+disagreeing stops the push (`manifest says owner = "ply" but --as other
+was given — drop one of them`). Neither, and you haven't chosen a
+namespace yet: `ply push` points you at `plybox.sh/account/`.
+
+```
+$ ply push .
+published ply/postgres@17.10.7
+  https://registry.plybox.sh/ply/postgres/postgres-17.10.7.toml
+use:
+  ply run ply/postgres@17.10.7
 ```
 
 ### Publishing from CI
@@ -230,29 +301,37 @@ machine is logged in yet.
 
 ### Publishing without ply installed
 
-`ply push` is a convenience over one HTTP request. A pipeline that never
-installs ply publishes with curl:
+`ply push` is two HTTP calls: upload the bytes, then publish the record —
+the manifest, verbatim and as JSON, plus where the bytes landed. A
+pipeline that never installs ply does both with curl; `ply push . --dry-run`
+(run once, anywhere ply is installed) prints exactly the JSON the second
+call needs.
 
 ```sh
-# bytes — the registry stores them
+# 1. bytes — the registry stores them and hands back the src to cite below
 curl -fsS -X POST \
   -H "Authorization: Bearer $PLY_TOKEN" \
+  -H "X-Ply-Filename: myapp-1.2.0-linux-x64.img" \
+  -H "X-Ply-Sha256: $(sha256sum myapp-1.2.0-linux-x64.img | cut -d' ' -f1)" \
   --data-binary @myapp-1.2.0-linux-x64.img \
-  https://plybox.sh/api/push/<namespace>/myapp-1.2.0-linux-x64.img
+  https://plybox.sh/api/upload/
 
-# a URL — the registry fetches it once, hashes it, and stores no bytes
+# 2. the record — the manifest is the publish
 curl -fsS -X POST \
   -H "Authorization: Bearer $PLY_TOKEN" -H "Content-Type: application/json" \
-  -d '{"url":"https://github.com/you/app/releases/download/v1.2.0/myapp-1.2.0-linux-x64.img"}' \
-  https://plybox.sh/api/push/<namespace>
+  -d @record.json \
+  https://plybox.sh/api/publish/
 ```
 
-The namespace in the path must be one your key may publish to; omit the
-path entirely (`/api/push` with an `X-Ply-Filename` header) and it defaults
-to your login. What the CLI adds is the derived catalog metadata — the
-`X-Ply-Meta` header carrying the image's volumes, links and dependencies,
-read out of its own manifest. Curl-published packages simply catalog
-without it.
+`record.json` is `{owner, name, version, type, manifest_toml, manifest,
+artifacts: [{arch, src, sha256, bytes, verified}]}` — `ply push --dry-run`
+prints it. `verified` is always present in what you send, but the server
+decides the real value from what it can check, not from what you claim:
+an artifact's `src` under `registry.plybox.sh/<owner>/<name>/` must name
+an object step 1 uploaded; any other host records as external with
+`verified: false` (see `--src` below). Add `X-Ply-Namespace: <owner>` to
+step 1 to upload under a namespace other than your login; a stack publish
+has no artifacts, so it skips step 1 entirely.
 
 ### Namespaces
 
@@ -273,12 +352,14 @@ Operators grant the official shelves declaratively — `PLY_ADMIN_LOGINS` on
 the site deployment (comma-separated GitHub logins) grants them on that
 user's next sign-in.
 
-The URL form registers an image where it already lives — the registry
-fetches it once, verifies the squashfs magic, and pins the sha256, but
-never stores the bytes. Your CI keeps publishing to GitHub Releases;
-the registry stays a catalog. URLs must be https, carry no query string
-(signed links expire), and end in the canonical
-`<name>-<x.y.z>-linux-<arch>.img` filename.
+`--src` registers an artifact where it already lives instead of uploading
+it: `ply push image.img --src https://…` hashes the local bytes itself and
+sends only the record — the registry never fetches the URL itself, so the
+artifact records `verified: false` (a later verification pass may confirm
+it without a protocol change). Your CI keeps publishing to GitHub
+Releases; the registry stays a catalog. The image still has to exist
+where `ply push` runs, even though nothing uploads — build it, or have it
+already on disk — because ply computes the hash locally.
 
 Installing needs no account — reads are public files. Signing out is
 deleting `~/.config/ply/credentials`; revoke keys with `ply key rm` or at

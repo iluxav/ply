@@ -3,7 +3,7 @@
 TARGET := x86_64-unknown-linux-musl
 BIN    := target/$(TARGET)/release/ply
 
-.PHONY: check fmt build test static release release-cli release-web install uninstall registry-catalog registry-push registry-state registry registry-all
+.PHONY: check fmt build test static release release-cli release-web install uninstall registry-catalog registry-push registry registry-all
 
 # fast feedback: fmt + clippy + tests
 check:
@@ -102,9 +102,11 @@ registry-catalog:
 registry-push:
 	./scripts/registry-push.mjs --catalog $(CATALOG) --limit $(LIMIT) --jobs $(JOBS)
 
-# republish state.json + re-render the registry page, no conversions
-registry-state:
-	./scripts/registry-push.mjs --state-only
+# NOTE: there is no `registry-state` target any more. This lane uploads
+# bytes (image + .toml + index.json) and nothing else — state.json is
+# derived from the registry's records table, across every namespace, so
+# rendering a snapshot from the keg ledger would delete most of the catalog.
+# To get keg metadata into the catalog: ./scripts/registry-republish.mjs
 
 # the daily job for one arch: catalog refresh + delta push
 registry: registry-catalog registry-push

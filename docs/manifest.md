@@ -13,6 +13,10 @@ The complete manifest surface. Only `[package]` is required.
 [package]
 name = "myapp"                    # required; may not contain "-<digit>"
 version = "1.2.0"                 # semver; part of the image filename
+owner = "myname"                  # optional: registry namespace ply push uses
+description = "One line for ply search / the registry"     # optional
+license = "MIT"                   # optional: SPDX id or free text
+homepage = "https://example.com"  # optional
 entrypoint = ["node", "server.js"]
 user = "appuser:1000:1000"        # optional: run as name:uid:gid
 workdir = "/opt/myapp"            # optional: cwd before exec (default: the app prefix)
@@ -108,6 +112,14 @@ capabilities = ["chown", "net_bind_service"]  # exactly these
 Docker's posture. Names are case-insensitive and the `CAP_` prefix is
 optional; a typo fails at `ply build`, not at 3am. See
 [Security & rootless](/docs/security/).
+
+**`owner`, `description`, `license`, `homepage`** are optional and
+registry-facing. `owner` is the namespace `ply push` publishes under —
+set it here, or leave it out and pass `--as NAMESPACE` (or publish under
+your own login). The other three surface on the registry page and in
+`ply search`'s one-liner, read straight from this manifest; there is no
+separate metadata file to keep in sync. See
+[Registries & publishing](/docs/registries/).
 
 **`[dependencies]`** — the key IS the package name. String values are
 version ranges against the `default` source; table values pick a source
@@ -266,8 +278,10 @@ whether or not the key it names reads a secret. A manifest with no
 ## Two more files, same grammar
 
 **`[[app]]`** — a file with `[[app]]` blocks is a stack file: several apps
-wired for `ply up`, optionally headed by a `[stack]` table (name, version,
-`env_file`). It is the `[[app]]` array that makes it a stack — a `[stack]`
+wired for `ply up`, optionally headed by a `[stack]` table (name, owner,
+version, description, `env_file`). `owner` is the registry namespace
+`ply push` publishes the stack under — same rules as `[package] owner`.
+It is the `[[app]]` array that makes it a stack — a `[stack]`
 table alone does not. Each member is `run = "postgres@17"` (registry app) or
 `run = "./server"` (local app dir), plus `name`, `env`, `params`, `after`,
 `publish`, `domain`, `volume`, `scale`. Registry members pin into the stack

@@ -8,6 +8,10 @@
 [package]
 name = "pg-backup"
 version = "0.1.2"
+owner = "ply"
+description = "Postgres backups on a schedule: pg_dump + rclone to any S3/R2, pruned by age — composed entirely from layers"
+license = "MIT"
+homepage = "https://plybox.sh/docs/deployments/"
 entrypoint = ["./backup.sh"]
 include = ["backup.sh", "cacert.pem"]
 base = "debian@13"

@@ -22,6 +22,7 @@ pub mod params;
 pub mod paths;
 pub mod policy;
 pub mod rebase;
+pub mod record;
 pub mod resolve;
 pub mod runtime;
 pub mod secrets;

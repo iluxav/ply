@@ -65,6 +65,9 @@ pub struct Member {
 #[derive(Debug)]
 pub struct Stack {
     pub name: Option<String>,
+    /// Registry namespace this stack publishes under (`<owner>/<name>`).
+    /// Absent for a local/unpublished stack.
+    pub owner: Option<String>,
     /// Semver of the stack as a publishable artifact (required only to
     /// `ply push` it; optional for local `ply up`).
     pub version: Option<String>,
@@ -349,7 +352,8 @@ pub fn parse(text: &str, path: &Path) -> Result<Option<Stack>> {
         )));
     }
 
-    let (mut name, mut version, mut description, mut env_file) = (None, None, None, None);
+    let (mut name, mut owner, mut version, mut description, mut env_file) =
+        (None, None, None, None, None);
     if let Some(meta) = doc.get("stack") {
         let meta = meta.as_table().ok_or_else(|| {
             Error::Manifest(format!("{}: [stack] must be a table", path.display()))
@@ -357,16 +361,20 @@ pub fn parse(text: &str, path: &Path) -> Result<Option<Stack>> {
         for key in meta.keys() {
             if !matches!(
                 key.as_str(),
-                "name" | "version" | "description" | "env_file"
+                "name" | "owner" | "version" | "description" | "env_file"
             ) {
                 return Err(Error::Manifest(format!(
-                    "{}: [stack] has unknown key `{key}` (expected name, version, description, env_file)",
+                    "{}: [stack] has unknown key `{key}` (expected name, owner, version, description, env_file)",
                     path.display()
                 )));
             }
         }
         name = meta
             .get("name")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        owner = meta
+            .get("owner")
             .and_then(|v| v.as_str())
             .map(str::to_string);
         version = meta
@@ -493,6 +501,7 @@ pub fn parse(text: &str, path: &Path) -> Result<Option<Stack>> {
 
     Ok(Some(Stack {
         name,
+        owner,
         version,
         description,
         env_file,
@@ -1738,6 +1747,17 @@ scale = 2
         assert_eq!(stack.members[1].after, vec!["db"]);
         assert_eq!(stack.members[1].publish, vec!["internal:8080"]);
         assert_eq!(stack.members[2].scale, Some(2));
+    }
+
+    #[test]
+    fn stack_header_accepts_owner() {
+        let s = parse(
+            "[stack]\nname = \"todos\"\nowner = \"iluxav\"\nversion = \"0.1.0\"\n[[app]]\nrun = \"postgres@17\"\n",
+            Path::new("stack.toml"),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(s.owner.as_deref(), Some("iluxav"));
     }
 
     #[test]

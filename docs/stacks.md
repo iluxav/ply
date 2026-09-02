@@ -370,13 +370,22 @@ ply run ./server      # same, from anywhere
 
 ## Publishing and running a stack from the registry
 
-A stack with a `[stack] name` and `version` is publishable — `ply push`
-uploads its toml **template** (the `$VAR` holes stay in) and records its
-`[[app]]` sequence in the catalog:
+A stack with a `[stack] name`, `version`, and optional `owner` is
+publishable — `ply push` records its toml **template** verbatim (the
+`$VAR` holes stay in). There is no image, so nothing builds and nothing
+uploads:
 
 ```sh
-ply push ./umami-stack           # or ./umami.stack.toml
+ply push .              # a directory whose ply.toml is a stack, or
+ply push stack.toml     # any stack file
 ```
+
+`owner` picks the namespace the same way `[package] owner` does for an
+app: set it in the `[stack]` table, or pass `--as NAMESPACE` when the file
+names none. Members must be registry refs (`postgres@17`) or URLs — a
+`./dir` member is refused, since it names nothing on someone else's
+machine; publish that app first, then reference it by name. The registry
+writes the template to `{owner}/{name}/{name}-{version}.toml`.
 
 Anyone can then run it by name — the toml is fetched and brought up, holes
 filled from the environment at launch:

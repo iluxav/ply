@@ -17,7 +17,11 @@
 
 [package]
 name = "postgres"
-version = "17.10.6"
+version = "17.10.7"
+owner = "ply"
+description = "PostgreSQL relational database (docker-library env contract)"
+license = "PostgreSQL"
+homepage = "https://www.postgresql.org"
 user = "postgres:70:70"
 entrypoint = ["./run.sh"]
 # SIGTERM to a postmaster is a SMART shutdown: it waits for every client to

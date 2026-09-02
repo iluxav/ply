@@ -6,7 +6,6 @@
 //   ./scripts/registry-push.mjs --dry-run                 # show the plan only
 //   ./scripts/registry-push.mjs --jobs 8                  # parallel workers (default 4)
 //   ./scripts/registry-push.mjs --reindex                 # regen ALL index.json from ledger
-//   ./scripts/registry-push.mjs --state-only              # republish state.json + page only
 //   ./scripts/registry-push.mjs --file out/foo-1.2.3-linux-arm64.img [--file …]
 //                                                         # push prebuilt image(s) as-is
 //                                                         # (--namespace ply is the default)
@@ -22,11 +21,19 @@
 //
 // Uploads use wrangler (`wrangler login` once). Each repo's index.json is
 // regenerated from the ledger after the batch.
+//
+// This lane writes BYTES ONLY — the image, its `<name>-<version>.toml`, and
+// the package's index.json. It does NOT write state.json, and must not: the
+// catalog is derived from the registry's `records` table, which holds every
+// namespace (ply/postgres, notify, pg-backup, dashboard, plybox-web, the
+// community's). A snapshot rendered from this 8-package deb ledger would
+// replace all of it. The keg lane's path into the catalog is
+// `scripts/registry-republish.mjs` → the registry API.
 
-import { execFile, execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -69,6 +76,20 @@ for (let i = 0; i < argv.length; i++) {
   else { console.error(`unknown argument: ${argv[i]}`); process.exit(2); }
 }
 
+// --state-only is gone, and cannot be quietly ignored: the runbook used to
+// end with it, and running it now would delete most of the catalog.
+if (args.stateOnly) {
+  console.error(
+    "--state-only was removed: this lane no longer writes state.json.\n" +
+    "The catalog is derived from the registry's records table — every namespace,\n" +
+    "not just this ledger's kegs — so a snapshot rendered here would delete\n" +
+    "ply/postgres, notify, pg-backup, dashboard and plybox-web, and regress redis.\n" +
+    "To republish keg metadata into the catalog, go through the API:\n" +
+    "  ./scripts/registry-republish.mjs",
+  );
+  process.exit(2);
+}
+
 // --file mode: parse canonical filenames up front so a typo dies before any upload
 const manualPushes = args.files.map((file) => {
   const base = file.split("/").at(-1);
@@ -88,8 +109,8 @@ const manualPushes = args.files.map((file) => {
 });
 
 // --- load catalog + ledger ----------------------------------------------------
-// The apk catalog only drives batch conversion; --file and --state-only
-// runs work without it (the alpine lane is retired).
+// The apk catalog only drives batch conversion; a --file run works without
+// it (the alpine lane is retired).
 const catalog = existsSync(args.catalog)
   ? JSON.parse(readFileSync(args.catalog, "utf8"))
   : { package_count: 0, packages: [], arch: "x86_64", tier: "none", branch: "-" };
@@ -118,10 +139,6 @@ console.log(
 );
 console.log(`batch:   ${todo.length} to convert+push${args.dryRun ? " (dry run)" : ""}\n`);
 
-if (args.stateOnly) {
-  await publishState();
-  process.exit(0);
-}
 if (args.dryRun) {
   for (const p of todo) console.log(`  would process ${p.apk}@${p.apk_version} -> ${p.upload_path}`);
   for (const p of manualPushes) console.log(`  would push ${p.file} -> ${p.upload_path}`);
@@ -147,23 +164,91 @@ function errLine(e) {
   return lines.find((l) => l.includes("[ERROR]")) ?? lines.at(-1) ?? "unknown error";
 }
 
-// v2 catalog metadata, derived from the image itself via `ply inspect`
-// (client-derives, server-stores). Best-effort: a missing/old `ply` binary
-// leaves the entry without volumes/deps — `src` still comes from the path.
+// v3: the manifest is the record. `table`/`str`/`derive` reproduce
+// app/lib/manifest.ts::derive field-for-field, so this static-bucket lane
+// (R2 + a hand-kept ledger, never the registry API) and the DB-backed one
+// agree on what a manifest means.
+const table = (m, key) => {
+  const v = m?.[key];
+  return v && typeof v === "object" && !Array.isArray(v) ? v : {};
+};
+const str = (v) => (typeof v === "string" ? v : "");
+
+function derive(m) {
+  const pkg = table(m, "package");
+  const volumes = Object.values(table(m, "volumes"))
+    .map((v) => str(v?.path))
+    .filter(Boolean);
+  const linksRaw = table(m, "requests").links;
+  const links = Array.isArray(linksRaw)
+    ? linksRaw.map((l) => (typeof l === "string" ? l : `${str(l?.host)}:${str(l?.at)}`))
+    : [];
+  const ports = Object.values(table(m, "ports"));
+  const publish = ports.length === 1 && typeof ports[0] === "number" ? `internal:${ports[0]}` : undefined;
+  const dependencies = {};
+  for (const [k, v] of Object.entries(table(m, "dependencies"))) {
+    dependencies[k] = typeof v === "string" ? v : str(v?.version);
+  }
+  return {
+    description: str(pkg.description),
+    license: str(pkg.license),
+    homepage: str(pkg.homepage),
+    volumes,
+    links,
+    ...(publish ? { publish } : {}),
+    dependencies,
+    params: table(m, "params"),
+  };
+}
+
+// v3 metadata, derived from the image itself via `ply inspect --json`
+// (client-derives, server-stores — this lane never used the registry API).
+// Best-effort: a missing/old `ply` binary leaves the entry without v3
+// fields — `src` still comes from the path.
 async function deriveMeta(imgPath) {
   try {
     const { stdout } = await execFileAsync(args.ply, ["inspect", imgPath, "--json"],
       { maxBuffer: 8 * 1024 * 1024 });
-    const m = JSON.parse(stdout);
-    return {
-      type: m.type ?? "layer",
-      volumes: m.volumes ?? [],
-      links: m.links ?? [],
-      dependencies: m.dependencies ?? [],
-    };
+    const record = JSON.parse(stdout);
+    return { type: record.type ?? "layer", ...derive(record.manifest ?? {}) };
   } catch (e) {
-    console.log(`  (meta derive failed for ${imgPath.split("/").at(-1)}: ${errLine(e)}) — no v2 metadata`);
+    console.log(`  (meta derive failed for ${imgPath.split("/").at(-1)}: ${errLine(e)}) — no v3 metadata`);
     return null;
+  }
+}
+
+// v3: upload the manifest .toml beside the image — arch-less
+// (`{name}-{version}.toml`, the same URL for every arch of a version, per
+// the registry's read-side file layout). Best-effort on both extraction and
+// upload: a failure leaves the ledger entry without `manifest_toml_path`, so
+// nothing downstream points a `manifest` URL at bytes that were never written.
+async function uploadManifestToml(imgPath, uploadDir, name, version) {
+  let text;
+  try {
+    const { stdout } = await execFileAsync(args.ply, ["inspect", imgPath, "--manifest"],
+      { maxBuffer: 8 * 1024 * 1024 });
+    // strip exactly the trailing newline `println!` adds, so the uploaded
+    // bytes are the embedded manifest text verbatim
+    text = stdout.endsWith("\n") ? stdout.slice(0, -1) : stdout;
+  } catch (e) {
+    console.log(`  (.toml extract failed for ${name}@${version}: ${errLine(e)}) — no manifest uploaded`);
+    return null;
+  }
+  const uploadPath = `${uploadDir}/${name}-${version}.toml`;
+  const tmp = join(workdir, `manifest-${name}-${version}.toml`);
+  writeFileSync(tmp, text);
+  try {
+    await execFileAsync("npx", ["wrangler", "r2", "object", "put",
+      `${args.bucket}/${uploadPath}`, "--file", tmp, "--remote",
+      "--cache-control", "public, max-age=31536000, immutable",
+      "--content-type", "application/toml"],
+      { maxBuffer: 16 * 1024 * 1024 });
+    return uploadPath;
+  } catch (e) {
+    console.log(`  (.toml upload failed for ${name}@${version}: ${errLine(e)}) — no manifest URL recorded`);
+    return null;
+  } finally {
+    rmSync(tmp, { force: true });
   }
 }
 
@@ -204,9 +289,13 @@ async function processOne(p) {
       "--content-type", "application/octet-stream"],
       { maxBuffer: 16 * 1024 * 1024 });
 
-    // 3. ledger (written after every success — crash-safe deltas; JS is
-    // single-threaded, so concurrent tasks can't interleave inside this block)
+    // 3. v3: derive metadata from the image itself and upload its manifest
+    // .toml beside it — both best-effort (see the two functions above).
     const derived = await deriveMeta(img);
+    const manifestTomlPath = await uploadManifestToml(img, dirname(p.upload_path), p.name, p.version);
+
+    // 4. ledger (written after every success — crash-safe deltas; JS is
+    // single-threaded, so concurrent tasks can't interleave inside this block)
     state[ledgerKey(p)] = {
       name: p.name,
       version: p.version,
@@ -214,6 +303,8 @@ async function processOne(p) {
       upload_path: p.upload_path,
       bytes,
       pushed_at: new Date().toISOString(),
+      verified: true,
+      ...(manifestTomlPath ? { manifest_toml_path: manifestTomlPath } : {}),
       ...(derived ?? {}),
     };
     saveState();
@@ -254,6 +345,7 @@ for (const p of manualPushes) {
       "--content-type", "application/octet-stream"],
       { maxBuffer: 16 * 1024 * 1024 });
     const derived = await deriveMeta(p.file);
+    const manifestTomlPath = await uploadManifestToml(p.file, dirname(p.upload_path), p.name, p.version);
     state[key] = {
       name: p.name,
       version: p.version,
@@ -261,6 +353,8 @@ for (const p of manualPushes) {
       upload_path: p.upload_path,
       bytes: statSync(p.file).size,
       pushed_at: new Date().toISOString(),
+      verified: true,
+      ...(manifestTomlPath ? { manifest_toml_path: manifestTomlPath } : {}),
       ...(derived ?? {}),
     };
     saveState();
@@ -282,10 +376,16 @@ const reposToIndex = args.reindex
   : touchedRepos;
 let indexFailed = 0;
 for (const repoDir of reposToIndex) {
-  const imgs = Object.values(state)
-    .filter((e) => e.upload_path && dirname(e.upload_path) === repoDir).map((e) => e.img).sort();
+  const repoEntries = Object.values(state)
+    .filter((e) => e.upload_path && dirname(e.upload_path) === repoDir);
+  const imgs = repoEntries.map((e) => e.img).sort();
+  // v3: the manifest .toml beside each image — one per version, so dedupe
+  // across arches that share it.
+  const tomls = [...new Set(
+    repoEntries.filter((e) => e.manifest_toml_path).map((e) => e.manifest_toml_path.split("/").at(-1)),
+  )].sort();
   const indexFile = join(workdir, `index-${repoDir.replaceAll("/", "-")}.json`);
-  writeFileSync(indexFile, JSON.stringify(imgs));
+  writeFileSync(indexFile, JSON.stringify([...imgs, ...tomls]));
   try {
     await execFileAsync("npx", ["wrangler", "r2", "object", "put",
       `${args.bucket}/${repoDir}/index.json`, "--file", indexFile, "--remote",
@@ -300,15 +400,6 @@ for (const repoDir of reposToIndex) {
   rmSync(indexFile, { force: true });
 }
 
-if (reposToIndex.size > 0) {
-  try {
-    await publishState();
-  } catch (e) {
-    console.log(`publishState FAILED: ${e.message} — rerun with --state-only`);
-    process.exitCode = 1;
-  }
-}
-
 console.log(`\ndone: ${ok} pushed, ${failed} failed, ` +
   `${reposToIndex.size - indexFailed}/${reposToIndex.size} index.json updated`);
 console.log(`ledger: ${args.state} (${Object.keys(state).length} total)`);
@@ -316,141 +407,7 @@ if (indexFailed > 0) {
   console.log(`${indexFailed} index.json uploads failed — rerun with --reindex`);
   process.exitCode = 1;
 }
-
-// --- state.json: the machine-readable registry snapshot, served by the CDN ------
-// The registry web page (web/registry/index.html) fetches /state.json and
-// renders it. Sizes come from the ledger; entries pushed before sizes were
-// recorded (or by hand) get a one-time HEAD against the CDN, cached back
-// into the ledger.
-async function publishState() {
-  const entries = Object.values(state).filter((e) => e.upload_path);
-
-  for (const e of entries) {
-    if (e.bytes) continue;
-    try {
-      const res = await fetch(`https://registry.plybox.sh/${e.upload_path}`, { method: "HEAD" });
-      if (res.ok) { e.bytes = parseInt(res.headers.get("content-length") ?? "0", 10); saveState(); }
-    } catch { /* size stays unknown; page shows a dash */ }
-  }
-
-  const meta = new Map(catalog.packages.map((p) => [p.name, p]));
-  // curated metadata: registry/meta/<owner>/<name>.json — the catalog is
-  // code-reviewed; type/contract/origin come from git, not from a UI build
-  const curated = new Map();
-  const metaRoot = join(ROOT, "registry/meta");
-  if (existsSync(metaRoot)) {
-    for (const owner of readdirSync(metaRoot)) {
-      const ownerDir = join(metaRoot, owner);
-      if (!statSync(ownerDir).isDirectory()) continue;
-      for (const f of readdirSync(ownerDir)) {
-        if (!f.endsWith(".json")) continue;
-        curated.set(f.slice(0, -5), { owner, ...JSON.parse(readFileSync(join(ownerDir, f), "utf8")) });
-      }
-    }
-  }
-  const byKey = new Map(); // "namespace/name" -> package record
-  const seenImg = new Set();
-  for (const e of entries) {
-    if (seenImg.has(e.upload_path)) continue; // manual + apk entry for the same image
-    seenImg.add(e.upload_path);
-    const namespace = e.upload_path.split("/")[0];
-    const key = `${namespace}/${e.name}`;
-    if (!byKey.has(key)) {
-      const m = meta.get(e.name);
-      const c = curated.get(e.name) ?? {};
-      byKey.set(key, {
-        namespace,
-        owner: c.owner ?? "ply",
-        name: e.name,
-        // type is derived from the image (client-derives); a curated override
-        // still wins, then the namespace default for pre-derive ledger rows.
-        type: e.type ?? c.type ?? (namespace === "apps" ? "app" : "layer"),
-        description: c.description ?? m?.description ?? "",
-        license: c.license ?? m?.license ?? "",
-        homepage: c.homepage ?? m?.url ?? "",
-        contract: c.contract,
-        publish: c.publish,
-        grant_links: c.grant_links,
-        origin: c.origin,
-        // Provenance: unmodified Alpine build. repo/apk/origin locate the
-        // package page and the aports recipe (license text, source tarball).
-        alpine: m ? { branch: catalog.branch, repo: m.repo, apk: m.apk, origin: m.origin } : undefined,
-        versions: [],
-      });
-    }
-    byKey.get(key).versions.push({
-      version: e.version,
-      img: e.img,
-      arch: e.img.endsWith("-arm64.img") ? "arm64" : "x64",
-      // src is the v2 canonical location — a full URL. path is kept for the
-      // current site reader until the whole catalog is on src.
-      src: `https://registry.plybox.sh/${e.upload_path}`,
-      path: e.upload_path,
-      bytes: e.bytes ?? 0,
-      pushed_at: e.pushed_at,
-      ...(e.volumes?.length ? { volumes: e.volumes } : {}),
-      ...(e.links?.length ? { links: e.links } : {}),
-      ...(e.dependencies?.length ? { dependencies: e.dependencies } : {}),
-    });
-  }
-  const packages = [...byKey.values()].sort((a, b) =>
-    a.namespace === b.namespace ? a.name.localeCompare(b.name) : a.namespace.localeCompare(b.namespace));
-  for (const p of packages)
-    p.versions.sort((a, b) => a.version.localeCompare(b.version, undefined, { numeric: true }));
-
-  const snapshot = (pkgs) => ({
-    updated: new Date().toISOString().replace(/\.\d+Z$/, "Z"),
-    package_count: pkgs.length,
-    image_count: pkgs.reduce((n, p) => n + p.versions.length, 0),
-    total_bytes: pkgs.reduce((n, p) => n + p.versions.reduce((m, v) => m + v.bytes, 0), 0),
-    packages: pkgs,
-  });
-
-  const dir = join(ROOT, "scripts/.push-work");
-  mkdirSync(dir, { recursive: true });
-  const publish = (key, obj) => {
-    const file = join(dir, key.replace(/\//g, "__"));
-    writeFileSync(file, JSON.stringify(obj, null, 1));
-    execFileSync("npx", ["wrangler", "r2", "object", "put",
-      `${args.bucket}/${key}`, "--file", file, "--remote",
-      "--cache-control", "public, max-age=30", "--content-type", "application/json"],
-      { stdio: ["ignore", "ignore", "pipe"] });
-    rmSync(file, { force: true });
-    console.log(`${key} published (${obj.package_count} packages, ${obj.image_count} images)`);
-  };
-
-  // Root: the website's view of everything. Community namespaces are
-  // pushed through the site's /api/push/ and own their slice of this
-  // file — preserve every namespace the ledger doesn't know. The
-  // cache-buster query skips the CDN so a minutes-old push can't be lost.
-  let foreign = [];
-  try {
-    const cur = await (await fetch(`https://registry.plybox.sh/state.json?t=${Date.now()}`)).json();
-    const mine = new Set(packages.map((p) => p.namespace));
-    foreign = (cur.packages ?? []).filter((p) => p.namespace && !mine.has(p.namespace));
-  } catch (e) {
-    console.log(`WARN: could not read current state.json (${e.message}) — community entries may be dropped this publish`);
-  }
-  const everything = [...packages, ...foreign].sort((a, b) =>
-    a.namespace === b.namespace ? a.name.localeCompare(b.name) : a.namespace.localeCompare(b.namespace));
-  publish("state.json", snapshot(everything));
-  // Per namespace: the catalog `ply search` / `ply add` read at the source
-  // prefix (https://registry.plybox.sh/<ns>/state.json).
-  for (const ns of new Set(packages.map((p) => p.namespace)))
-    publish(`${ns}/state.json`, snapshot(packages.filter((p) => p.namespace === ns)));
-
-  // The browse UI lives at plybox.sh/registry now — the bucket's root page
-  // is a permanent redirect so old links keep working.
-  const page = join(dir, "registry-index.html");
-  writeFileSync(page, `<!doctype html><meta charset="utf-8">
-<meta http-equiv="refresh" content="0; url=https://plybox.sh/registry/">
-<title>ply registry</title>
-<a href="https://plybox.sh/registry/">browse the registry at plybox.sh/registry</a>
-`);
-  execFileSync("npx", ["wrangler", "r2", "object", "put",
-    `${args.bucket}/index.html`, "--file", page, "--remote",
-    "--cache-control", "public, max-age=300", "--content-type", "text/html"],
-    { stdio: ["ignore", "ignore", "pipe"] });
-  rmSync(page, { force: true });
-  console.log("registry index.html re-rendered and published");
+if (ok > 0) {
+  console.log("bytes are up; the catalog is not — publish these versions into it with:");
+  console.log("  ./scripts/registry-republish.mjs");
 }

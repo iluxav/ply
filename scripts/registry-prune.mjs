@@ -8,7 +8,7 @@
 //   ./scripts/apk-catalog.mjs --tier cli --arch aarch64 -o /tmp/cli-arm64.json
 //   ./scripts/registry-prune.mjs --keep /tmp/cli-x64.json --keep /tmp/cli-arm64.json            # dry-run (plan only)
 //   ./scripts/registry-prune.mjs --keep /tmp/cli-x64.json --keep /tmp/cli-arm64.json --delete   # do it
-//   ./scripts/registry-push.mjs --state-only                                                    # then republish state + page
+//   ./scripts/registry-republish.mjs                                                            # then refresh the catalog
 //
 // NEVER run while a registry-push batch is running (shared ledger).
 // Post-launch this script should not exist: published versions are forever.
@@ -152,4 +152,4 @@ await Promise.all(Array.from({ length: Math.min(args.jobs, repoList.length) }, (
 
 console.log(`\npruned ${done} images (${failed} failed), ` +
   `${indexed} index.json regenerated, ${indexDeleted} index.json deleted`);
-console.log("now republish the snapshot:  ./scripts/registry-push.mjs --state-only");
+console.log("now refresh the catalog:  ./scripts/registry-republish.mjs");

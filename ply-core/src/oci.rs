@@ -458,6 +458,10 @@ pub fn import(spec: &str, output: &Path) -> Result<ImportOutcome> {
             // user. ply-native packages never need this — [package] user does
             // the same job from the parent, before rights stripping.
             capabilities: Some(crate::manifest::Capabilities::Preset("oci".into())),
+            owner: None,
+            description: None,
+            license: None,
+            homepage: None,
             include: vec![],
             isolation: "ns".into(),
         },

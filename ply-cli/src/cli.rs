@@ -91,7 +91,8 @@ pub enum Command {
     /// Validate an image, optionally against a host runtime policy
     Check(CheckArgs),
 
-    /// Show an image's derived catalog metadata (type, volumes, links, deps)
+    /// Show a package's record: type, owner, volumes, links, dependencies,
+    /// and params — from a registry ref, a local .img, a .toml, or a dir
     Inspect(InspectArgs),
 
     /// Import an OCI/Docker image as a self-sufficient (fat) ply image
@@ -149,7 +150,12 @@ pub enum Command {
     /// and set PLY_TOKEN in the workflow.
     #[command(subcommand)]
     Key(KeyCommand),
-    /// Publish an image to the registry under your namespace
+    /// Publish an app, a keg or a stack to the registry under your namespace
+    ///
+    /// The manifest inside the artifact IS what gets published: `ply push`
+    /// uploads the bytes (unless `--src` says where they already live) and
+    /// sends the record — manifest text, its JSON rendering, and the
+    /// artifact's arch/sha256/bytes.
     Push(PushArgs),
 
     /// Pre-fetch every package in the host policy into the store
@@ -501,13 +507,18 @@ pub struct CheckArgs {
 
 #[derive(Args)]
 pub struct InspectArgs {
-    /// Image file to inspect
-    #[arg(value_name = "IMAGE")]
-    pub image: PathBuf,
+    /// What to inspect: a registry ref (`postgres@17`, `owner/name@1.2`),
+    /// a local `.img`, a `.toml` manifest, or a directory containing one
+    #[arg(value_name = "TARGET")]
+    pub target: String,
 
-    /// Print the derived metadata as JSON (what `ply push` sends)
+    /// Print the record as JSON (what `ply push` sends)
     #[arg(long)]
     pub json: bool,
+
+    /// Print the embedded manifest text verbatim
+    #[arg(long)]
+    pub manifest: bool,
 }
 
 #[derive(Args)]
@@ -940,16 +951,35 @@ mod tests {
 
 #[derive(Args)]
 pub struct PushArgs {
-    /// The image to publish: a local .img file, or an https:// URL where
-    /// the image already lives (GitHub release asset, any static host) —
-    /// the registry then records and verifies it without storing bytes
-    pub image: String,
+    /// What to publish: an app/keg directory (built first, as `ply build`),
+    /// a built .img, or a stack (stack.toml, or a directory whose ply.toml
+    /// carries `[[app]]`). The manifest inside it IS the record.
+    #[arg(value_name = "TARGET")]
+    pub target: String,
 
     /// Publish under a granted namespace instead of your own login
     /// (the official `ply`/`apps` shelves, a shared org). `ply whoami`
-    /// lists what your key may publish to.
+    /// lists what your key may publish to. Sets `owner` when the manifest
+    /// declares none; conflicts with a different `[package] owner`.
     #[arg(long = "as", value_name = "NAMESPACE")]
     pub as_namespace: Option<String>,
+
+    /// Publish an image that lives elsewhere (a release asset, any static
+    /// host): the record points at URL and no bytes are uploaded. `{version}`
+    /// and `{arch}` expand; the artifact is recorded unverified.
+    #[arg(long, value_name = "URL")]
+    pub src: Option<String>,
+
+    /// Target architecture: x64 or arm64 (default: the host's). A directory
+    /// cross-builds exactly as `ply build --arch` does; the artifact is
+    /// appended to the version.
+    #[arg(long, value_name = "ARCH")]
+    pub arch: Option<String>,
+
+    /// Print the record that would be published — upload nothing, publish
+    /// nothing
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 #[derive(clap::Args, Debug)]

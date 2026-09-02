@@ -59,7 +59,7 @@ pub fn dispatch(command: Command) -> Result<()> {
             crate::cli::KeyCommand::Ls => account::key_ls(),
             crate::cli::KeyCommand::Rm(args) => account::key_rm(args.id),
         },
-        Command::Push(args) => account::push(&args.image, args.as_namespace.as_deref()),
+        Command::Push(args) => account::push(args),
         Command::Sync(args) => lifecycle::sync(args),
         Command::Gc(args) => lifecycle::gc(args),
         Command::Volume(cmd) => match cmd {

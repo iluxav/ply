@@ -251,6 +251,29 @@ pub fn write_image(trees: &[TreeSource], extra: &[ExtraFile], out: &Path) -> Res
     Ok(())
 }
 
+/// Test helper shared across modules AND crates: a minimal image whose only
+/// content is `/.manifest.toml` holding `manifest_toml` verbatim — enough to
+/// exercise `image::read::read_embedded`/`read_manifest`,
+/// `record::record_for_image` and `ply push`'s planner without a real build.
+///
+/// Public (not `cfg(test)`) so `ply-cli`'s tests can call it: a test-only
+/// feature flag for one file-packing helper buys less than it costs.
+#[doc(hidden)]
+pub fn test_image_with_manifest(dir: &Path, manifest_toml: &str) -> PathBuf {
+    let path = dir.join("test.img");
+    write_image(
+        &[],
+        &[ExtraFile {
+            path: crate::image::read::MANIFEST_PATH.to_string(),
+            bytes: manifest_toml.as_bytes().to_vec(),
+            mode: 0o444,
+        }],
+        &path,
+    )
+    .expect("test image build must succeed");
+    path
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

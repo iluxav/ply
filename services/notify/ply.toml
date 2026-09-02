@@ -7,6 +7,10 @@
 [package]
 name = "notify"
 version = "0.1.0"
+owner = "ply"
+description = "Deploy/crash notifications: tails the events journal, posts to Discord/Slack/any webhook"
+license = "MIT"
+homepage = "https://plybox.sh/docs/deployments/"
 entrypoint = ["./notify"]
 include = ["notify"]
 base = "debian@13"

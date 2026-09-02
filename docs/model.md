@@ -129,9 +129,13 @@ One flat array of packages. Each package is `namespace` + `name` + `type` +
           "src": "https://registry.plybox.sh/ply/postgres/postgres-17.10.3-linux-x64.img",
           "bytes": 41234567,
           "pushed_at": "2026-08-28T22:00:00Z",
-          // everything below is DERIVED from the image manifest at push:
+          // everything below is DERIVED, server-side, from the manifest:
           "volumes": ["/var/lib/postgresql/data"],
           "links": [],
+          // an ARRAY, and it stays one: a catalog is parsed in a single
+          // pass into typed structs, so changing a field's TYPE fails the
+          // whole document for every ply already installed. Additive means
+          // new keys, never new types.
           "dependencies": [{ "name": "rclone", "version": "1.68" }]
         }
       ]
@@ -142,14 +146,11 @@ One flat array of packages. Each package is `namespace` + `name` + `type` +
       "versions": [
         {
           "version": "3.0.0",
-          "src": "https://registry.plybox.sh/ply/umami/umami-3.0.0.stack.toml",
           "img": null,                // a stack has no image of its own
-          "apps": [                   // mirrors the [[app]] array, verbatim
-            { "run": "postgres@17", "name": "umami-db",
-              "volume": ["/var/lib/postgresql/data"], "e": ["POSTGRES_PASSWORD=$PW"] },
-            { "run": "umami@3", "after": ["umami-db"], "publish": ["internal:3000"],
-              "e": ["DATABASE_URL=postgresql://postgres:$PW@umami-db.ply:5432/umami"] }
-          ]
+          "src": "https://registry.plybox.sh/ply/umami/umami-3.0.0.toml"
+          // no `apps[]` — the [[app]] array lives only in that .toml, which
+          // is the record's manifest_toml, verbatim; a consumer (ply up,
+          // the site) fetches it and reads the [[app]] blocks directly.
         }
       ]
     }
@@ -162,29 +163,38 @@ Three rules keep it predictable:
 1. **`src` is always a full, http-fetchable URL.** No `path`, no
    namespace-in-the-address. A protected artifact → the consumer supplies a
    key. One resolution rule for our R2, your GitHub, or anyone's host.
-2. **Every version field except the curated header (description / license /
-   homepage) is DERIVED at push** from the pushed toml + the image manifest.
-   `volumes`, `links`, `dependencies`, `apps` are never hand-written, so they
-   cannot drift from the artifact. *This is the fix for today's
-   git-meta-vs-R2 drift.*
-3. **A `stack` version has `img: null`, a `src` pointing at its stack toml,
-   and an `apps[]` mirroring the `[[app]]` array** — enough to display and
-   deploy the stack without fetching anything first.
+2. **Every version field — the header (description / license / homepage)
+   included — is DERIVED, server-side, from the pushed manifest**, never
+   hand-authored and never computed by the client. The registry reads
+   `volumes`, `links`, `dependencies`, `params`, and the header straight
+   off the manifest the moment it (re)writes `state.json`; there is no
+   separate curated file for any of it to drift from. *This is the fix
+   for today's git-meta-vs-R2 drift.*
+3. **A `stack` version has `img: null` and a `src` pointing at its
+   `.toml`.** There is no `apps[]` mirror — the `[[app]]` array lives
+   only in that `.toml`, so deploying it (`ply up owner/stack`, or the
+   site) means fetching the file, not reading a pre-expanded array.
 
 ## push = toml + (img | src)
 
-Every push is two things: the assembly/stack toml (the *what*) and the bytes
-(the *where*).
+Every push is two things: the manifest (the *what* — verbatim, never
+derived) and the bytes (the *where*).
 
-- `ply push ./myapp.img` — upload the image, read its manifest, write the
-  catalog entry with `src` = the uploaded URL.
-- `ply push ./myapp.toml --src https://…/myapp.img` — register a version that
-  points at *your* URL; we store the entry, never the bytes.
-- `ply push ./umami.stack.toml` — a `stack` entry; `apps[]` comes from the
-  `[[app]]` array. `--src` optional (defaults to the uploaded toml's URL).
+- `ply push ./myapp.img` — upload the image, read its embedded manifest,
+  publish a record with `src` = the uploaded URL, `verified: true`.
+- `ply push ./myapp.img --src https://…/myapp.img` — publish the record
+  without uploading; `src` points at *your* URL, hashed locally,
+  `verified: false`. (`ply push ./myapp --src https://…` builds the
+  directory first, to get the hash — a bare app *manifest* is never a
+  push target: `ply push ./myapp.toml` is refused, since the manifest a
+  push records is the one embedded in the built image, not the
+  working-copy toml.)
+- `ply push ./umami-stack` (a directory) or `ply push umami.toml` — the
+  stack's own toml text IS the record's manifest, verbatim; no image, so
+  nothing uploads.
 
-One push → one catalog entry, always derived from the toml. There is no
-second place to edit, so there is nothing to keep in sync.
+One push → one record. There is no derivation on the client and no second
+place to edit, so there is nothing to keep in sync.
 
 ## Running a published stack by name
 

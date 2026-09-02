@@ -211,6 +211,19 @@ pub struct Package {
     /// otherwise be killed mid-request when ply's 10s patience runs out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stop_signal: Option<String>,
+    /// Registry namespace this package publishes under (`<owner>/<name>`).
+    /// Absent for a local/unpublished manifest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    /// Human-readable summary, shown by `ply search` / the registry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// SPDX identifier or free-text license name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub license: Option<String>,
+    /// Upstream project URL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub homepage: Option<String>,
     /// The package's base story (last field: the table form must serialize
     /// after scalar values). `true` marks the one package per graph that owns
     /// `/` (its files pack at the image root instead of an /opt prefix);
@@ -1050,6 +1063,26 @@ mod tests {
         // canonical roundtrip
         let round = Manifest::parse(&m.to_toml().unwrap()).unwrap();
         assert_eq!(round.to_toml().unwrap(), m.to_toml().unwrap());
+    }
+
+    #[test]
+    fn package_carries_registry_facing_fields() {
+        let m = Manifest::parse(
+            r#"
+[package]
+name = "postgres"
+owner = "ply"
+version = "17.10.7"
+description = "PostgreSQL relational database"
+license = "PostgreSQL"
+homepage = "https://www.postgresql.org"
+"#,
+        )
+        .unwrap();
+        assert_eq!(m.package.owner.as_deref(), Some("ply"));
+        assert_eq!(m.package.license.as_deref(), Some("PostgreSQL"));
+        let back = toml::to_string(&m).unwrap();
+        assert!(back.contains("owner = \"ply\""), "round-trips: {back}");
     }
 
     #[test]
