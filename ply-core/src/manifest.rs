@@ -7,6 +7,7 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
+use crate::params;
 
 /// Parsed, validated `ply.toml`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,6 +21,16 @@ pub struct Manifest {
 
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
+
+    /// Named param declarations. `None` = table absent — `{}` holes in
+    /// `[env]` and elsewhere stay literal text and none of the param
+    /// validation below runs. `Some(_)` (even empty) turns holes on: every
+    /// `{name}` must resolve to a declared param or a non-live built-in.
+    /// Stored as raw `toml::Value` (not `ParamDecl`) so `Serialize` round-trips
+    /// byte-for-byte when this manifest is embedded into an image; use
+    /// [`Manifest::param_decls`] for the validated, typed form.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub params: Option<BTreeMap<String, toml::Value>>,
 
     /// Labels of what the app binds internally — not host claims.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -535,6 +546,102 @@ impl Manifest {
             .collect()
     }
 
+    /// The manifest's `[params]` table, converted to typed [`ParamDecl`]s and
+    /// validated per-entry (secret/default shape — see [`params::ParamDecl::from_toml`]).
+    /// Empty when `[params]` is absent. Kept separate from the raw
+    /// `toml::Value` storage in the `params` field so `Serialize` round-trips
+    /// the manifest byte-for-byte when it's embedded into an image.
+    pub fn param_decls(&self) -> Result<BTreeMap<String, params::ParamDecl>> {
+        let Some(raw) = &self.params else {
+            return Ok(BTreeMap::new());
+        };
+        raw.iter()
+            .map(|(name, v)| {
+                Ok((
+                    name.clone(),
+                    params::ParamDecl::from_toml(name, v, "params")?,
+                ))
+            })
+            .collect()
+    }
+
+    /// Validates `[params]` and every `{...}` hole reachable from it: `[env]`
+    /// values and computed param defaults. A manifest with no `[params]`
+    /// table skips all of this — braces stay literal text, per the doc
+    /// comment on the `params` field.
+    fn validate_params(&self) -> Result<()> {
+        let Some(raw) = &self.params else {
+            return Ok(());
+        };
+
+        // Rule 1: reserved names can't be redeclared.
+        for name in raw.keys() {
+            if params::RESERVED.contains(&name.as_str()) {
+                return Err(Error::Manifest(format!(
+                    "`{name}` is a built-in param — pick another name"
+                )));
+            }
+        }
+
+        // Rule 2 (secret+default shape) is enforced by ParamDecl::from_toml.
+        let decls = self.param_decls()?;
+
+        let check_ref = |pref: &params::PRef| -> Result<()> {
+            if pref.app.is_some() {
+                return Err(Error::Manifest(
+                    "a manifest can only reference its own params".into(),
+                ));
+            }
+            let name = pref.param.as_str();
+            if decls.contains_key(name) {
+                return Ok(());
+            }
+            if params::LIVE.contains(&name) {
+                return Err(Error::Manifest(format!(
+                    "`{{{name}}}` is live — apps read /run/ply/self/state, dependents wait with `after`"
+                )));
+            }
+            if params::RESERVED.contains(&name) {
+                return Ok(());
+            }
+            Err(Error::Manifest(format!(
+                "`{{{name}}}` is not a declared param — add it to [params], or fix the typo"
+            )))
+        };
+
+        let check_holes = |s: &str, who: &str| -> Result<()> {
+            for piece in params::parse_template(s, who)? {
+                if let params::Piece::Hole(pref) = piece {
+                    check_ref(&pref)?;
+                }
+            }
+            Ok(())
+        };
+
+        // Rule 4/5: every hole in [env] must resolve (params table present).
+        for (key, val) in &self.env {
+            check_holes(val, &format!("env.{key}"))?;
+        }
+
+        // Rule 4: every hole in a computed param's value must resolve too;
+        // Rule 3: and the param→param edges among those must be acyclic.
+        let mut edges: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for (name, decl) in &decls {
+            if let params::ParamDecl::Value(v) = decl {
+                check_holes(v, &format!("params.{name}"))?;
+                let refs: Vec<String> = params::refs(v)
+                    .into_iter()
+                    .filter(|r| r.app.is_none() && decls.contains_key(r.param.as_str()))
+                    .map(|r| r.param)
+                    .collect();
+                edges.insert(name.clone(), refs);
+            }
+        }
+        detect_param_cycle(&edges)?;
+
+        Ok(())
+    }
+
     fn validate(&self) -> Result<()> {
         validate_package_name(&self.package.name)?;
         if let Some(requests) = &self.requests {
@@ -656,8 +763,57 @@ impl Manifest {
                 )));
             }
         }
+        self.validate_params()?;
         Ok(())
     }
+}
+
+/// DFS cycle detection over the param→param reference graph (own-namespace
+/// refs only — app-scoped refs are rejected before an edge is ever built).
+fn detect_param_cycle(edges: &BTreeMap<String, Vec<String>>) -> Result<()> {
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum State {
+        Visiting,
+        Done,
+    }
+
+    fn visit<'a>(
+        node: &'a str,
+        edges: &'a BTreeMap<String, Vec<String>>,
+        state: &mut BTreeMap<&'a str, State>,
+        path: &mut Vec<&'a str>,
+    ) -> Result<()> {
+        match state.get(node) {
+            Some(State::Done) => return Ok(()),
+            Some(State::Visiting) => {
+                let start = path.iter().position(|&n| n == node).unwrap_or(0);
+                let mut cycle: Vec<&str> = path[start..].to_vec();
+                cycle.push(node);
+                return Err(Error::Manifest(format!(
+                    "[params] cycle: {}",
+                    cycle.join(" → ")
+                )));
+            }
+            None => {}
+        }
+        state.insert(node, State::Visiting);
+        path.push(node);
+        if let Some(neighbors) = edges.get(node) {
+            for n in neighbors {
+                visit(n.as_str(), edges, state, path)?;
+            }
+        }
+        path.pop();
+        state.insert(node, State::Done);
+        Ok(())
+    }
+
+    let mut state = BTreeMap::new();
+    let mut path = Vec::new();
+    for node in edges.keys() {
+        visit(node.as_str(), edges, &mut state, &mut path)?;
+    }
+    Ok(())
 }
 
 /// Package/app names: lowercase alphanumeric with `-` / `_`/ `.`, must not
@@ -1135,5 +1291,45 @@ mod tests {
         .unwrap();
         assert_eq!(manifest.package.workdir, None);
         assert!(!manifest.to_toml().unwrap().contains("workdir"));
+    }
+
+    fn manifest_with(params: &str, env: &str) -> String {
+        format!("[package]\nname=\"pg\"\nversion=\"1.0.0\"\nentrypoint=[\"pg\"]\n{params}\n[env]\n{env}")
+    }
+
+    #[test]
+    fn params_reserved_name_rejected() {
+        let m = Manifest::parse(&manifest_with("[params]\nhost = \"x\"", ""))
+            .unwrap_err()
+            .to_string();
+        assert!(m.contains("built-in param"), "{m}");
+    }
+
+    #[test]
+    fn env_hole_must_be_declared_when_params_present() {
+        let ok = manifest_with("[params]\nuser = \"postgres\"", "PGUSER = \"{user}\"");
+        Manifest::parse(&ok).unwrap();
+        let bad = manifest_with("[params]\nuser = \"postgres\"", "PGX = \"{typo}\"");
+        assert!(Manifest::parse(&bad).is_err());
+    }
+
+    #[test]
+    fn braces_are_literal_without_params_table() {
+        let m = manifest_with("", "JSONISH = \"{not-a-param!}\"");
+        Manifest::parse(&m).unwrap();
+    }
+
+    #[test]
+    fn computed_cycle_rejected() {
+        let m = manifest_with("[params]\na = \"{b}\"\nb = \"{a}\"", "");
+        let e = Manifest::parse(&m).unwrap_err().to_string();
+        assert!(e.contains("cycle"), "{e}");
+    }
+
+    #[test]
+    fn live_param_in_env_is_rejected() {
+        let m = manifest_with("[params]\nuser = \"x\"", "S = \"{state}\"");
+        let e = Manifest::parse(&m).unwrap_err().to_string();
+        assert!(e.contains("live"), "{e}");
     }
 }

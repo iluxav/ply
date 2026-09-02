@@ -17,36 +17,38 @@ written down** — each `[[app]]` block maps one-to-one to a run:
 name = "todos"
 
 [[app]]
-run  = "postgres@17"                       # → ply run postgres@17
-name = "db"                                # → --name db
-env  = ["POSTGRES_PASSWORD=$PW", "POSTGRES_DB=todos"]
+run     = "postgres@17"                    # → ply run postgres@17
+name    = "db"                             # → --name db
+publish = ["internal:5432"]
+params  = { database = "todos" }           # override; password stays minted
 
 [[app]]
 run     = "./server"                       # → ply run ./server
-after   = ["db"]                           # → --after db (waits; see below)
+e       = ["DATABASE_URL={db.url}"]        # reference IS the edge — see below
 publish = ["internal:3001"]
-env = ["DATABASE_URL=postgres://postgres:$PW@db.ply:5432/todos"]
 
 [[app]]
 run     = "./web"
-after   = ["server"]
+e       = ["SERVER_URL={server.base_url}"]
 publish = ["3000"]
-env = ["API_ORIGIN=http://server.ply:3001"]
 ```
 
-Note what wires the members: a line you wrote. `after` orders the start and
-waits for health; the address is `<member>.ply`, and saying so in the file
-beats hoping ply and your app agree on an invented variable name. (They
-also arrive as `DB_ADDR`/`DB_HOST`/`DB_PORT` — a convenience, and a quiet
-failure when an app reads different names.)
+Note what wires the members: a line you wrote, and only one of them.
+`{db.url}` in `server`'s env is simultaneously the connection string *and*
+the start order — ply derives `after: db` from the reference itself (no
+separate `after = ["db"]` to keep in sync), and resolves `db.url` from
+postgres's own `[params]` (`postgres://{user}:{password}@{host}:{port}/{database}`)
+using the real address and the minted password, neither of which this file
+ever names. `web`'s `{server.base_url}` does the same for the next hop.
 
 ```sh
-PW=dev ply up        # everything, dependency-ordered; Ctrl-C stops it all
-PW=dev ply up db     # just the database (dependencies of named members come along)
+ply up            # everything, dependency-ordered; Ctrl-C stops it all
+ply up db         # just the database (dependencies of named members come along)
 ```
 
 Every field is a `ply run` flag: `run`→the image, `name`→`--name`, `env`→`-e`
 (spelled `e` in older files; both work, but not both on one member),
+`params`→per-param overrides for the member's own declared `[params]`,
 `after`→`--after`, `publish`→`--publish`, `volume`→`--volume`,
 `domain`→`--domain`, `scale`→`--scale`. There is no stack concept beyond
 "these runs, in dependency order." See the full [model](/docs/model/).
@@ -72,10 +74,100 @@ name, `ply ps`, and `ply exec` all key on — so two members may even run the
 *same* image under different names. `after` names other members; cycles are a
 build error, not a hang.
 
-## Secrets are holes, never values
+## `{app.param}` — reading a neighbor's params
 
-A `$VAR` in an `env` value is filled from the environment at launch — from your
-shell, or from an `--env-file`:
+A member's `env`/`e` values (and its `params = {…}` overrides) can hold
+`{app.param}` holes: interpolation into the named member's resolved
+namespace — the
+declared `[params]` from its manifest, built-in facts (`host`, `port`,
+`addr`, `base_url`, `name`, `version`, `scale`, `arch`, `image`), and
+computed values. `{self.x}` reaches the member's own namespace
+(`e = ["APP_VERSION={self.version}"]`).
+
+```toml
+e = ["DATABASE_URL={db.url}"]                          # common case
+e = ["DATABASE_URL={db.url}?sslmode=disable"]          # composed — templates can't do this
+e = ["PGHOST={db.host}", "PGPASSWORD={db.password}"]   # discrete vars
+```
+
+- **A `{app.param}` reference IS the ordering edge.** No `after = ["db"]`
+  needed alongside it — ply derives `db.state == "healthy"` from the
+  reference and waits on it before starting the member that wrote it.
+  Writing an explicit `after` too is legal and redundant, never
+  conflicting; it's how you order without a reference, or state a custom
+  condition (next section).
+- **`publish` and `domain` take no `{}` holes in v1.** They are handed to
+  the runtime verbatim, so a hole there would reach it as the literal text
+  `{db.port}`; a stack that writes one is rejected at parse, naming the
+  limitation. Write the port literally, or use a `$VAR` for a deploy-time
+  value.
+- `$VAR` and `{}` coexist and point in different directions: `$` reaches
+  the ambient system (shell, or `env_file`), `{}` reaches the stack graph.
+  Both may appear in one value.
+- Escapes: `{{` → literal `{`, `}}` → literal `}`.
+- **No expression language.** No functions, conditionals, or defaults
+  syntax inside `{}` — logic belongs in your own code, not the reference.
+- A **live** param (`state`, `instances`, `started_at`, `restarts`) in an
+  `env`/`e` value is a build error, not a stale value: those change after
+  launch, so nothing bakes them into env. Wait on one with `after` (next
+  section), or read it at runtime from `/run/ply/<app>/<param>` — see
+  [Running & scaling](/docs/running/#start-order).
+
+`params = { key = "value" }` on a member overrides one of **that member's
+own** declared params (`db`'s `database` above) — it is not a cross-member
+reference. Values may hold `$VAR`; setting a param the member's manifest
+doesn't declare is an error naming the declared set.
+
+## Waits — `after`
+
+```toml
+after = ["db"]                             # sugar for db.state == "healthy" — today's gate, unchanged
+after = ["server.finish_boot"]             # wait until the param exists
+after = ["server.finish_boot == 'ok'"]     # wait until equality holds
+```
+
+Exactly those three forms — `APP`, `APP.PARAM`, `APP.PARAM == 'value'` (or
+`"value"`) — and nothing else: no `!=`, no ordering comparisons, no boolean
+operators. An app that needs more computes it itself and publishes a param
+from inside its own code (`echo ok > /run/ply/self/finish_boot`, or
+`fs.writeFileSync("/run/ply/self/finish_boot", "ok")`) — that's where the
+logic belongs, never in the wait grammar.
+
+A condition unmet within the timeout **fails loud**, never hangs — the
+launch aborts naming the condition, the current value, and the elapsed
+time:
+
+```
+waiting for server.finish_boot == 'ok' (currently unset, 30s elapsed)
+```
+
+See [Running & scaling](/docs/running/#start-order) for the `/run/ply`
+tree these conditions read, and how an app self-publishes into it.
+
+## Secrets: minted files, or `$VAR` holes
+
+The `db` member above declares no password anywhere — postgres's own
+`password = { secret = true }` mints a strong value the first time the
+stack starts and stores it as a 0600 file (`<stack dir>/.ply/secrets/
+db.password` locally; `<deployments dir>/.secrets/<stack>/db.password` on a
+host). `{db.url}` already carries it; the stack file and the published
+template never hold the plaintext.
+
+Override precedence: a stack `params =` value beats an existing secret
+file, which beats minting:
+
+```toml
+[[app]]
+name   = "db"
+params = { password = "$PROD_PW" }     # ambient beats minting
+```
+
+```sh
+PROD_PW=s3cret ply up
+```
+
+`$VAR` in an `env`/`e` value still works exactly as before — filled from
+the environment at launch, from your shell or an `--env-file`:
 
 ```sh
 PW=s3cret ply up
@@ -83,9 +175,83 @@ ply up --env-file ./secrets.env
 ```
 
 An **undefined `$VAR` is a hard error** naming the member and key — never a
-silent empty value. So a stack file carries no plaintext passwords: it ships
-the *shape* of the wiring, and the secrets stay out of the file (and out of
-the registry). `$$` is a literal `$`.
+silent empty value. `$$` is a literal `$`. Operator surface for minted or
+external secrets is files first, `ply secret` as a convenience:
+
+```sh
+ply secret ls -C .                  # or --deployments STACK on a host
+ply secret set db.password s3cret   # or omit VALUE to read one line from stdin
+```
+
+`[stack] env_file` (a file of `KEY=VALUE` lines filling every `$VAR` hole)
+is **still supported** — it fills the *shape* a published stack ships
+with holes in — but is **superseded for secrets by `[params]`**: a minted
+or external secret needs no `env_file` entry, no `$VAR` hole, and never
+appears in the published template at all.
+
+### Secrets on a host
+
+`ply reconcile` runs the same resolver as `ply up`, but a host expands a
+stack into N independently-managed systemd units instead of one foreground
+process group, so delivery goes through two *different* files under the
+deployments dir's `.secrets/`:
+
+- **The secret itself** — `<deployments dir>/.secrets/<stack>/<member>.
+  <param>` (0600), one file per param: the minted or operator-set value,
+  same layout as the local `.ply/secrets/` store. `ply secret ls|set
+  --deployments <stack>` manage exactly these files.
+- **The delivery file** — every reconcile beat, the reconciler writes a
+  member's secret-tainted *resolved env* (which may combine several
+  params into one composed value, like a `DATABASE_URL`) to
+  `<deployments dir>/.secrets/<stack>/env/<member>.env` (0600, its `env/`
+  directory 0700), and that member's unit gets `--env-file` pointed at
+  it. Plain, non-secret entries stay ordinary `-e KEY=VALUE` flags baked
+  into the unit text — only secret-tainted ones go through the env file,
+  so the unit itself (world-readable, `systemctl cat`-able) never carries
+  a secret.
+
+**Changing a secret does not, by itself, restart the member.**
+`ply reconcile` decides whether to restart by comparing the *unit text* it
+would generate against what's on disk, and the unit only names the env
+file by **path** — never its contents. So `ply secret set --deployments
+<stack> db.password …` (or hand-editing the file) rewrites the delivery
+file on the very next beat, but the running process keeps its old value
+until something restarts it. Run `ply restart <member>` afterwards to pick
+up the change — v1 behavior, by design; there is no content-hash restart
+trigger.
+
+## `ply up --plan` — the composed result, inspectable
+
+```sh
+ply up --plan
+```
+
+Resolves every member's params and env, and prints the composed result —
+no minting, no spawn, no lock write. Exits non-zero on a resolution error
+(an undeclared param, a live param in env, a missing external secret) —
+`--plan` is the validator, not just a preview:
+
+```
+db (postgres@17)  internal:5432
+  POSTGRES_DB       = todos     params (stack override)
+  POSTGRES_PASSWORD = ********  minted  secrets/db.password
+server (./server)  internal:3001  after: db (via {db.url})
+  DATABASE_URL = postgres://postgres:********@db.ply:5432/todos  {db.url}
+web (./web)  3000  after: server (via {server.base_url})
+  SERVER_URL = http://server.ply:3001  {server.base_url}
+```
+
+What `--plan` lists in v1 is the stack's own `e = [...]` entries and the
+params-driven self-config a provider resolves from its own `[params]` —
+each with its resolved value and where it came from (`stack e`,
+`manifest [env]`, `{db.url}`-style references, `params (stack override)`,
+`minted  secrets/db.password`) — plus the derived wait DAG, annotated with
+which reference created each edge. It is not the child's whole environment:
+plain manifest `[env]` values (the ones with no holes), `-e`, `--env-file`
+and ply's own injected variables are not listed. Secret values are masked, including
+inside a composed value like `DATABASE_URL` — only a secret the resolver
+itself knows about is masked, so a secret typed literally into a stack `e`
+value (rather than referenced) still prints verbatim.
 
 ## Every member is a normal app
 
@@ -157,12 +323,12 @@ entrypoint. Nothing to remember, nothing to ship.
 
 `ply.dev.toml` fixes an app's dev behavior; a stack has its own version of
 the problem. The committed stack describes **production**: members reach
-each other by their `<name>.ply` bridge names and secrets are `$VAR` holes.
-A laptop differs in fewer ways than it used to: a rootless stack gets its
-own network too, so `<name>.ply` and the members' real ports mean the same
-thing here as there. What is still local is a dev password, a published
-port that has to dodge whatever the machine already runs, and building the
-checkout next door instead of pulling a release.
+each other by their `<name>.ply` bridge names, and secrets are minted files
+or `$VAR` holes — never plaintext. A laptop differs in fewer ways than it
+used to: a rootless stack gets its own network too, so `<name>.ply` and the
+members' real ports mean the same thing here as there. What is still local
+is a published port that has to dodge whatever the machine already runs,
+and building the checkout next door instead of pulling a release.
 
 Put those local truths in `stack.dev.toml`, beside the stack file:
 
@@ -176,15 +342,15 @@ publish = ["internal:5433:5432"]    # the container still serves 5432; only
 
 [[app]]
 name = "server"
-run  = "../server"                  # the checkout next door
-env = ["DATABASE_URL=postgres://postgres:dev@db.ply:5432/todos"]
+run  = "../server"                  # the checkout next door — {db.url} still
+                                    # resolves correctly, dev password and all
 ```
 
 - Members are matched by `name`; overriding a name that is not in the stack
   is an error, not a silent no-op.
-- `env` **merges by key** — the override adds `DATABASE_URL` and leaves the
-  member's other variables alone. `publish`, `domain`, `volume`, `scale` and
-  `run` replace outright; `[stack] env_file` replaces too.
+- `env` and `params` **merge by key** — the override adds or replaces one
+  entry and leaves the member's others alone. `publish`, `domain`, `volume`,
+  `scale` and `run` replace outright; `[stack] env_file` replaces too.
 - Overlays override members, they never add them.
 
 Same structural rule as `ply.dev.toml`: **`ply up` applies it, a host never

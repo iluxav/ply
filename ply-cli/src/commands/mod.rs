@@ -15,6 +15,7 @@ mod ps;
 mod reconcile;
 mod run;
 mod search;
+mod secret;
 mod self_update;
 mod setup;
 mod stats;
@@ -66,6 +67,10 @@ pub fn dispatch(command: Command) -> Result<()> {
             crate::cli::VolumeCommand::Rm(args) => volume::rm(&args),
         },
         Command::Rm(args) => lifecycle::rm(args),
+        Command::Secret(cmd) => match cmd {
+            crate::cli::SecretCommand::Ls(args) => secret::exec_ls(&args),
+            crate::cli::SecretCommand::Set(args) => secret::exec_set(&args),
+        },
         Command::Audit(args) => lifecycle::audit(args),
         Command::Outdated(args) => lifecycle::outdated(args),
     }

@@ -269,6 +269,25 @@ The same flag goes into a unit: `ply systemd --after pgdb pgapp.img` emits
 `After=`/`Wants=ply-pgdb.service` so systemd orders the start and ply gates
 on readiness.
 
+`--after` accepts exactly three forms:
+
+```sh
+--after pgdb                              # sugar for pgdb.state == "healthy" — the case above
+--after server.finish_boot                # wait until server has published PARAM
+--after "server.finish_boot == 'ok'"      # wait until its value matches (single or double quotes)
+```
+
+No `!=`, no ordering comparisons, no boolean operators — an app that needs
+more computes it itself and publishes the result (below). The last two
+forms read `server`'s live params, not its health gate, so neither
+requires `server` to still be alive — only that it once published the
+value. A condition unmet within the timeout **fails loud, never hangs**,
+naming the condition, the current value, and how long it waited:
+
+```
+waiting for server.finish_boot == 'ok' (currently unset, 30s elapsed)
+```
+
 ### …and where to find it
 
 `--after` waits; it does not wire. **Write the connection down** — the file
@@ -287,12 +306,62 @@ ply run web.img --scale 2 --publish 8080 --after api \
 its instances and drains them on deploy — so `web` keeps working while
 `api` rolls, and never learns an instance IP that can go stale.
 
+### `/run/ply` — the live params tree
+
+Every app's live facts — the ones an `--after APP.PARAM` condition above
+reads — live in one tmpfs tree the parent maintains, bind-mounted
+**read-only** into every container as `/run/ply`:
+
+```
+/run/ply/pgdb/state          # starting | healthy | unhealthy | stopped
+/run/ply/pgdb/instances
+/run/ply/pgdb/started_at
+/run/ply/pgdb/restarts
+/run/ply/self/…              # THIS app's own node — the one directory that's writable
+```
+
+One file per param, the value is the file's content — no format to parse,
+no API, no socket: dashboards, scripts and probes all read the same files
+an `--after` condition does. `state`, `instances`, `started_at` and
+`restarts` are parent-owned — the parent writes them on every transition
+and re-binds each one **read-only** even inside `self`, so an app cannot
+forge its own health. Anything else under `self` is the app's to write:
+**self-publish** a fact by writing it there, the file-based analogue of
+`sd_notify` —
+
+```sh
+echo ok > /run/ply/self/finish_boot     # after migrations finish, say so
+```
+
+```js
+fs.writeFileSync("/run/ply/self/finish_boot", "ok");
+```
+
+(`process.env.X = …` cannot do this — a process mutating its own
+environment is invisible to everyone else, and `/proc/PID/environ` is
+frozen at exec.) A file is written in place, not renamed into place, so a
+reader racing a write may briefly see an empty or older value — the same
+poll loop behind `--after` already tolerates that. Every instance of one
+app shares its node (last-writer-wins); a neighbor's directory is readable
+but never writable, so trust falls out of the mount table rather than a
+permission check an app could get wrong. Secrets never enter this tree —
+see [ply.toml reference](/docs/manifest/) for where those live.
+
 ### The injected variables, and why they are not the wiring
 
 A published dependency's address also arrives as environment:
 `API_ADDR` / `API_HOST` / `API_PORT`, the app name upcased with anything
-non-alphanumeric becoming `_` (`api-server` → `API_SERVER_ADDR`). Handy
-when an app already reads those names.
+non-alphanumeric becoming `_` (`api-server` → `API_SERVER_ADDR`). Still
+works, but **deprecated**: a stack's `{app.host}` / `{app.port}` /
+`{app.addr}` references (see [Stacks & local dev](/docs/stacks/)) are its
+replacement — explicit in the file, resolved the same way in dev and prod,
+and never guessed from an app's name.
+
+The two do not conflict. A `{app.param}` reference derives a dependency
+edge that behaves exactly like an explicit `after = ["app"]`, injected
+variables included: the member still gets its dependency's
+`*_ADDR`/`*_HOST`/`*_PORT` alongside whatever the reference resolved, and
+those still never override a value the author wrote.
 
 The catch is that it fails **quietly** when it does not. An app expecting
 `POSTGRES_HOST` will not see `PLYBOX_DB_HOST`; it finds nothing, concludes
@@ -313,8 +382,22 @@ Composition order (last wins): package contributions → manifest `[env]` →
 ply run -e NODE_ENV=production --env-file /etc/myapp/secrets.env myapp.img
 ```
 
+A bare `-e KEY` (no `=`) **inherits the caller's own value** for that name
+— the escape hatch a parent uses to hand a child a value that must never
+touch argv or `/proc/*/cmdline` (`ply up` delivers minted secrets to its
+`ply run` children exactly this way). A bare name absent from the caller's
+environment is a hard error naming the key, never a silent empty value.
+
+A manifest that declares `[params]` gets its own hole-y `[env]` resolved
+here too, before the composition above even starts — plain holes default
+on their own, but a hole reading a secret param refuses rather than mint,
+naming the `-e` to pass; see ["Running a keg with params
+directly"](/docs/manifest/) for the exact rule and error text.
+
 Never bake secrets into an image — it's a file people `scp` around. Use
-`--env-file` with a root-only file at run time.
+`--env-file` with a root-only file at run time, or declare the value as a
+manifest `[params]` secret and let it travel as a minted file instead — see
+[ply.toml reference](/docs/manifest/).
 
 ## Dev mode
 

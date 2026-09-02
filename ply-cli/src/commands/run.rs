@@ -22,6 +22,32 @@ pub fn validate_domain(domain: &str) -> Result<()> {
     Ok(())
 }
 
+/// Parse `-e` pairs into launch-ready `(KEY, VALUE)` env for the child.
+///
+/// `KEY=VALUE` sets the value outright, unchanged. A bare `KEY` (no `=`)
+/// inherits the CALLER's own value for that name — the escape hatch a
+/// secret-tainted `ply up` spawn uses to hand a child a value without ever
+/// writing it into argv (and so `/proc/*/cmdline`): the parent sets it on
+/// the child's environment via `Command::env`, then passes only the bare
+/// name here. A bare name absent from the caller's own environment is a
+/// hard error — nothing to inherit, and silently dropping it would start
+/// the child with an unresolved hole instead of the value it was promised.
+fn parse_cli_env(pairs: &[String]) -> Result<Vec<(String, String)>> {
+    let mut out = Vec::new();
+    for pair in pairs {
+        match pair.split_once('=') {
+            Some((k, v)) => out.push((k.to_string(), v.to_string())),
+            None => match std::env::var(pair) {
+                Ok(v) => out.push((pair.clone(), v)),
+                Err(_) => bail!(
+                    "-e {pair}: not set in the environment (bare -e KEY inherits the caller's value)"
+                ),
+            },
+        }
+    }
+    Ok(out)
+}
+
 pub fn exec(args: RunArgs) -> Result<()> {
     for domain in &args.domain {
         validate_domain(domain)?;
@@ -41,12 +67,7 @@ pub fn exec(args: RunArgs) -> Result<()> {
     if let Some(file) = &args.env_file {
         cli_env.extend(parse_env_file(file)?);
     }
-    for pair in &args.env {
-        let Some((k, v)) = pair.split_once('=') else {
-            bail!("--env `{pair}`: expected KEY=VALUE");
-        };
-        cli_env.push((k.to_string(), v.to_string()));
-    }
+    cli_env.extend(parse_cli_env(&args.env)?);
 
     let publish = args
         .publish
@@ -216,7 +237,40 @@ pub fn exec(args: RunArgs) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_domain;
+    use super::{parse_cli_env, validate_domain};
+
+    // --- env parsing --------------------------------------------------------
+
+    #[test]
+    fn key_value_pair_is_set_outright() {
+        let out = parse_cli_env(&["FOO=bar".to_string()]).unwrap();
+        assert_eq!(out, vec![("FOO".to_string(), "bar".to_string())]);
+    }
+
+    #[test]
+    fn bare_key_inherits_the_callers_value() {
+        // SAFETY: test-only, single-threaded within this test's scope.
+        unsafe { std::env::set_var("PLY_TEST_BARE_ENV_VAR", "inherited") };
+        let out = parse_cli_env(&["PLY_TEST_BARE_ENV_VAR".to_string()]).unwrap();
+        // SAFETY: test-only cleanup, same rationale as above.
+        unsafe { std::env::remove_var("PLY_TEST_BARE_ENV_VAR") };
+        assert_eq!(
+            out,
+            vec![("PLY_TEST_BARE_ENV_VAR".to_string(), "inherited".to_string())]
+        );
+    }
+
+    #[test]
+    fn bare_key_missing_from_the_environment_is_an_error() {
+        // Guard against test pollution: this name should never be set.
+        // SAFETY: test-only.
+        unsafe { std::env::remove_var("PLY_TEST_DEFINITELY_UNSET_VAR") };
+        let e = parse_cli_env(&["PLY_TEST_DEFINITELY_UNSET_VAR".to_string()])
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("not set in the environment"), "{e}");
+        assert!(e.contains("bare -e KEY inherits the caller's value"), "{e}");
+    }
 
     #[test]
     fn domain_grammar() {

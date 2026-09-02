@@ -3,6 +3,13 @@
 #
 #   ply run postgres@17 -e POSTGRES_PASSWORD=dev -e POSTGRES_DB=todos
 #
+# -e POSTGRES_PASSWORD=... is REQUIRED for this standalone form: password
+# below is a [params] secret, and a bare `ply run` refuses to resolve a
+# secret hole on its own rather than mint or leak the literal `{password}`
+# — pass it yourself, or run this image inside a stack instead (`ply up`
+# mints and stores it for you). POSTGRES_USER/POSTGRES_DB default from
+# [params] (postgres/postgres) and stay overridable with -e the same way.
+#
 # Backup is composition, not a sidecar: rclone is a dependency, so
 # BACKUP_DEST makes the database dump itself on a schedule and
 # BACKUP_RESTORE makes a fresh volume restore itself before serving.
@@ -37,6 +44,17 @@ grace = "30s"
 
 [restart]
 policy = "on-failure"
+
+[params]
+user     = "postgres"                                               # plain value = default
+database = "postgres"
+password = { secret = true }                                        # minted per stack
+url      = "postgres://{user}:{password}@{host}:{port}/{database}"  # computed — interpolates others
+
+[env]                                  # the provider configures ITSELF from the same namespace
+POSTGRES_USER     = "{user}"
+POSTGRES_DB       = "{database}"
+POSTGRES_PASSWORD = "{password}"
 
 [sources]
 default = "https://registry.plybox.sh/ply/{package}"

@@ -10,6 +10,7 @@ pub mod loopdev;
 pub mod mount;
 pub mod netns;
 pub mod network;
+pub mod params_tree;
 pub mod publish;
 pub mod run;
 pub mod security;

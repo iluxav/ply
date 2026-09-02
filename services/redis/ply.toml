@@ -40,5 +40,8 @@ grace = "15s"
 [restart]
 policy = "on-failure"
 
+[params]
+url = "redis://{host}:{port}"          # no auth by default — v1 ships no secret param
+
 [sources]
 default = "https://registry.plybox.sh/ply/{package}"

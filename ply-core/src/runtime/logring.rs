@@ -118,8 +118,10 @@ pub fn list() -> Vec<(String, u32)> {
 mod tests {
     use super::*;
 
-    // XDG_RUNTIME_DIR is process-global; tests touching it must not overlap.
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    // XDG_RUNTIME_DIR is process-global; tests touching it must not
+    // overlap — crate-shared lock (paths.rs owns the variable) so a second
+    // private mutex here can't race it within the same test binary.
+    use crate::paths::ENV_LOCK;
 
     fn with_run_dir<T>(f: impl FnOnce() -> T) -> T {
         let _guard = ENV_LOCK.lock().unwrap();

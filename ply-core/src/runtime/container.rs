@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use nix::sys::stat::{makedev, mknod, Mode, SFlag};
 
 use crate::error::Result;
-use crate::runtime::{hosts, mount};
+use crate::runtime::{hosts, mount, params_tree};
 
 pub struct ContainerSpec {
     /// Mounted layer dirs, top (app) first, base last.
@@ -82,6 +82,42 @@ pub fn child_main(spec: &ContainerSpec) -> isize {
     }
 }
 
+/// Bind `source` onto `target`, then remount it read-only — and undo the
+/// bind if the remount fails, so a caller that only checks the final
+/// result never mistakes a left-behind writable mount for "nothing
+/// mounted". A `MS_BIND` mount inherited into a fresh user namespace
+/// already has `MNT_NOSUID`/`MNT_NODEV`/`MNT_NOEXEC` locked, and the
+/// kernel refuses a remount that tries to drop them (EPERM) — every
+/// remount here carries all three, matching `security.rs`'s
+/// `READONLY_PROC` idiom, or rootless callers would see the remount step
+/// fail every time.
+fn bind_ro(source: &Path, target: &Path) -> std::result::Result<(), nix::errno::Errno> {
+    nix::mount::mount(
+        Some(source),
+        target,
+        None::<&str>,
+        nix::mount::MsFlags::MS_BIND,
+        None::<&str>,
+    )?;
+    let remounted = nix::mount::mount(
+        Some(target),
+        target,
+        None::<&str>,
+        nix::mount::MsFlags::MS_BIND
+            | nix::mount::MsFlags::MS_REMOUNT
+            | nix::mount::MsFlags::MS_RDONLY
+            | nix::mount::MsFlags::MS_NOSUID
+            | nix::mount::MsFlags::MS_NODEV
+            | nix::mount::MsFlags::MS_NOEXEC,
+        None::<&str>,
+    );
+    if let Err(e) = remounted {
+        mount::unmount_detach(target);
+        return Err(e);
+    }
+    Ok(())
+}
+
 fn setup_and_exec(spec: &ContainerSpec) -> Result<isize> {
     mount::make_all_private()?;
 
@@ -149,6 +185,76 @@ fn setup_and_exec(spec: &ContainerSpec) -> Result<isize> {
         }
         text.push_str(&local);
         let _ = std::fs::write(&target, text);
+    }
+
+    // Live params tree: run_dir()/params -> /run/ply (ro), this app's own
+    // dir(app) -> /run/ply/self inside it (rw), then each PARENT_OWNED file
+    // re-bound individually read-only over itself. An app writes
+    // /run/ply/self/finish_boot, cannot forge state, and reads any
+    // neighbor under /run/ply/<app>. Best-effort, like the hosts bind
+    // above — a mount failure here must not keep the app from starting —
+    // but it has to fail CLOSED: `bind_ro` undoes its own bind if the
+    // read-only remount fails, so a partial failure never leaves a
+    // writable /run/ply exposing every neighbor's directory behind it.
+    let params_root = params_tree::root();
+    // "self" is a placeholder directory this creates (idempotent, shared,
+    // always empty on the host) purely as a mount target: once run_ply
+    // below is bound read-only from params_root, a lookup for run_ply/self
+    // resolves THROUGH that mount into params_root/self, so this app's own
+    // dir(app) has somewhere to attach. Each container's mount namespace is
+    // private (make_all_private, above), so every app privately overlays
+    // its own dir(app) on top without the others ever seeing it.
+    let _ = std::fs::create_dir_all(params_root.join("self"));
+    let run_ply = root.join("run/ply");
+    let ply_mounted =
+        std::fs::create_dir_all(&run_ply).is_ok() && bind_ro(&params_root, &run_ply).is_ok();
+    if ply_mounted {
+        let self_target = run_ply.join("self");
+        let self_mounted = nix::mount::mount(
+            Some(&params_tree::dir(&spec.hostname)),
+            &self_target,
+            None::<&str>,
+            nix::mount::MsFlags::MS_BIND,
+            None::<&str>,
+        )
+        .is_ok();
+        if self_mounted {
+            // Fail CLOSED, like the outer chain: /run/ply/self is bound
+            // READ-WRITE (an app self-publishes into it), and the only thing
+            // keeping `state` — the fact dependents gate on — out of the
+            // app's reach is this per-file read-only re-bind. One failure
+            // (or one missing file) and the app could write `healthy` over
+            // its own state, so the whole self bind comes back off and
+            // self-publishing is simply unavailable this run. The outer
+            // read-only /run/ply stays mounted, so neighbours still read.
+            let mut sealed = true;
+            for name in params_tree::PARENT_OWNED {
+                let file = self_target.join(name);
+                if let Err(e) = bind_ro(&file, &file) {
+                    eprintln!(
+                        "ply: warning: params tree: read-only re-bind of {name} for {}: {e}",
+                        spec.hostname
+                    );
+                    sealed = false;
+                    break;
+                }
+            }
+            if !sealed {
+                mount::unmount_detach(&self_target);
+                eprintln!(
+                    "ply: warning: params tree: {} cannot self-publish this run \
+                     (/run/ply/self unmounted — a writable `state` would let it forge its own health)",
+                    spec.hostname
+                );
+            }
+        } else {
+            eprintln!(
+                "ply: warning: params tree: could not mount {}'s own dir at /run/ply/self",
+                spec.hostname
+            );
+        }
+    } else {
+        eprintln!("ply: warning: params tree: could not mount /run/ply for this container");
     }
 
     // A declared run user gets a passwd/group entry (getpwuid must work —

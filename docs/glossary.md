@@ -55,6 +55,17 @@ exit codes, and restarts.
 | **service** | a prebuilt *runnable* app in the registry's `apps/` namespace (`ply run postgres@17`); contrast with a keg, which is an inert library |
 | **dev overlay** | `ply.dev.toml` — gitignorable run-time overrides (entrypoint, env, links) applied to dir runs only, never baked into images |
 
+## Params
+
+| Term | Meaning |
+|---|---|
+| **param** | a named value a manifest declares in `[params]` (or gets for free as a built-in fact) that other stack members interpolate with `{app.param}` |
+| **fact** | a built-in param — `name version host port addr base_url scale arch image` — resolved from the graph and lockfile, never declared |
+| **live param** | a runtime-only fact (`state instances started_at restarts`, plus anything an app self-publishes) — read from `/run/ply/<app>/<param>`, waited on with `after`, never interpolated into env |
+| **minted secret** | a `{ secret = true }` param: ply generates the value on first start and stores it as a 0600 file — the file is the truth until deleted |
+| **external secret** | a `{ secret = true, external = true }` param: ply never mints it — startup refuses until the operator provides it |
+| **taint** | the mark a secret param carries through interpolation — any composed value that embeds one (`{db.url}` embeds `{db.password}`) is masked in `ply up --plan` output (v1's only masked surface) |
+
 ## Banned words
 
 - **cluster** — industry-wide it means machines under a shared control

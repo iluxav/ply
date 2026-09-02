@@ -1,8 +1,17 @@
-//! `ply run --after APP`: block until another app on this host is healthy.
+//! `ply run --after COND`: block until another app on this host is ready.
 //!
-//! Readiness is the same bar the deploy health gate uses: at least one
-//! instance alive and, when its manifest declares `[health] port`, that port
-//! accepting a TCP connection. No `[health]` → alive is enough.
+//! Three forms, and nothing else:
+//!  - `APP` — an instance of APP is alive and, when its manifest declares
+//!    `[health] port`, that port accepts a TCP connection (the same bar the
+//!    deploy health gate uses).
+//!  - `APP.PARAM` — APP has published `PARAM` under its live params tree
+//!    (`/run/ply/APP/PARAM`, see `runtime::params_tree`).
+//!  - `APP.PARAM == 'value'` (or `"value"`) — APP has published `PARAM` and
+//!    its current value is exactly `value`.
+//!
+//! The file is the truth for the last two forms: unlike the bare form, they
+//! never require APP to be alive or port-healthy, since an app may publish a
+//! fact and then legitimately restart.
 
 use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
@@ -10,7 +19,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use crate::runtime::state;
+use crate::runtime::{params_tree, state};
 use crate::{Error, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,6 +27,104 @@ pub enum Readiness {
     Ready,
     NotRunning,
     Unhealthy(String),
+}
+
+/// A parsed `--after` condition: `app`, `app.param`, or
+/// `app.param == 'literal'`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Wait {
+    pub app: String,
+    pub param: Option<String>,
+    pub equals: Option<String>,
+}
+
+impl Wait {
+    /// Canonical rendering: `app`, `app.param`, or `app.param == 'literal'`.
+    fn label(&self) -> String {
+        match (&self.param, &self.equals) {
+            (Some(p), Some(e)) => format!("{}.{p} == '{e}'", self.app),
+            (Some(p), None) => format!("{}.{p}", self.app),
+            (None, _) => self.app.clone(),
+        }
+    }
+}
+
+/// Same identifier shape as the template engine's `{app.param}` refs
+/// (`params::parse_ref`'s `ident` closure — not exposed as a helper there,
+/// so mirrored here): non-empty, ASCII alphanumeric, `_`, or `-`.
+fn is_ident(s: &str) -> bool {
+    !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+fn wait_grammar_error(s: &str) -> Error {
+    Error::Runtime(format!(
+        "--after `{s}`: expected APP, APP.PARAM, or APP.PARAM == 'value'"
+    ))
+}
+
+/// Parse a `--after` condition. Exactly three forms are accepted — anything
+/// else (`!=`, `>`, `&&`, an unquoted or unterminated literal, whitespace in
+/// an identifier…) is the same grammar error, since the grammar is closed.
+pub fn parse_wait(s: &str) -> Result<Wait> {
+    let (head, equals) = match s.split_once("==") {
+        Some((head, rest)) => {
+            let rest = rest.trim();
+            let quote = rest.chars().next().ok_or_else(|| wait_grammar_error(s))?;
+            if quote != '\'' && quote != '"' {
+                return Err(wait_grammar_error(s));
+            }
+            let body = &rest[quote.len_utf8()..];
+            let end = body.find(quote).ok_or_else(|| wait_grammar_error(s))?;
+            if !body[end + quote.len_utf8()..].is_empty() {
+                return Err(wait_grammar_error(s));
+            }
+            (head.trim(), Some(body[..end].to_string()))
+        }
+        None => (s, None),
+    };
+
+    let (app, param) = match head.split_once('.') {
+        Some((a, p)) if is_ident(a) && is_ident(p) => (a.to_string(), Some(p.to_string())),
+        None if is_ident(head) => (head.to_string(), None),
+        _ => return Err(wait_grammar_error(s)),
+    };
+
+    // `app == 'x'` (no param) isn't one of the three forms.
+    if equals.is_some() && param.is_none() {
+        return Err(wait_grammar_error(s));
+    }
+
+    Ok(Wait { app, param, equals })
+}
+
+/// Readiness of one `--after` condition. `param: None` is the bare form,
+/// unchanged from before conditions existed (delegates to `check`). A
+/// param condition never requires the app to be alive or port-healthy —
+/// the published file is the truth.
+pub fn check_wait(w: &Wait) -> Readiness {
+    let Some(p) = w.param.as_deref() else {
+        return check(&w.app);
+    };
+    match params_tree::read(&w.app, p) {
+        None => Readiness::Unhealthy(format!("{}.{p} (currently unset)", w.app)),
+        Some(v) => match &w.equals {
+            Some(e) if &v != e => {
+                Readiness::Unhealthy(format!("{}.{p} == '{e}' (currently '{v}')", w.app))
+            }
+            _ => Readiness::Ready,
+        },
+    }
+}
+
+/// Pull the `(currently ...)` tail off an `Unhealthy` reason built by
+/// `check_wait`, to reuse in the terser timeout message (the rightmost
+/// match, in case a published value itself happens to contain the marker).
+fn currently_tail(why: &str) -> &str {
+    why.rsplit_once("(currently ")
+        .and_then(|(_, rest)| rest.strip_suffix(')'))
+        .unwrap_or(why)
 }
 
 /// TCP connect with the health gate's 300 ms budget.
@@ -63,29 +170,43 @@ pub fn check(app: &str) -> Readiness {
     readiness_of(&pairs, health_port)
 }
 
-/// Poll `poll(app)` for every app until all are `Ready`. `report` gets one
-/// human line per state change. Errors after `timeout` naming the laggards.
+/// Poll `poll(wait)` for every condition until all are `Ready`. `report`
+/// gets one human line per state change. Errors after `timeout` naming the
+/// laggards.
+///
+/// A bare wait (`param: None`) reports and errors byte-for-byte as before
+/// conditions existed — `check_wait`'s `Unhealthy` reason for a condition
+/// already names the app/param/expected value, so it is reported as-is
+/// rather than wrapped a second time.
 pub fn wait_until(
-    apps: &[String],
+    waits: &[Wait],
     timeout: Duration,
     interval: Duration,
-    mut poll: impl FnMut(&str) -> Readiness,
+    mut poll: impl FnMut(&Wait) -> Readiness,
     mut report: impl FnMut(String),
 ) -> Result<()> {
     let deadline = Instant::now() + timeout;
-    let mut last: Vec<Option<Readiness>> = vec![None; apps.len()];
-    let mut done = vec![false; apps.len()];
+    let mut last: Vec<Option<Readiness>> = vec![None; waits.len()];
+    let mut done = vec![false; waits.len()];
     loop {
-        for (i, app) in apps.iter().enumerate() {
+        for (i, w) in waits.iter().enumerate() {
             if done[i] {
                 continue;
             }
-            let now = poll(app);
+            let now = poll(w);
             if last[i].as_ref() != Some(&now) {
                 report(match &now {
-                    Readiness::Ready => format!("{app} is healthy"),
-                    Readiness::NotRunning => format!("waiting for {app} (not running yet)"),
-                    Readiness::Unhealthy(why) => format!("waiting for {app} ({why})"),
+                    Readiness::Ready => format!("{} is healthy", w.label()),
+                    Readiness::NotRunning => {
+                        format!("waiting for {} (not running yet)", w.label())
+                    }
+                    Readiness::Unhealthy(why) => {
+                        if w.param.is_some() {
+                            format!("waiting for {why}")
+                        } else {
+                            format!("waiting for {} ({why})", w.app)
+                        }
+                    }
                 });
                 last[i] = Some(now.clone());
             }
@@ -97,27 +218,62 @@ pub fn wait_until(
             return Ok(());
         }
         if Instant::now() >= deadline {
-            let laggards: Vec<&str> = apps
+            let laggards: Vec<usize> = (0..waits.len()).filter(|&i| !done[i]).collect();
+            // Bare laggards keep today's single comma-joined sentence,
+            // byte-for-byte, whether there's one or several — the shape a
+            // bare `--after app` has always produced. Conditional laggards
+            // are new: each gets its own `waiting for … (currently …, Ns
+            // elapsed)` clause. Both kinds can be timing out together (a
+            // bare `a` and a conditional `a.x == 'y'` are two gates), so
+            // the bare sentence — if any — comes first, then one clause per
+            // condition, joined with "; ".
+            let mut parts: Vec<String> = Vec::new();
+            let bare_names: Vec<&str> = laggards
                 .iter()
-                .enumerate()
-                .filter(|(i, _)| !done[*i])
-                .map(|(_, a)| a.as_str())
+                .filter(|&&i| waits[i].param.is_none())
+                .map(|&i| waits[i].app.as_str())
                 .collect();
-            return Err(Error::Runtime(format!(
-                "{} is not healthy after {}s — is it running? (ply ps)",
-                laggards.join(", "),
-                timeout.as_secs()
-            )));
+            if !bare_names.is_empty() {
+                parts.push(format!(
+                    "{} is not healthy after {}s — is it running? (ply ps)",
+                    bare_names.join(", "),
+                    timeout.as_secs()
+                ));
+            }
+            for &i in &laggards {
+                let w = &waits[i];
+                if w.param.is_none() {
+                    continue;
+                }
+                let currently = match &last[i] {
+                    Some(Readiness::Unhealthy(why)) => currently_tail(why),
+                    // check_wait's param path only ever reports Unhealthy
+                    // or Ready, and a laggard here is by definition never
+                    // Ready — unreachable in practice, kept as a safe
+                    // fallback rather than a panic.
+                    _ => "unset",
+                };
+                parts.push(format!(
+                    "waiting for {} (currently {currently}, {}s elapsed)",
+                    w.label(),
+                    timeout.as_secs()
+                ));
+            }
+            return Err(Error::Runtime(parts.join("; ")));
         }
         std::thread::sleep(interval);
     }
 }
 
 /// `--after` as the run parent uses it: real state, 500 ms polls, stderr.
-pub fn wait_for(apps: &[String], timeout: Duration) -> Result<()> {
-    wait_until(apps, timeout, Duration::from_millis(500), check, |line| {
-        eprintln!("ply: {line}")
-    })
+pub fn wait_for(waits: &[Wait], timeout: Duration) -> Result<()> {
+    wait_until(
+        waits,
+        timeout,
+        Duration::from_millis(500),
+        check_wait,
+        |line| eprintln!("ply: {line}"),
+    )
 }
 
 /// A parent that is blocked on `--after` leaves this so `ply ps` can show it.
@@ -203,6 +359,15 @@ mod tests {
     /// between the drop and the probe.
     const CLOSED_PORT: u16 = 9; // discard — unused, and never auto-assigned
 
+    /// A bare `--after APP` wait, for tests that don't care about params.
+    fn bare(app: &str) -> Wait {
+        Wait {
+            app: app.into(),
+            param: None,
+            equals: None,
+        }
+    }
+
     #[test]
     fn probe_distinguishes_open_and_closed_ports() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -212,10 +377,73 @@ mod tests {
     }
 
     #[test]
+    fn wait_grammar_three_forms_only() {
+        assert_eq!(parse_wait("db").unwrap().app, "db");
+        let w = parse_wait("server.finish_boot == 'ok'").unwrap();
+        assert_eq!(
+            (w.param.as_deref(), w.equals.as_deref()),
+            (Some("finish_boot"), Some("ok"))
+        );
+        assert!(parse_wait("server.finish_boot != 'ok'").is_err());
+        assert!(parse_wait("a.b == 'x' && c").is_err());
+    }
+
+    #[test]
+    fn wait_grammar_rejects_unquoted_and_unterminated_literals() {
+        assert!(parse_wait("server.finish_boot == ok").is_err());
+        assert!(parse_wait("server.finish_boot == 'ok").is_err());
+        assert!(parse_wait("server == 'ok'").is_err(), "no param to compare");
+        let w = parse_wait("server.finish_boot == \"ok\"").unwrap();
+        assert_eq!(w.equals.as_deref(), Some("ok"));
+    }
+
+    #[test]
+    fn condition_waits_until_value_matches() {
+        // None → unset, then a value that doesn't match, then the match.
+        let seq = std::cell::RefCell::new(vec![
+            None,
+            Some("booting".to_string()),
+            Some("ok".to_string()),
+        ]);
+        let wait = parse_wait("server.finish_boot == 'ok'").unwrap();
+        let mut lines = Vec::new();
+        let r = wait_until(
+            &[wait],
+            Duration::from_secs(5),
+            Duration::from_millis(1),
+            |w| {
+                // Mirrors check_wait's contract (params_tree::read → Unhealthy/Ready)
+                // without touching the filesystem.
+                let p = w.param.as_deref().unwrap();
+                let e = w.equals.as_deref().unwrap();
+                match seq.borrow_mut().remove(0) {
+                    None => Readiness::Unhealthy(format!("{}.{p} (currently unset)", w.app)),
+                    Some(v) if v != e => {
+                        Readiness::Unhealthy(format!("{}.{p} == '{e}' (currently '{v}')", w.app))
+                    }
+                    Some(_) => Readiness::Ready,
+                }
+            },
+            |l| lines.push(l),
+        );
+        assert!(r.is_ok());
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        assert!(
+            lines[0].contains("currently unset"),
+            "first poll finds nothing published: {lines:?}"
+        );
+        assert!(
+            lines[1].contains("currently 'booting'"),
+            "second poll finds the wrong value: {lines:?}"
+        );
+        assert_eq!(lines[2], "server.finish_boot == 'ok' is healthy");
+    }
+
+    #[test]
     fn wait_until_returns_when_everything_is_ready() {
         let mut lines = Vec::new();
         let r = wait_until(
-            &["pgdb".into(), "redis".into()],
+            &[bare("pgdb"), bare("redis")],
             Duration::from_secs(1),
             Duration::from_millis(1),
             |_| Readiness::Ready,
@@ -230,7 +458,7 @@ mod tests {
         let calls = Cell::new(0);
         let mut lines = Vec::new();
         let r = wait_until(
-            &["pgdb".into()],
+            &[bare("pgdb")],
             Duration::from_secs(5),
             Duration::from_millis(1),
             |_| {
@@ -258,11 +486,11 @@ mod tests {
     fn wait_until_times_out_naming_the_laggards() {
         let mut lines = Vec::new();
         let err = wait_until(
-            &["pgdb".into(), "redis".into()],
+            &[bare("pgdb"), bare("redis")],
             Duration::from_millis(20),
             Duration::from_millis(1),
-            |app| {
-                if app == "redis" {
+            |w| {
+                if w.app == "redis" {
                     Readiness::Ready
                 } else {
                     Readiness::NotRunning
@@ -275,6 +503,88 @@ mod tests {
         assert!(err.contains("pgdb is not healthy after"), "{err}");
         assert!(err.contains("is it running? (ply ps)"), "{err}");
         assert!(!err.contains("redis"), "ready apps are not blamed: {err}");
+    }
+
+    #[test]
+    fn wait_until_times_out_joining_multiple_bare_laggards_in_one_sentence() {
+        // Two bare laggards, neither ever ready: today's message is one
+        // comma-joined sentence, not one clause per app.
+        let err = wait_until(
+            &[bare("pgdb"), bare("redis")],
+            Duration::from_millis(20),
+            Duration::from_millis(1),
+            |_| Readiness::NotRunning,
+            |_| {},
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("pgdb, redis is not healthy after 0s — is it running? (ply ps)"),
+            "{err}"
+        );
+        assert_eq!(
+            err.matches("is not healthy after").count(),
+            1,
+            "one sentence for the whole bare set, not one per app: {err}"
+        );
+    }
+
+    #[test]
+    fn wait_until_times_out_with_mixed_bare_and_conditional_laggards() {
+        let cond = parse_wait("a.finish_boot == 'ok'").unwrap();
+        let err = wait_until(
+            &[bare("pgdb"), cond],
+            Duration::from_millis(20),
+            Duration::from_millis(1),
+            |w| {
+                if let Some(p) = w.param.as_deref() {
+                    Readiness::Unhealthy(format!("{}.{p} (currently unset)", w.app))
+                } else {
+                    Readiness::NotRunning
+                }
+            },
+            |_| {},
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("pgdb is not healthy after 0s — is it running? (ply ps)"),
+            "bare clause kept its own shape: {err}"
+        );
+        assert!(
+            err.contains("waiting for a.finish_boot == 'ok' (currently unset, 0s elapsed)"),
+            "conditional clause kept its own shape: {err}"
+        );
+        assert!(
+            err.contains("; "),
+            "the two clauses are joined, not merged into one sentence: {err}"
+        );
+    }
+
+    #[test]
+    fn condition_wait_times_out_with_the_currently_and_elapsed_shape() {
+        let wait = parse_wait("server.finish_boot == 'ok'").unwrap();
+        let err = wait_until(
+            &[wait],
+            Duration::from_millis(20),
+            Duration::from_millis(1),
+            |w| {
+                Readiness::Unhealthy(format!(
+                    "{}.{} (currently unset)",
+                    w.app,
+                    w.param.as_deref().unwrap()
+                ))
+            },
+            |_| {},
+        )
+        .unwrap_err()
+        .to_string();
+        // `Error::Runtime`'s Display adds a "runtime error: " wrapper (see
+        // error.rs) — the message itself is the exact shape.
+        assert!(
+            err.contains("waiting for server.finish_boot == 'ok' (currently unset, 0s elapsed)"),
+            "{err}"
+        );
     }
 
     #[test]

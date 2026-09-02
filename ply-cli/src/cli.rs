@@ -172,6 +172,17 @@ pub enum Command {
     #[command(subcommand)]
     Volume(VolumeCommand),
 
+    /// List and set secrets (the file store `ply up` mints into)
+    ///
+    /// A secret is one 0600 file named `<member>.<param>` under
+    /// `.ply/secrets/` (stack-local, `-C DIR`) or a deployment's
+    /// `.secrets/<stack>/` (`--deployments`). `ply up` mints ordinary
+    /// secrets automatically; external secrets
+    /// (`{ secret = true, external = true }`) are yours to provide, which
+    /// is what `set` is for. Values never appear in output.
+    #[command(subcommand)]
+    Secret(SecretCommand),
+
     /// Report shared volumes, deprecated runtimes, and other risk surface
     Audit(AuditArgs),
 
@@ -323,14 +334,25 @@ pub struct RunArgs {
     #[arg(long, value_name = "[ADDR:]PORT[:INSTANCE_PORT]")]
     pub publish: Vec<String>,
 
-    /// Start only after APP is healthy (repeatable): waits for an instance
-    /// of APP to pass its [health] gate — or just to be running if it has none.
+    /// Start only once a condition holds (repeatable). Three forms:
+    ///
+    /// `APP` — an instance of APP is alive and, when its manifest declares
+    /// [health] port, that port is accepting connections (just running is
+    /// enough if it has none).
+    ///
+    /// `APP.PARAM` — APP has published PARAM under its live params tree
+    /// (readable at /run/ply/APP/PARAM from inside a container).
+    ///
+    /// `APP.PARAM == 'value'` (or "value") — APP has published PARAM and its
+    /// current value is exactly `value`. The published file is the truth
+    /// for this form and the one above: neither requires APP itself to
+    /// still be alive.
     ///
     /// Also service discovery: if APP is published, <APP>_ADDR, <APP>_HOST and
     /// <APP>_PORT are injected into this app's environment, pointing at APP's
     /// load-balanced endpoint (correct for rootless and rootful alike). An
     /// explicit [env] entry or -e always wins.
-    #[arg(long, value_name = "APP")]
+    #[arg(long, value_name = "COND")]
     pub after: Vec<String>,
 
     /// How long to wait for --after apps before giving up
@@ -392,6 +414,13 @@ pub struct UpArgs {
     /// environment is consulted too. An undefined `$VAR` is a hard error.
     #[arg(long, value_name = "FILE")]
     pub env_file: Option<PathBuf>,
+
+    /// Resolve every member's params and env, and print the composed
+    /// result — no minting, no spawn, no lock write. Exits non-zero on any
+    /// resolution error (an undeclared param, a live param in env, a
+    /// missing external secret) — plan is the validator.
+    #[arg(long)]
+    pub plan: bool,
 }
 
 #[derive(Args)]
@@ -772,6 +801,63 @@ pub struct VolumeRmArgs {
     /// Skip the confirmation (for scripts)
     #[arg(short = 'y', long)]
     pub yes: bool,
+}
+
+#[derive(Subcommand)]
+pub enum SecretCommand {
+    /// List secret names — never values
+    Ls(SecretLsArgs),
+    /// Set a secret's value (external secrets need this before `ply up` will run)
+    Set(SecretSetArgs),
+}
+
+#[derive(Args)]
+pub struct SecretLsArgs {
+    /// Directory containing the stack (its secrets live in `.ply/secrets/`)
+    #[arg(
+        short = 'C',
+        long,
+        value_name = "DIR",
+        default_value = ".",
+        conflicts_with = "deployments"
+    )]
+    pub dir: PathBuf,
+
+    /// Manage the deployments-side store instead, keyed by stack name: files
+    /// live under the deployments dir's `.secrets/<stack>/`
+    /// (/var/lib/ply/deployments/.secrets/<stack>/ by default) — that root
+    /// is normally only writable as root.
+    #[arg(long, value_name = "STACK", conflicts_with = "dir")]
+    pub deployments: Option<String>,
+}
+
+#[derive(Args)]
+pub struct SecretSetArgs {
+    /// Secret name: MEMBER.PARAM, e.g. db.password
+    #[arg(value_name = "NAME")]
+    pub name: String,
+
+    /// Value to store; omit to read one line from stdin (keeps it out of
+    /// shell history)
+    #[arg(value_name = "VALUE")]
+    pub value: Option<String>,
+
+    /// Directory containing the stack (its secrets live in `.ply/secrets/`)
+    #[arg(
+        short = 'C',
+        long,
+        value_name = "DIR",
+        default_value = ".",
+        conflicts_with = "deployments"
+    )]
+    pub dir: PathBuf,
+
+    /// Manage the deployments-side store instead, keyed by stack name: files
+    /// live under the deployments dir's `.secrets/<stack>/`
+    /// (/var/lib/ply/deployments/.secrets/<stack>/ by default) — that root
+    /// is normally only writable as root.
+    #[arg(long, value_name = "STACK", conflicts_with = "dir")]
+    pub deployments: Option<String>,
 }
 
 #[derive(Args)]

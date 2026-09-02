@@ -18,7 +18,7 @@ use crate::manifest::{Layer, Manifest};
 use crate::runtime::cgroup::Cgroup;
 use crate::runtime::container::{child_main, ContainerSpec};
 use crate::runtime::state::InstanceState;
-use crate::runtime::{hosts, loopdev, mount, network, state};
+use crate::runtime::{hosts, loopdev, mount, network, params_tree, state};
 use crate::source::Source;
 use crate::store::Store;
 
@@ -162,6 +162,12 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
         opts.allow_insecure,
         opts.entrypoint.as_deref(),
         &store,
+        RunFacts {
+            name_override: opts.name.as_deref(),
+            host_available: !rootless,
+            port: opts.publish.first().map(|p| p.instance_port),
+            scale: opts.scale,
+        },
     )?;
     // The app's runtime identity: what its state pool, `.ply` name, control
     // dir, and `--after` matching key on. Defaults to the image's name;
@@ -288,24 +294,40 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
         }
     }
 
-    // --after: block until the named apps pass their health gates. Placed
-    // after --publish so a taken port still fails fast, before any launch so
-    // the wait happens exactly once per parent.
+    // --after: block until the named conditions hold. Placed after
+    // --publish so a taken port still fails fast, before any launch so the
+    // wait happens exactly once per parent. Parsed up front so a malformed
+    // condition fails fast, before the WaitingMarker (and any waiting) — a
+    // bad --after should never look like a hang.
     if !opts.after.is_empty() {
         let me = &identity;
-        if opts.after.iter().any(|a| a == me) {
+        let waits: Vec<crate::runtime::after::Wait> = opts
+            .after
+            .iter()
+            .map(|s| crate::runtime::after::parse_wait(s))
+            .collect::<Result<_>>()?;
+        // Distinct app names, first-seen order: a bare `a` and a conditional
+        // `a.x == 'y'` on the same app are two gates on one WaitingMarker
+        // entry / one discovery lookup, not two.
+        let mut wait_apps: Vec<String> = Vec::new();
+        for w in &waits {
+            if !wait_apps.contains(&w.app) {
+                wait_apps.push(w.app.clone());
+            }
+        }
+        if wait_apps.iter().any(|a| a == me) {
             return Err(Error::Runtime(format!(
                 "--after {me}: an app cannot wait for itself"
             )));
         }
-        let _waiting = crate::runtime::after::WaitingMarker::write(me, &opts.after)?;
-        crate::runtime::after::wait_for(&opts.after, opts.after_timeout)?;
+        let _waiting = crate::runtime::after::WaitingMarker::write(me, &wait_apps)?;
+        crate::runtime::after::wait_for(&waits, opts.after_timeout)?;
 
         // Resolved only now: the dependency is up, so its parent has recorded
         // where to reach it. Never overrides a value the author set — an
         // explicit [env] or -e wins, so this can only add.
         let in_stack_network = opts.netns.as_ref().is_some_and(|p| in_namespace(p));
-        for (key, value) in discovery_env(&opts.after, in_stack_network) {
+        for (key, value) in discovery_env(&wait_apps, in_stack_network) {
             if ctx.env.iter().any(|(k, _)| *k == key) {
                 continue;
             }
@@ -492,6 +514,17 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
         for slot in due {
             let info = slots.get_mut(&slot).expect("pending slot is tracked");
             info.restarts += 1;
+            // Live params tree: read-modify-write so the published count
+            // stays independently correct even if this call site's own
+            // bookkeeping ever drifts from what launch last published.
+            let tree_restarts: u32 = params_tree::read(&identity, "restarts")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
+            if let Err(e) =
+                params_tree::publish(&identity, "restarts", &(tree_restarts + 1).to_string())
+            {
+                eprintln!("ply: warning: params tree {identity}/restarts: {e}");
+            }
             eprintln!(
                 "ply: restarting {}.{slot} (restart #{}, policy {})",
                 ctx.manifest.package.name,
@@ -553,6 +586,12 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                         opts.allow_insecure,
                         opts.entrypoint.as_deref(),
                         &store,
+                        RunFacts {
+                            name_override: Some(identity.as_str()),
+                            host_available: !rootless,
+                            port: opts.publish.first().map(|p| p.instance_port),
+                            scale: opts.scale,
+                        },
                     ) {
                         Ok(new_ctx) => {
                             let mut queue: Vec<u32> = instances.iter().map(|i| i.n).collect();
@@ -829,6 +868,19 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
         std::thread::sleep(std::time::Duration::from_millis(150));
     }
     drop(instances); // unmount, remove state + hosts entries
+
+    // The app's final stop: this parent's last instance is gone (the loop
+    // above only ever exits once `instances` is empty and staying empty).
+    // A canary — another `ply run` of this same identity — may still be
+    // alive though, sharing this app's params tree node; only tear it down
+    // once no instance of `identity` is left anywhere on the host.
+    if !state::list()
+        .unwrap_or_default()
+        .iter()
+        .any(|s| s.app == identity && s.alive())
+    {
+        params_tree::remove_app(&identity);
+    }
     Ok(exit_code)
 }
 
@@ -871,6 +923,15 @@ fn wait_healthy(ctx: &AppContext, instance: &Instance) -> bool {
         .and_then(|text| serde_json::from_str::<InstanceState>(&text).ok())
         .map(|s| s.ip);
 
+    // Live params tree: state=healthy on pass, state=unhealthy on fail. A
+    // write failure here must not turn a real health result into a launch
+    // failure, so it's logged and swallowed rather than propagated.
+    let publish_state = |state: &str| {
+        if let Err(e) = params_tree::publish(&instance.app, "state", state) {
+            eprintln!("ply: warning: params tree {}/state: {e}", instance.app);
+        }
+    };
+
     let deadline = std::time::Instant::now() + grace;
     let mut last_err: Option<std::io::Error> = None;
     loop {
@@ -880,6 +941,7 @@ fn wait_healthy(ctx: &AppContext, instance: &Instance) -> bool {
                 "ply: health gate: {}.{} died during grace",
                 instance.app, instance.n
             );
+            publish_state("unhealthy");
             return false;
         }
         if let (Some(port), Some(ip)) = (port, ip) {
@@ -888,7 +950,10 @@ fn wait_healthy(ctx: &AppContext, instance: &Instance) -> bool {
                 addr,
                 std::time::Duration::from_millis(300),
             ) {
-                Ok(_) => return true,
+                Ok(_) => {
+                    publish_state("healthy");
+                    return true;
+                }
                 Err(e) => last_err = Some(e),
             }
         }
@@ -902,8 +967,10 @@ fn wait_healthy(ctx: &AppContext, instance: &Instance) -> bool {
                         .map(|e| e.to_string())
                         .unwrap_or_else(|| "none".into()),
                 );
+                publish_state("unhealthy");
                 return false;
             }
+            publish_state("healthy");
             return true; // no port to probe: surviving the grace window is the bar
         }
         std::thread::sleep(std::time::Duration::from_millis(200));
@@ -938,6 +1005,97 @@ pub struct AppContext {
     pub dep_images: Vec<PathBuf>,
 }
 
+/// Resolve a standalone app's own manifest `[env]` holes — the one thing
+/// `ply up`/`ply reconcile` already do (via `stack::resolve_stack`, handed
+/// to the child as `-e` overrides) that a bare `ply run` used to skip
+/// entirely: `compose_env` copies `manifest.env` verbatim, so without this
+/// the child saw the literal string `{user}` instead of a keg's declared
+/// default.
+///
+/// Pure: no I/O, no minting, no root. `manifest.params.is_none()`
+/// short-circuits to an empty map before touching the resolver at all — the
+/// additive guarantee (a manifest without `[params]` is never even looked
+/// at here). Otherwise builds a single-member `stack::MemberInput` (no
+/// stack, no cross-member refs — `env`/`params`/`after` empty) and resolves
+/// it through `stack::resolve_stack_for_run` with `secrets: None,
+/// plan_only: true`, so a declared secret resolves to the tainted
+/// `"(will mint)"` placeholder rather than erroring or minting.
+///
+/// For each of the resolver's self-config entries: a key `cli_env` already
+/// sets is skipped — the operator's `-e` wins and the hole is never seen,
+/// not even to check its taint. Otherwise a secret-tainted value is a hard
+/// error naming the remedy (never minted, never written to disk, the value
+/// itself never appears in the message) — a bare `ply run` has nowhere
+/// durable to keep a secret the way `ply up` does (`secrets/` in the stack
+/// dir). Anything else is returned for the caller to merge over the
+/// manifest's own `[env]` (non-hole values are never produced here, so they
+/// stay untouched either way).
+fn resolve_manifest_env(
+    name: &str,
+    manifest: &Manifest,
+    host_available: bool,
+    port: Option<u16>,
+    scale: u32,
+    image: Option<String>,
+    cli_env: &[(String, String)],
+) -> Result<std::collections::BTreeMap<String, String>> {
+    if manifest.params.is_none() {
+        return Ok(std::collections::BTreeMap::new());
+    }
+    // `RunFacts.port` is the container-side port of the first `--publish`,
+    // decided before the manifest was read. With nothing published, the
+    // `{port}` fact falls back to the app's own single labelled port — the
+    // same fallback the stack resolver applies (`stack::manifest_port`), so
+    // a keg reads the same standalone as it does in a stack.
+    let port = port.or_else(|| crate::stack::manifest_port(manifest));
+    let input = crate::stack::MemberInput {
+        name: name.to_string(),
+        version: Some(manifest.package.version.to_string()),
+        manifest: Some(manifest.clone()),
+        env: Vec::new(),
+        params: std::collections::BTreeMap::new(),
+        after: Vec::new(),
+        publish: Vec::new(),
+        domain: Vec::new(),
+        port,
+        scale: Some(scale),
+        image,
+    };
+    let resolution = crate::stack::resolve_stack_for_run(&input, host_available)?;
+
+    let cli_keys: std::collections::BTreeSet<&str> =
+        cli_env.iter().map(|(k, _)| k.as_str()).collect();
+    let mut out = std::collections::BTreeMap::new();
+    for entry in resolution.env.get(name).into_iter().flatten() {
+        if cli_keys.contains(entry.key.as_str()) {
+            continue; // the operator's -e wins; the hole is never seen
+        }
+        if entry.secret {
+            let key = &entry.key;
+            return Err(Error::Runtime(format!(
+                "{name}: [env] {key} reads a secret param — pass -e {key}=… , or run it \
+                 from a stack (ply up mints secrets)"
+            )));
+        }
+        out.insert(entry.key.clone(), entry.value.clone());
+    }
+    Ok(out)
+}
+
+/// The facts a standalone run's own `[params]`/`[env]` resolution needs
+/// that a stack member already carries elsewhere (see
+/// `resolve_manifest_env`): the run's identity (`--name`, else the
+/// manifest's own name — resolved once the manifest is loaded), whether
+/// `{host}`/`{addr}`/`{base_url}` can resolve at all (rootful only), the
+/// container-side port of the first `--publish`, and `--scale`. Grouped so
+/// `prepare_app` stays under clippy's argument-count lint.
+struct RunFacts<'a> {
+    name_override: Option<&'a str>,
+    host_available: bool,
+    port: Option<u16>,
+    scale: u32,
+}
+
 /// The pre-launch phase: read manifest + lockfile, fetch missing store
 /// digests, enforce host policy, compose env, record the app (GC roots).
 fn prepare_app(
@@ -946,6 +1104,7 @@ fn prepare_app(
     allow_insecure: bool,
     entrypoint_override: Option<&[String]>,
     store: &Store,
+    facts: RunFacts,
 ) -> Result<AppContext> {
     let manifest = read_manifest(image)?;
     let entrypoint = match entrypoint_override {
@@ -1021,7 +1180,32 @@ fn prepare_app(
     record.save()?;
 
     let layer_refs: Vec<&Layer> = dep_layers.iter().collect();
-    let mut env = compose_env(&layer_refs, &manifest.env, cli_env);
+    // A keg's own hole-y [env] (e.g. `POSTGRES_USER = "{user}"`) is only
+    // resolved here for a STANDALONE run — `ply up`/`ply reconcile` already
+    // did it and hand every self-config key through as a `-e`, which
+    // `resolve_manifest_env` sees in `cli_env` and skips re-resolving.
+    // `self_env.is_empty()` whenever there's nothing to add (no [params], or
+    // [params] but no hole-y [env] value) — take the exact old call in that
+    // case so an untouched manifest composes byte-for-byte as before.
+    let name = facts
+        .name_override
+        .unwrap_or(manifest.package.name.as_str());
+    let self_env = resolve_manifest_env(
+        name,
+        &manifest,
+        facts.host_available,
+        facts.port,
+        facts.scale,
+        Some(image.display().to_string()),
+        cli_env,
+    )?;
+    let mut env = if self_env.is_empty() {
+        compose_env(&layer_refs, &manifest.env, cli_env)
+    } else {
+        let mut manifest_env = manifest.env.clone();
+        manifest_env.extend(self_env);
+        compose_env(&layer_refs, &manifest_env, cli_env)
+    };
     env.entry("HOME".into()).or_insert("/root".into());
     if let Ok(term) = std::env::var("TERM") {
         env.entry("TERM".into()).or_insert(term);
@@ -1038,6 +1222,213 @@ fn prepare_app(
     })
 }
 
+#[cfg(test)]
+mod resolve_manifest_env_tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    const DEFAULTED_MANIFEST: &str = r#"
+[package]
+name = "postgres"
+version = "17.0.0"
+entrypoint = ["postgres"]
+
+[params]
+user = "postgres"
+
+[env]
+POSTGRES_USER = "{user}"
+"#;
+
+    const SECRET_MANIFEST: &str = r#"
+[package]
+name = "postgres"
+version = "17.0.0"
+entrypoint = ["postgres"]
+
+[params]
+password = { secret = true }
+
+[env]
+POSTGRES_PASSWORD = "{password}"
+"#;
+
+    const NO_PARAMS_MANIFEST: &str = r#"
+[package]
+name = "app"
+version = "1.0.0"
+entrypoint = ["app"]
+
+[env]
+X = "{not a hole}"
+"#;
+
+    fn manifest(text: &str) -> Manifest {
+        Manifest::parse(text).unwrap()
+    }
+
+    /// Mirrors what `prepare_app` does right before `compose_env`: resolve
+    /// the manifest's own self-config holes, merge them over the manifest's
+    /// raw `[env]` (non-hole values untouched), and compose — all pure, no
+    /// layers, no store, no container.
+    fn composed(
+        manifest: &Manifest,
+        cli_env: &[(String, String)],
+    ) -> Result<BTreeMap<String, String>> {
+        composed_with(manifest, true, cli_env)
+    }
+
+    /// [`composed`], with the run mode spelled out: `host_available: false`
+    /// is a rootless run, where `<name>.ply` resolves nowhere.
+    fn composed_with(
+        manifest: &Manifest,
+        host_available: bool,
+        cli_env: &[(String, String)],
+    ) -> Result<BTreeMap<String, String>> {
+        let self_env = resolve_manifest_env(
+            &manifest.package.name.clone(),
+            manifest,
+            host_available,
+            None,
+            1,
+            None,
+            cli_env,
+        )?;
+        let mut merged = manifest.env.clone();
+        merged.extend(self_env);
+        Ok(compose_env(&[], &merged, cli_env))
+    }
+
+    #[test]
+    fn standalone_run_resolves_manifest_env_holes_from_declared_defaults() {
+        let m = manifest(DEFAULTED_MANIFEST);
+        let env = composed(&m, &[]).unwrap();
+        assert_eq!(env["POSTGRES_USER"], "postgres");
+    }
+
+    #[test]
+    fn a_cli_override_wins_and_skips_resolution() {
+        let m = manifest(DEFAULTED_MANIFEST);
+        let cli = vec![("POSTGRES_USER".to_string(), "admin".to_string())];
+        let env = composed(&m, &cli).unwrap();
+        assert_eq!(env["POSTGRES_USER"], "admin");
+    }
+
+    #[test]
+    fn an_unoverridden_secret_backed_env_value_is_a_hard_error() {
+        let m = manifest(SECRET_MANIFEST);
+        let err = composed(&m, &[]).unwrap_err().to_string();
+        assert!(err.contains("pass -e POSTGRES_PASSWORD="), "{err}");
+        assert!(!err.contains("(will mint)"), "never print a secret: {err}");
+
+        let cli = vec![("POSTGRES_PASSWORD".to_string(), "dev".to_string())];
+        let env = composed(&m, &cli).unwrap();
+        assert_eq!(env["POSTGRES_PASSWORD"], "dev");
+    }
+
+    #[test]
+    fn a_manifest_without_params_is_untouched() {
+        let m = manifest(NO_PARAMS_MANIFEST);
+        let env = composed(&m, &[]).unwrap();
+        assert_eq!(env["X"], "{not a hole}");
+    }
+
+    /// Ruling: `{host}` is `Some("<name>.ply")` for a rootful standalone run
+    /// but `None` for a rootless one (no stack netns, no `/etc/hosts`
+    /// entry) — so a manifest that references it resolves under root and
+    /// names the gap otherwise, the same "publishes no port" shape the
+    /// resolver already uses for a missing `{port}`.
+    #[test]
+    fn the_host_fact_depends_on_whether_the_run_is_rootful() {
+        let m = manifest(
+            r#"
+[package]
+name = "app"
+version = "1.0.0"
+entrypoint = ["app"]
+
+[params]
+hostname = "{host}"
+
+[env]
+SELF_HOST = "{hostname}"
+"#,
+        );
+        let rootful = resolve_manifest_env("app", &m, true, None, 1, None, &[]).unwrap();
+        assert_eq!(rootful["SELF_HOST"], "app.ply");
+
+        let err = resolve_manifest_env("app", &m, false, None, 1, None, &[])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no `app.ply` address"), "{err}");
+    }
+
+    /// C1: `ply run redis@8` shape — a keg whose `[params]` declares a
+    /// computed `url` reading `{host}`/`{port}`, run rootless with no
+    /// `--publish`. Nothing in `[env]` reads `url`, so it must not fail;
+    /// `{port}` falls back to the manifest's single `[ports]` entry.
+    #[test]
+    fn a_computed_param_no_env_value_reads_never_blocks_a_rootless_run() {
+        let m = manifest(
+            r#"
+[package]
+name = "redis"
+version = "8.0.0"
+entrypoint = ["redis-server"]
+
+[ports]
+db = 6379
+
+[params]
+listen = "6379"
+url = "x://{host}:{port}"
+
+[env]
+REDIS_PORT = "{listen}"
+PORT_FACT = "{port}"
+"#,
+        );
+        let env = resolve_manifest_env("redis", &m, false, None, 1, None, &[]).unwrap();
+        assert_eq!(env["REDIS_PORT"], "6379");
+        assert_eq!(env["PORT_FACT"], "6379", "{{port}} falls back to [ports]");
+    }
+
+    /// C1: `ply run postgres@17 -e POSTGRES_PASSWORD=dev` shape — the keg's
+    /// own manifest, rootless, nothing published. `url` (which reads
+    /// `{host}`) is never referenced by `[env]`, so the defaults resolve and
+    /// the operator's `-e` covers the one secret-backed key.
+    #[test]
+    fn a_postgres_shaped_keg_runs_rootless_with_only_the_password_supplied() {
+        let m = manifest(
+            r#"
+[package]
+name = "postgres"
+version = "17.0.0"
+entrypoint = ["postgres"]
+
+[ports]
+db = 5432
+
+[params]
+user = "postgres"
+database = "postgres"
+password = { secret = true }
+url = "postgres://{user}:{password}@{host}:{port}/{database}"
+
+[env]
+POSTGRES_USER = "{user}"
+POSTGRES_DB = "{database}"
+POSTGRES_PASSWORD = "{password}"
+"#,
+        );
+        let cli = vec![("POSTGRES_PASSWORD".to_string(), "dev".to_string())];
+        let env = composed_with(&m, false, &cli).unwrap();
+        assert_eq!(env["POSTGRES_USER"], "postgres");
+        assert_eq!(env["POSTGRES_DB"], "postgres");
+        assert_eq!(env["POSTGRES_PASSWORD"], "dev");
+    }
+}
+
 struct Instance {
     app: String,
     n: u32,
@@ -1049,6 +1440,18 @@ struct Instance {
     pools: Vec<crate::runtime::publish::Pool>,
 }
 
+/// How many instances of `app` are alive right now, straight from the state
+/// pool — the `instances` live fact, and the "is anything of this app left?"
+/// gate `Drop for Instance` reads. `alive()` filtered: a state file outlives
+/// the process it describes until its parent reaps it.
+fn live_instance_count(app: &str) -> usize {
+    state::list()
+        .unwrap_or_default()
+        .iter()
+        .filter(|s| s.app == app && s.alive())
+        .count()
+}
+
 impl Drop for Instance {
     fn drop(&mut self) {
         for pool in &self.pools {
@@ -1056,6 +1459,28 @@ impl Drop for Instance {
         }
         let _ = hosts::remove_entry(&self.app, self.n);
         InstanceState::remove(&self.app, self.n);
+        // Live params tree: state=stopped once nothing of this app is left
+        // running. InstanceState::remove just above already dropped this
+        // instance's own state file, so state::list() here reflects every
+        // OTHER instance — the same idiom as the final-stop `remove_app`
+        // guard at the end of `run()`. Without this gate, scaling down N
+        // of N+1 instances (or a crashed instance under `restart: no`
+        // while siblings still serve) would stomp a still-healthy app's
+        // published state to "stopped" permanently, since nothing
+        // downstream would ever republish it. Best-effort either way.
+        let alive = live_instance_count(&self.app);
+        if alive == 0 {
+            if let Err(e) = params_tree::publish(&self.app, "state", "stopped") {
+                eprintln!("ply: warning: params tree {}/state: {e}", self.app);
+            }
+        }
+        // `instances` is published at launch as "alive + this one"; nothing
+        // else decrements it, so a scale-down (or a crash) would leave a
+        // stale high-water mark forever. Republish the remaining count here
+        // — best-effort, same guard idiom as the state write above.
+        if let Err(e) = params_tree::publish(&self.app, "instances", &alive.to_string()) {
+            eprintln!("ply: warning: params tree {}/instances: {e}", self.app);
+        }
         let _ = &self.guard; // unmounts layers, removes instance dir
     }
 }
@@ -1363,6 +1788,48 @@ fn launch_instance(
         run_user,
         log_fd: Some(log_tx),
     };
+
+    // Live params tree: publish before spawn. The child's own mount
+    // sequence (runtime/container.rs) re-binds each PARENT_OWNED file
+    // read-only over itself inside /run/ply/self and needs the target to
+    // already exist — this has to land before clone() below, not later at
+    // the InstanceState save. Best-effort: a write failure here must not
+    // block the app from starting.
+    {
+        let launched_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        // Instances of this app already ALIVE, plus this one about to
+        // launch — the "fact the parent already knows" version of a count.
+        // `alive()` matters: a state file outlives a dead instance until
+        // its parent reaps it, and counting those would publish an
+        // `instances` that only ever grows (`Drop for Instance` republishes
+        // the remaining count on the way down).
+        let instance_count = live_instance_count(&app) + 1;
+        let publish_fact = |key: &str, value: &str| {
+            if let Err(e) = params_tree::publish(&app, key, value) {
+                eprintln!("ply: warning: params tree {app}/{key}: {e}");
+            }
+        };
+        publish_fact("state", "starting");
+        publish_fact("started_at", &launched_at.to_string());
+        publish_fact("instances", &instance_count.to_string());
+        publish_fact("restarts", &restarts.to_string());
+        // Facts only — never a secret, never a declared [params] value.
+        publish_fact("name", &app);
+        publish_fact("host", &format!("{app}.ply"));
+        // Same `{port}` fact the resolver uses: the first publish entry,
+        // else the app's own single labelled port.
+        if let Some(port) = publish
+            .first()
+            .map(|w| w.spec.instance_port)
+            .or_else(|| crate::stack::manifest_port(manifest))
+        {
+            publish_fact("port", &port.to_string());
+        }
+        publish_fact("version", &manifest.package.version.to_string());
+    }
 
     let mut stack = vec![0u8; 1024 * 1024];
     let mut flags = CloneFlags::CLONE_NEWNS

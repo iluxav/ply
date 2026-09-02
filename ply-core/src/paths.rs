@@ -3,6 +3,14 @@
 
 use std::path::PathBuf;
 
+/// `XDG_RUNTIME_DIR` (read by `run_dir()` below) is process-global —
+/// every test across the crate that points it at a tempdir must serialize
+/// through this one lock, or two tests in the same binary race each
+/// other's mutation. Shared here (not duplicated per module) because this
+/// is the module that actually reads the variable.
+#[cfg(test)]
+pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Real root — not root *inside a user namespace*.
 ///
 /// Both look identical to `geteuid()`, and the difference decides

@@ -20,6 +20,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
+use crate::manifest::Manifest;
+use crate::params::{self, MemberFacts, PRef, Piece, Resolved};
+use crate::secrets::SecretStore;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MemberSource {
@@ -43,6 +46,10 @@ pub struct Member {
     pub source: MemberSource,
     /// `-e KEY=VALUE`; VALUE may contain `$VAR`, expanded at launch.
     pub env: Vec<(String, String)>,
+    /// `params = { key = "value" }`; VALUE may contain `$VAR` (expanded like
+    /// `env`) or `{param}`/`{app.param}` holes, resolved when the stack wires
+    /// this member's params namespace.
+    pub params: Vec<(String, String)>,
     /// Member names this one waits for → `--after`.
     pub after: Vec<String>,
     /// `--publish` entries.
@@ -167,6 +174,16 @@ pub fn apply_dev_overlay(stack: &mut Stack, stack_file: &Path) -> Result<Option<
             }
             fields.push("env");
         }
+        if !member.params.is_empty() {
+            // merged by key, same rule as env
+            for (k, v) in member.params {
+                match target.params.iter_mut().find(|(key, _)| key == &k) {
+                    Some(pair) => pair.1 = v,
+                    None => target.params.push((k, v)),
+                }
+            }
+            fields.push("params");
+        }
         if let Some(publish) = member.publish {
             target.publish = publish;
             fields.push("publish");
@@ -196,6 +213,7 @@ struct MemberOverlay {
     name: String,
     run: Option<String>,
     env: Vec<(String, String)>,
+    params: Vec<(String, String)>,
     publish: Option<Vec<String>>,
     domain: Option<Vec<String>>,
     volume: Option<Vec<String>>,
@@ -255,6 +273,7 @@ fn parse_overlay(text: &str, path: &Path) -> Result<StackOverlay> {
                 .and_then(|v| v.as_str())
                 .map(str::to_string),
             env: parse_env(member_env(table)?, &name, path)?,
+            params: parse_params(table.get("params"), &name, path)?,
             publish: list("publish")?,
             domain: list("domain")?,
             volume: list("volume")?,
@@ -381,20 +400,90 @@ pub fn parse(text: &str, path: &Path) -> Result<Option<Stack>> {
         }
     }
 
-    // after edges must name members
+    // after edges must parse as a `--after` condition (Task 8's grammar —
+    // `member`, `member.param`, or `member.param == '…'`) and must name a
+    // member. `Member.after` keeps the raw string regardless — `ply up`
+    // passes the whole condition through to `--after` unchanged — but
+    // ordering and these checks key on the parsed `wait.app`.
     let names: BTreeSet<&str> = members.iter().map(|m| m.name.as_str()).collect();
     for member in &members {
         for dep in &member.after {
-            if !names.contains(dep.as_str()) {
+            let wait = crate::runtime::after::parse_wait(dep).map_err(|e| {
+                Error::Manifest(format!("{}: member `{}`: {e}", path.display(), member.name))
+            })?;
+            if !names.contains(wait.app.as_str()) {
                 return Err(Error::Manifest(format!(
-                    "{}: member `{}` waits for `{dep}`, which is not a member",
+                    "{}: member `{}` waits for `{}`, which is not a member",
+                    path.display(),
+                    member.name,
+                    wait.app
+                )));
+            }
+            if wait.app == member.name {
+                return Err(Error::Manifest(format!(
+                    "{}: member `{}` waits for itself",
                     path.display(),
                     member.name
                 )));
             }
-            if dep == &member.name {
+        }
+    }
+
+    // `{app.param}` refs in env/publish/domain must name a real member, and
+    // must not target a live (runtime-only) param — those are never
+    // resolvable statically, see params::LIVE. `{self.x}` and a ref naming
+    // the member itself are its own params namespace, not a cross-member
+    // ref, and are not checked here.
+    for member in &members {
+        let values = member
+            .env
+            .iter()
+            .map(|(_, v)| v)
+            .chain(member.publish.iter())
+            .chain(member.domain.iter());
+        for v in values {
+            for r in params::refs(v) {
+                let PRef { app, param } = r;
+                let Some(app) = app else { continue };
+                if app == member.name || app == "self" {
+                    continue;
+                }
+                if !names.contains(app.as_str()) {
+                    return Err(Error::Manifest(format!(
+                        "{}: `{{{app}.{param}}}` references no stack member named `{app}`",
+                        member.name
+                    )));
+                }
+                if params::LIVE.contains(&param.as_str()) {
+                    return Err(Error::Manifest(format!(
+                        "{}: `{{{app}.{param}}}` is live — wait on it with \
+                         `after = [\"{app}.{param} == '…'\"]`, or read /run/ply/{app}/{param} at runtime",
+                        member.name
+                    )));
+                }
+            }
+        }
+    }
+
+    // `{}` interpolation is a v1 feature of `e =` values and `params =`
+    // overrides only: `publish`/`domain` are scanned for edges but never
+    // interpolated, so a hole there would reach `parse_publish` raw as the
+    // literal text `{db.port}`. Say so at parse rather than fail obscurely
+    // (or, worse, publish a nonsense port) at launch.
+    for member in &members {
+        for (what, values) in [("publish", &member.publish), ("domain", &member.domain)] {
+            for v in values {
+                let Some(r) = params::refs(v).into_iter().next() else {
+                    continue;
+                };
+                let hole = match &r.app {
+                    Some(app) => format!("{{{app}.{}}}", r.param),
+                    None => format!("{{{}}}", r.param),
+                };
                 return Err(Error::Manifest(format!(
-                    "{}: member `{}` waits for itself",
+                    "{}: member `{}`: `{what}` value `{v}` has a `{hole}` hole — v1 \
+                     interpolates `{{}}` in `e =` values and `params =` overrides only; \
+                     write the port literally (use `$VAR` for a deploy-time value)",
                     path.display(),
                     member.name
                 )));
@@ -412,7 +501,7 @@ pub fn parse(text: &str, path: &Path) -> Result<Option<Stack>> {
 }
 
 const MEMBER_KEYS: &[&str] = &[
-    "run", "name", "env", "e", "after", "publish", "volume", "domain", "scale",
+    "run", "name", "env", "e", "after", "publish", "volume", "domain", "scale", "params",
 ];
 
 /// A member's environment: `env` is the spelling, `e` the original alias.
@@ -481,6 +570,7 @@ fn parse_member(index: usize, entry: &toml::Value, path: &Path) -> Result<Member
     };
 
     let env = parse_env(member_env(table)?, &name, path)?;
+    let params = parse_params(table.get("params"), &name, path)?;
     let after = string_list(table.get("after"), "after", &name, path)?;
     let publish = string_list(table.get("publish"), "publish", &name, path)?;
     let volume = string_list(table.get("volume"), "volume", &name, path)?;
@@ -500,6 +590,7 @@ fn parse_member(index: usize, entry: &toml::Value, path: &Path) -> Result<Member
         name,
         source,
         env,
+        params,
         after,
         publish,
         volume,
@@ -591,6 +682,36 @@ fn parse_env(
             )));
         }
         out.push((k.to_string(), v.to_string()));
+    }
+    Ok(out)
+}
+
+/// Parse a `params = { key = "value", … }` table into pairs (values kept
+/// raw — `$VAR` expands at launch like `env`; `{param}`/`{app.param}` holes
+/// resolve when the stack wires this member's params namespace).
+fn parse_params(
+    value: Option<&toml::Value>,
+    member: &str,
+    path: &Path,
+) -> Result<Vec<(String, String)>> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let table = value.as_table().ok_or_else(|| {
+        Error::Manifest(format!(
+            "{}: member `{member}`: `params` must be a table of strings, e.g. params = {{ password = \"$PW\" }}",
+            path.display()
+        ))
+    })?;
+    let mut out = Vec::new();
+    for (k, v) in table {
+        let s = v.as_str().ok_or_else(|| {
+            Error::Manifest(format!(
+                "{}: member `{member}`: `params.{k}` must be a string",
+                path.display()
+            ))
+        })?;
+        out.push((k.clone(), s.to_string()));
     }
     Ok(out)
 }
@@ -727,25 +848,116 @@ pub fn expand_member_env(
         .collect()
 }
 
+/// Expand every `$VAR` in a member's params, returning launch-ready pairs.
+/// Mirrors `expand_member_env`: only `$VAR` is handled here — `{param}` /
+/// `{app.param}` holes are left for the stack's params-namespace resolution.
+pub fn expand_member_params(
+    member: &Member,
+    lookup: &impl Fn(&str) -> Option<String>,
+) -> Result<BTreeMap<String, String>> {
+    member
+        .params
+        .iter()
+        .map(|(k, v)| {
+            let who = format!("member `{}` params {k}", member.name);
+            Ok((k.clone(), expand_vars(v, &who, lookup)?))
+        })
+        .collect()
+}
+
+/// A stack member's manifest, read from wherever its `run =` kind keeps one:
+/// `Manifest::load(dir/ply.toml)` for a local `run = "./dir"` member (`dir`
+/// is `Some`, and this is the SOURCE manifest — not yet built, the same file
+/// the child's own build step reads); the embedded `/.manifest.toml` read
+/// straight out of an image file for a registry `run =` member (`dir` is
+/// `None`, `target` is the already-fetched image path) OR a local
+/// `run = "./app.img"` member (`MemberSource::Path` covers both a directory
+/// AND an `.img` file — see its doc comment — so `dir` can be `Some` and
+/// still name a file, not a directory).
+///
+/// Dispatch is on what `dir` (when given) actually IS on disk, not on the
+/// source's discriminant: a directory reads `ply.toml`; a file — `.img` or
+/// otherwise — is handed to the same embedded-manifest reader the `None`
+/// arm uses.
+///
+/// Under `ply up` there is no manifest available for a `run = "https://…"`
+/// member before the child fetches it — callers must not call this for
+/// those; treat them as declaring no `[params]` (empty decls, no
+/// self-config) instead. A host has already fetched every member's image
+/// by the time it reconciles, so there it reads like any other.
+pub fn member_manifest(target: &str, dir: Option<&Path>) -> Result<Manifest> {
+    match dir {
+        Some(dir) if dir.is_file() => crate::image::read::read_manifest(dir),
+        Some(dir) => Manifest::load(&dir.join("ply.toml")),
+        None => crate::image::read::read_manifest(Path::new(target)),
+    }
+}
+
+/// The member names this member's `env`/`publish`/`domain` templates
+/// reference via `{app.param}` — an implicit `after` edge for each, unioned
+/// into ordering and cycle detection alongside the explicit `after` list.
+/// `{self.x}` and a ref naming this member's own name are not edges — a
+/// member always "has" itself, that is not a dependency.
+pub fn derived_after(member: &Member) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    let mut out = Vec::new();
+    let values = member
+        .env
+        .iter()
+        .map(|(_, v)| v)
+        .chain(member.publish.iter())
+        .chain(member.domain.iter());
+    for v in values {
+        for r in params::refs(v) {
+            let PRef { app, .. } = r;
+            let Some(app) = app else { continue };
+            if app == member.name || app == "self" {
+                continue;
+            }
+            if seen.insert(app.clone()) {
+                out.push(app);
+            }
+        }
+    }
+    out
+}
+
 /// Kahn's algorithm, declaration order as the tie-break; cycles are errors.
 fn topo_sort(members: Vec<Member>, path: &Path) -> Result<Vec<Member>> {
-    let index: BTreeMap<String, usize> = members
+    // effective edges: the explicit `after` list — each entry parsed down to
+    // its `wait.app` (`member`, `member.param == '…'` and friends all order
+    // on the member they name, whatever else they also check) — unioned
+    // with the edges implied by `{app.param}` refs in env/publish/domain
+    // (`derived_after`). Every `m.after` entry already parsed successfully
+    // in `parse`'s validation pass above, so a parse failure here can't
+    // happen; falling back to the raw string is just defensive.
+    let edges: Vec<BTreeSet<String>> = members
         .iter()
-        .enumerate()
-        .map(|(i, m)| (m.name.clone(), i))
+        .map(|m| {
+            let mut e: BTreeSet<String> = m
+                .after
+                .iter()
+                .map(|dep| {
+                    crate::runtime::after::parse_wait(dep)
+                        .map(|w| w.app)
+                        .unwrap_or_else(|_| dep.clone())
+                })
+                .collect();
+            e.extend(derived_after(m));
+            e
+        })
         .collect();
     let mut indegree = vec![0usize; members.len()];
-    for member in &members {
-        let i = index[&member.name];
-        indegree[i] = member.after.len();
+    for (i, edge) in edges.iter().enumerate() {
+        indegree[i] = edge.len();
     }
     let mut order: Vec<usize> = Vec::with_capacity(members.len());
     let mut ready: Vec<usize> = (0..members.len()).filter(|i| indegree[*i] == 0).collect();
     while let Some(next) = ready.first().copied() {
         ready.remove(0);
         order.push(next);
-        for (i, member) in members.iter().enumerate() {
-            if member.after.contains(&members[next].name) {
+        for (i, edge) in edges.iter().enumerate() {
+            if edge.contains(&members[next].name) {
                 indegree[i] -= 1;
                 if indegree[i] == 0 {
                     ready.push(i);
@@ -798,7 +1010,23 @@ pub fn select<'a>(stack: &'a Stack, names: &[String]) -> Result<Vec<&'a Member>>
         for member in &stack.members {
             if wanted.contains(&member.name) {
                 for dep in &member.after {
-                    grew |= wanted.insert(dep.clone());
+                    // `after` entries are conditions (`member`,
+                    // `member.param == '…'`, …), not bare member names —
+                    // pull the app back out, same as topo_sort. Every entry
+                    // already parsed successfully in `parse`'s validation
+                    // pass, so the fallback to the raw string is defensive.
+                    let app = crate::runtime::after::parse_wait(dep)
+                        .map(|w| w.app)
+                        .unwrap_or_else(|_| dep.clone());
+                    grew |= wanted.insert(app);
+                }
+                // A `{app.param}` reference IS an edge — the same union
+                // `topo_sort` orders on and reconcile's `member_edges`
+                // converges on. Without it `ply up server` on a stack whose
+                // server reads `{db.url}` selects `server` alone and dies
+                // resolving `db`.
+                for app in derived_after(member) {
+                    grew |= wanted.insert(app);
                 }
             }
         }
@@ -914,12 +1142,549 @@ impl StackLock {
     }
 }
 
+// --- resolving a stack: params, env, waits ----------------------------------
+//
+// One resolver, two callers. `ply up` spawns a `ply run` child per member;
+// `ply reconcile` writes a systemd unit per member. Both build the same
+// per-member inputs and read the same `Resolution` back, so a stack means
+// the same thing on a laptop and on a host — same `{}` resolution, same
+// secret taint, same ordering.
+
+/// The container-side port of a member's FIRST `--publish` entry — the
+/// `{port}` fact: the segment after the last `:`, so
+/// `"internal:5433:5432"` -> `5432`, `"internal:5432"` -> `5432`,
+/// `"3000"` -> `3000`. No publish entry -> `None`, and `{port}`/`{addr}`/
+/// `{base_url}` then name that gap instead of guessing.
+pub fn container_port(publish: &[String]) -> Option<u16> {
+    publish.first()?.rsplit(':').next()?.parse().ok()
+}
+
+/// The `{port}` fact when nothing is published: the app's own `[ports]`
+/// entry, if it declares exactly one. The spec scopes `{port}`/`{addr}`/
+/// `{base_url}` to "apps with a published/labeled port" — a keg that labels
+/// one port HAS said where it listens, and a stack member (or a bare
+/// `ply run`) that adds no `--publish` should still read `{port}` off that
+/// label rather than name a gap. Two or more labelled ports is a genuine
+/// ambiguity, and stays `None`: `{port}` then names the gap as before.
+pub fn manifest_port(manifest: &Manifest) -> Option<u16> {
+    match manifest.ports.len() {
+        1 => manifest.ports.values().next().copied(),
+        _ => None,
+    }
+}
+
+/// One member's inputs to [`resolve_stack`]: its wiring with `$VAR` already
+/// expanded and `{}` holes still raw, its manifest, and the built-in facts
+/// only the caller knows (the version that will actually run, the published
+/// port, `--scale`, the image identity).
+pub struct MemberInput {
+    /// The member identity — its `--name`, its `<name>.ply` host, and the
+    /// handle other members' `{name.param}` refs and `after` entries use.
+    pub name: String,
+    /// The member's manifest, or `None` when there is none to read yet (a
+    /// `run = "https://…"` member under `ply up`, whose image the child
+    /// fetches): treated as declaring no `[params]` — empty decls, no
+    /// self-config, and a stack `params =` override on it is an error.
+    pub manifest: Option<Manifest>,
+    /// The member's stack `e = [...]` env; `{}` holes raw.
+    pub env: Vec<(String, String)>,
+    /// `params = {...}` overrides (`{}` holes stay raw — [`params::namespace`]
+    /// resolves those against this member's own namespace).
+    pub params: BTreeMap<String, String>,
+    /// The member's explicit `after = [...]`, raw: a plain member name or a
+    /// condition (`db.finish_boot == 'ok'`), verbatim either way.
+    pub after: Vec<String>,
+    /// `--publish` entries — scanned for `{app.param}` refs, each a derived
+    /// edge.
+    pub publish: Vec<String>,
+    /// `--domain` entries — scanned like `publish`.
+    pub domain: Vec<String>,
+    /// The `{version}` fact: the version of what will actually run.
+    pub version: Option<String>,
+    /// The `{port}` fact: the container-side port of the member's FIRST
+    /// publish entry. `None` = it publishes nothing, and the resolver falls
+    /// back to the manifest's own single `[ports]` entry (see
+    /// [`manifest_port`]) before `{port}`/`{addr}`/`{base_url}` name the gap
+    /// rather than resolve to a guess.
+    pub port: Option<u16>,
+    /// The `{scale}` fact — `None` means 1.
+    pub scale: Option<u32>,
+    /// The `{image}` fact: the store digest of an already-fetched image, a
+    /// URL, or `None` for a local dir whose image doesn't exist yet.
+    pub image: Option<String>,
+}
+
+/// One resolved env var for a stack member, ready to become a `ply run` `-e`
+/// (or, on a host, a line in the member's 0600 env file).
+#[derive(Clone, PartialEq)]
+pub struct ResolvedEnv {
+    pub key: String,
+    pub value: String,
+    /// Taint from [`params::Resolved`] — never printed, and delivered to the
+    /// child out of argv: `ply up` sets it on the child's environment and
+    /// passes a bare `-e KEY`; `ply reconcile` writes it to an env file
+    /// instead of the world-readable unit.
+    pub secret: bool,
+    pub source: EnvSource,
+}
+
+/// Hand-written (not derived): a secret's `value` must never come out of a
+/// `{:?}` — a stray `dbg!`, or an `anyhow` context on a type that embeds
+/// this — the way a derive would print it verbatim. `PartialEq` (derived,
+/// above) still compares the real value; only this rendering masks it.
+impl std::fmt::Debug for ResolvedEnv {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let value: &dyn std::fmt::Debug = if self.secret {
+            &"********"
+        } else {
+            &self.value
+        };
+        f.debug_struct("ResolvedEnv")
+            .field("key", &self.key)
+            .field("value", value)
+            .field("secret", &self.secret)
+            .field("source", &self.source)
+            .finish()
+    }
+}
+
+/// Where a [`ResolvedEnv`]'s value came from — `Display` renders `ply up
+/// --plan`'s per-entry "source" column.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EnvSource {
+    /// A stack `e = [...]` entry with no `{}` holes — today's behavior,
+    /// unchanged.
+    StackE,
+    /// A stack `e = [...]` entry whose value contained one or more `{}`
+    /// holes; the string is the rendered ref(s), e.g. `"{db.url}"`.
+    ParamRef(String),
+    /// Provider self-config: a hole in the member's OWN `[env]`, resolved
+    /// against its own namespace — a multi-hole or literal-plus-hole value,
+    /// or a single hole whose param is neither a stack override nor a
+    /// secret decl (`Override`/`Minted` below cover those finer cases).
+    SelfEnv,
+    /// Provider self-config whose single hole named a param the stack's
+    /// `params = {...}` overrode.
+    Override,
+    /// Provider self-config whose single hole named a declared secret param
+    /// — the string is that secret's file, as [`SecretStore::label`] names
+    /// it (e.g. `"secrets/db.password"`), shown so a reader can go straight
+    /// to it.
+    Minted(String),
+}
+
+impl std::fmt::Display for EnvSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EnvSource::StackE => write!(f, "stack e"),
+            EnvSource::ParamRef(r) => write!(f, "{r}"),
+            EnvSource::SelfEnv => write!(f, "manifest [env]"),
+            EnvSource::Override => write!(f, "params (stack override)"),
+            EnvSource::Minted(path) => write!(f, "minted  {path}"),
+        }
+    }
+}
+
+/// The result of resolving every member's params namespace and env:
+/// per-member resolved param tables, per-member launch env (with secret
+/// taint and provenance), and per-member wait lists (`after` ∪
+/// `derived_after`).
+#[derive(Default)]
+pub struct Resolution {
+    /// Every member's fully-resolved param table. Neither caller needs it
+    /// to launch (env delivery and waits are enough) — self-config
+    /// attribution and secret collection both happen from a local table
+    /// inside [`resolve_stack`], before this struct is built — but it is
+    /// what a params dump would read, and the resolver's own tests assert
+    /// on it.
+    pub namespaces: BTreeMap<String, params::Namespace>,
+    pub env: BTreeMap<String, Vec<ResolvedEnv>>,
+    pub waits: BTreeMap<String, Vec<String>>,
+    /// The LEAF secrets across every member: the resolved value of every
+    /// param whose declaration is `ParamDecl::Secret{..}` (stack-overridden
+    /// or external counts too), minus empty strings and the literal
+    /// `"(will mint)"`. NOT every `secret: true` value in `namespaces` — a
+    /// *computed* param (e.g. `url`) is tainted by a leaf it embeds, but
+    /// isn't itself a leaf, so `--plan` masks the leaf substring inside it
+    /// rather than the whole composed value. `ply up --plan`'s only reader.
+    pub secret_values: BTreeSet<String>,
+}
+
+/// Hand-written (not derived): `env` and a namespace's resolved values mask
+/// through `Resolved`'s and `ResolvedEnv`'s own `Debug` impls, but
+/// `secret_values` is a bare `BTreeSet<String>` of raw secret substrings —
+/// a derived `Debug` would print it verbatim. A `{:?}` of a `Resolution`
+/// must never leak a secret.
+///
+/// A namespace's CAPTURED failures ([`params::Namespace`]'s `Err` slots) are
+/// messages, not values, and every one this crate builds names params and
+/// members only — except a malformed-template message, which quotes the
+/// offending source, and a stack `params =` override's source can be an
+/// operator-supplied secret. It reaches the operator who wrote it either
+/// way (that is the error they get), but a `{:?}` is not how it should
+/// travel, so error slots print as `<unresolved>` here.
+impl std::fmt::Debug for Resolution {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let namespaces: BTreeMap<&str, BTreeMap<&str, std::result::Result<&Resolved, &str>>> = self
+            .namespaces
+            .iter()
+            .map(|(member, ns)| {
+                let ns = ns
+                    .iter()
+                    .map(|(name, slot)| (name.as_str(), slot.as_ref().map_err(|_| "<unresolved>")))
+                    .collect();
+                (member.as_str(), ns)
+            })
+            .collect();
+        f.debug_struct("Resolution")
+            .field("namespaces", &namespaces)
+            .field("env", &self.env)
+            .field("waits", &self.waits)
+            .field(
+                "secret_values",
+                &format_args!("<{} redacted>", self.secret_values.len()),
+            )
+            .finish()
+    }
+}
+
+/// Resolve a whole stack: per member, build its [`MemberFacts`] and resolve
+/// its params namespace (minting/loading secrets through `secrets`);
+/// interpolate `{}` holes in its stack `e = [...]` env against every
+/// member's namespace; and — for members whose own manifest declares
+/// `[params]` and has hole-y `[env]` — resolve those holes against the
+/// member's own namespace as provider self-config, delivered as `-e`
+/// overrides. Waits come out as `after` ∪ derived edges.
+///
+/// `secrets` is `None` only when the caller has nowhere to keep secret
+/// files (`ply up` with no stack dir); a member that needs one then fails,
+/// naming the gap.
+///
+/// `plan_only`: a missing (non-external) secret resolves to the literal
+/// `"(will mint)"` (tainted, no file write) instead of minting; a missing
+/// EXTERNAL secret still errors — plan is the validator, not an escape
+/// hatch. Always `false` on the host path, which converges rather than
+/// previews.
+///
+/// Additive: a member with no `{}` refs, no `params =` overrides and no
+/// manifest `[params]` resolves to entries byte-for-byte identical (value,
+/// order) to the pairs it came in with, each tagged [`EnvSource::StackE`].
+///
+/// Thin wrapper over [`resolve_impl`] with `host_available: true` — every
+/// existing caller (`ply up`'s netns, a host's rootful `/etc/hosts`) can
+/// always resolve `<member>.ply`. See [`resolve_stack_for_run`] for the one
+/// caller where that isn't a given.
+pub fn resolve_stack(
+    members: &[MemberInput],
+    secrets: Option<&SecretStore>,
+    plan_only: bool,
+) -> Result<Resolution> {
+    resolve_impl(members, secrets, plan_only, true)
+}
+
+/// The standalone-`ply run` counterpart to [`resolve_stack`]: one member, no
+/// stack around it. `secrets` is always `None` — a bare `ply run` has
+/// nowhere durable to keep one — and `plan_only` is always `true`, so a
+/// declared secret resolves to the tainted `"(will mint)"` placeholder
+/// rather than erroring or minting (see `resolve_impl`'s `mint` closure);
+/// `runtime::run::resolve_manifest_env` turns that taint into a hard error
+/// unless the operator's own `-e` already covers the key.
+///
+/// `host_available`: unlike a stack member, a standalone run cannot always
+/// assume `<name>.ply` resolves — only a rootful run gets the `/etc/hosts`
+/// entry that makes it real (see `runtime::run::run`'s `rootless`).
+pub(crate) fn resolve_stack_for_run(
+    member: &MemberInput,
+    host_available: bool,
+) -> Result<Resolution> {
+    resolve_impl(std::slice::from_ref(member), None, true, host_available)
+}
+
+/// Shared body of [`resolve_stack`] and [`resolve_stack_for_run`] — see
+/// [`resolve_stack`]'s doc for what this does. `host_available` says
+/// whether `{host}`/`{addr}`/`{base_url}` can resolve at all: always `true`
+/// through `resolve_stack`, only conditionally so through
+/// `resolve_stack_for_run`.
+fn resolve_impl(
+    members: &[MemberInput],
+    secrets: Option<&SecretStore>,
+    plan_only: bool,
+    host_available: bool,
+) -> Result<Resolution> {
+    struct Info {
+        decls: BTreeMap<String, params::ParamDecl>,
+        facts: MemberFacts,
+    }
+
+    // Pass 1: read every member's declared params, validate `params =`
+    // overrides against that set, and build its built-in facts.
+    let mut infos: BTreeMap<String, Info> = BTreeMap::new();
+    for m in members {
+        let decls = m
+            .manifest
+            .as_ref()
+            .map(|man| man.param_decls())
+            .transpose()?
+            .unwrap_or_default();
+
+        for key in m.params.keys() {
+            if decls.contains_key(key) {
+                continue;
+            }
+            if !m.manifest.as_ref().is_some_and(|man| man.params.is_some()) {
+                return Err(Error::Manifest(format!(
+                    "member `{}`: sets params.{key}, but {} declares no params — \
+                     add `{key}` to its manifest's [params], or drop `params.{key}` from the stack",
+                    m.name, m.name
+                )));
+            }
+            let mut declared: Vec<&str> = decls.keys().map(String::as_str).collect();
+            declared.sort_unstable();
+            return Err(Error::Manifest(format!(
+                "member `{}`: params.{key} is not a declared param — declared: {}",
+                m.name,
+                declared.join(", ")
+            )));
+        }
+
+        let facts = MemberFacts {
+            name: m.name.clone(),
+            version: m.version.clone(),
+            // `<member>.ply` resolves wherever a stack runs: `ply up`'s
+            // netns wires it as a loopback alias, and rootful `ply run` —
+            // the host's mode — writes it into `/etc/hosts` alongside the
+            // bridge address. So it is always available under every
+            // existing caller (`resolve_stack`'s `host_available: true`).
+            // The exception is `resolve_stack_for_run`'s rootless case: a
+            // bare `ply run` with no stack netns and no `/etc/hosts` entry,
+            // where `<name>.ply` genuinely resolves nowhere.
+            host: host_available.then(|| format!("{}.ply", m.name)),
+            // Nothing published: fall back to the app's own single labelled
+            // port, so a keg's `url = "…{port}…"` still resolves for a
+            // member (or a bare `ply run`) that adds no `--publish`.
+            port: m
+                .port
+                .or_else(|| m.manifest.as_ref().and_then(manifest_port)),
+            scale: m.scale.unwrap_or(1),
+            arch: crate::image::name::Arch::host().as_str().to_string(),
+            image: m.image.clone(),
+        };
+        infos.insert(m.name.clone(), Info { decls, facts });
+    }
+
+    // Pass 2: resolve every member's own params namespace. Stack order is
+    // topo-sorted (producers before consumers), but namespace resolution
+    // itself never crosses members — only the env interpolation below does
+    // — so build order here doesn't need to follow the graph.
+    let mut namespaces: BTreeMap<String, params::Namespace> = BTreeMap::new();
+    let mut secret_values: BTreeSet<String> = BTreeSet::new();
+    for m in members {
+        let info = &infos[&m.name];
+        let member = m.name.clone();
+        let mut mint = |param: &str| -> Result<String> {
+            let external = matches!(
+                info.decls.get(param),
+                Some(params::ParamDecl::Secret { external: true })
+            );
+            if plan_only {
+                // A plan never mints or writes, so a missing store (no stack
+                // dir, or no stack at all — `resolve_stack_for_run` always
+                // passes `None`) is the same "not found yet" case as an
+                // empty one: an external secret still must be provided by
+                // hand; anything else previews as the tainted placeholder it
+                // will become.
+                let existing = match secrets {
+                    Some(ss) => ss.get(&member, param)?,
+                    None => None,
+                };
+                return match existing {
+                    Some(v) => Ok(v),
+                    None if external => Err(Error::Runtime(format!(
+                        "secret {member}.{param} is external — provide it: ply secret set {member}.{param}"
+                    ))),
+                    None => Ok("(will mint)".to_string()),
+                };
+            }
+            let Some(ss) = secrets else {
+                return Err(Error::Runtime(format!(
+                    "member `{member}` needs secret `{param}` but this stack has no directory \
+                     to store secrets in — run `ply up -C <dir>`"
+                )));
+            };
+            ss.load_or_mint(&member, param, external)
+        };
+        let ns = params::namespace(&info.facts, &info.decls, &m.params, &mut mint)
+            .map_err(|e| Error::Manifest(format!("member `{}`: resolving params: {e}", m.name)))?;
+        // LEAF secrets only: a declared secret's own resolved value, never a
+        // computed param that merely embeds one (`ns[name].secret` would be
+        // true for both — `decls` is what tells them apart).
+        // A param that CAPTURED a resolution failure (see
+        // `params::namespace`) has no value to collect and is simply
+        // absent here — a secret never can, they resolve eagerly.
+        for (name, decl) in &info.decls {
+            if matches!(decl, params::ParamDecl::Secret { .. }) {
+                if let Some(v) = ns
+                    .get(name)
+                    .and_then(|r| r.as_ref().ok())
+                    .map(|r| r.value.as_str())
+                {
+                    if !v.is_empty() && v != "(will mint)" {
+                        secret_values.insert(v.to_string());
+                    }
+                }
+            }
+        }
+        namespaces.insert(m.name.clone(), ns);
+    }
+
+    // Pass 3: interpolate each member's stack env, add provider self-config,
+    // and compute waits.
+    let mut env: BTreeMap<String, Vec<ResolvedEnv>> = BTreeMap::new();
+    let mut waits: BTreeMap<String, Vec<String>> = BTreeMap::new();
+
+    for m in members {
+        let member = m.name.clone();
+        let info = &infos[&member];
+        let mut entries: Vec<ResolvedEnv> = Vec::new();
+
+        // Provider self-config: only when this member declares [params] AND
+        // has hole-y [env] values. Delivered FIRST so an explicit stack
+        // `e =` entry for the same key (pushed below) still wins — explicit
+        // beats automatic.
+        if let Some(man) = m.manifest.as_ref().filter(|man| man.params.is_some()) {
+            for (key, raw) in &man.env {
+                let who = format!("member `{member}` [env] {key}");
+                let pieces = params::parse_template(raw, &who)?;
+                if !pieces.iter().any(|pc| matches!(pc, Piece::Hole(_))) {
+                    continue; // no hole: already correct baked into the image
+                }
+                let own_ns = &namespaces[&member];
+                let resolved = params::interpolate(&pieces, &mut |pref: &PRef| {
+                    params::lookup(own_ns, pref, &member).cloned()
+                })?;
+                // Finer attribution for `--plan`: a single bare hole names
+                // exactly one param, so it can be traced to why it has that
+                // value — a stack override, a minted secret, or (the
+                // catch-all, including multi-hole/literal-plus-hole values)
+                // the manifest's own [env].
+                let source = match pieces.as_slice() {
+                    [Piece::Hole(pref)] if m.params.contains_key(&pref.param) => {
+                        EnvSource::Override
+                    }
+                    [Piece::Hole(pref)]
+                        if matches!(
+                            info.decls.get(&pref.param),
+                            Some(params::ParamDecl::Secret { .. })
+                        ) =>
+                    {
+                        let path = match secrets {
+                            Some(ss) => ss.label(&member, &pref.param),
+                            // unreachable in practice: resolving this secret
+                            // in Pass 2 would already have errored without a
+                            // store to mint/load it from.
+                            None => format!("secrets/{member}.{}", pref.param),
+                        };
+                        EnvSource::Minted(path)
+                    }
+                    _ => EnvSource::SelfEnv,
+                };
+                entries.push(ResolvedEnv {
+                    key: key.clone(),
+                    value: resolved.value,
+                    secret: resolved.secret,
+                    source,
+                });
+            }
+        }
+
+        // The member's own stack `e = [...]` entries: `$VAR` is already
+        // expanded (unchanged, upstream); resolve `{}` holes now, against
+        // the whole stack's namespaces — LIVE names are already rejected at
+        // stack-parse time, so this is belt-and-braces.
+        let mut edges: BTreeSet<String> = BTreeSet::new();
+        for (key, raw) in &m.env {
+            let who = format!("member `{member}` env {key}");
+            let pieces = params::parse_template(raw, &who)?;
+            let refs = params::refs(raw);
+            let resolved = params::interpolate(&pieces, &mut |pref: &PRef| {
+                let owner = match pref.app.as_deref() {
+                    Some(a) if a != "self" => a,
+                    _ => member.as_str(),
+                };
+                let ns = namespaces
+                    .get(owner)
+                    .ok_or_else(|| Error::Manifest(format!("{who}: no such member `{owner}`")))?;
+                params::lookup(ns, pref, owner).cloned()
+            })?;
+            // Several holes in one value each get their own edge (below),
+            // but the label only names ONE ref — the first, in written
+            // order — for `--plan`'s single `via {ref}` annotation; it is
+            // not a rendering of the whole value.
+            let source = match refs.first() {
+                None => EnvSource::StackE,
+                Some(r) => {
+                    let rendered = match &r.app {
+                        Some(a) => format!("{{{a}.{}}}", r.param),
+                        None => format!("{{{}}}", r.param),
+                    };
+                    EnvSource::ParamRef(rendered)
+                }
+            };
+            for r in &refs {
+                if let Some(app) = &r.app {
+                    if app != &member && app != "self" {
+                        edges.insert(app.clone());
+                    }
+                }
+            }
+            entries.push(ResolvedEnv {
+                key: key.clone(),
+                value: resolved.value,
+                secret: resolved.secret,
+                source,
+            });
+        }
+        // `publish`/`domain` refs derive edges too (mirrors
+        // [`derived_after`]), even though their values aren't interpolated
+        // here.
+        for v in m.publish.iter().chain(m.domain.iter()) {
+            for r in params::refs(v) {
+                if let Some(app) = r.app {
+                    if app != member && app != "self" {
+                        edges.insert(app);
+                    }
+                }
+            }
+        }
+
+        let mut w = m.after.clone();
+        for dep in edges {
+            if !w.contains(&dep) {
+                w.push(dep);
+            }
+        }
+        waits.insert(member.clone(), w);
+        env.insert(member, entries);
+    }
+
+    Ok(Resolution {
+        namespaces,
+        env,
+        waits,
+        secret_values,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn stack_of(text: &str) -> Stack {
         parse(text, Path::new("ply.toml")).unwrap().unwrap()
+    }
+
+    fn stack_err(text: &str) -> String {
+        parse(text, Path::new("ply.toml")).unwrap_err().to_string()
     }
 
     const LAB: &str = r#"
@@ -1048,6 +1813,34 @@ scale = 2
     }
 
     #[test]
+    fn condition_after_orders_on_its_app_and_keeps_the_raw_condition() {
+        let stack = stack_of(
+            "[[app]]\nrun = \"redis\"\nname = \"a\"\n\
+             [[app]]\nrun = \"redis\"\nname = \"b\"\nafter = [\"a.finish_boot == 'ok'\"]\n",
+        );
+        let names: Vec<&str> = stack.members.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(names, vec!["a", "b"], "b waits on a, so a orders first");
+        assert_eq!(stack.members[1].name, "b");
+        assert_eq!(
+            stack.members[1].after,
+            vec!["a.finish_boot == 'ok'"],
+            "the raw condition rides through to `ply up`'s --after, not just `a`"
+        );
+    }
+
+    #[test]
+    fn malformed_after_condition_is_rejected_at_stack_parse() {
+        let err = stack_err(
+            "[[app]]\nrun = \"redis\"\nname = \"a\"\n\
+             [[app]]\nrun = \"redis\"\nname = \"b\"\nafter = [\"a.finish_boot != 'ok'\"]\n",
+        );
+        assert!(
+            err.contains("expected APP, APP.PARAM, or APP.PARAM == 'value'"),
+            "{err}"
+        );
+    }
+
+    #[test]
     fn selection_pulls_dependencies() {
         let stack = stack_of(LAB);
         let only_web: Vec<&str> = select(&stack, &["web".into()])
@@ -1067,6 +1860,64 @@ scale = 2
             .collect();
         assert_eq!(only_db, vec!["db"]);
         assert!(select(&stack, &["ghost".into()]).is_err());
+    }
+
+    #[test]
+    fn selection_pulls_in_a_conditional_dependency() {
+        let stack = stack_of(
+            "[[app]]\nrun = \"redis\"\nname = \"a\"\n\
+             [[app]]\nrun = \"redis\"\nname = \"b\"\nafter = [\"a.finish_boot == 'ok'\"]\n",
+        );
+        let only_b: Vec<&str> = select(&stack, &["b".into()])
+            .unwrap()
+            .iter()
+            .map(|m| m.name.as_str())
+            .collect();
+        assert_eq!(
+            only_b,
+            vec!["a", "b"],
+            "`ply up b` must pull in `a`, not drop it because `after` names a \
+             condition rather than a bare member"
+        );
+    }
+
+    /// I3: the mirror of the test above for a DERIVED edge. `topo_sort` and
+    /// reconcile's `member_edges` both union `derived_after` in; `select`
+    /// must too, or `ply up server` on the spec's own stack selects only
+    /// `server` and dies naming `db` as "no such member".
+    #[test]
+    fn selection_pulls_in_a_derived_dependency() {
+        let stack = stack_of(
+            "[[app]]\nrun = \"postgres@17\"\nname = \"db\"\n\
+             [[app]]\nrun = \"./server\"\nname = \"server\"\ne = [\"DATABASE_URL={db.url}\"]\n",
+        );
+        let only_server: Vec<&str> = select(&stack, &["server".into()])
+            .unwrap()
+            .iter()
+            .map(|m| m.name.as_str())
+            .collect();
+        assert_eq!(
+            only_server,
+            vec!["db", "server"],
+            "a `{{db.url}}` reference IS the edge — selection must follow it"
+        );
+    }
+
+    /// I5: `{}` interpolation is a v1 feature of `e =` values and `params =`
+    /// overrides only; `publish`/`domain` reach `parse_publish` raw, so a
+    /// hole there would have become a literal `{db.port}` in a port spec.
+    /// Reject it at parse with the limitation and the remedy.
+    #[test]
+    fn a_hole_in_publish_or_domain_is_rejected_at_parse() {
+        let e = stack_err(
+            "[[app]]\nrun = \"postgres@17\"\nname = \"db\"\n\
+             [[app]]\nrun = \"./server\"\nname = \"server\"\npublish = \"{db.port}:3000\"\n",
+        );
+        assert!(e.contains("publish"), "{e}");
+        assert!(e.contains("write the port literally"), "{e}");
+
+        let e = stack_err("[[app]]\nrun = \"./web\"\nname = \"web\"\ndomain = \"{web.host}\"\n");
+        assert!(e.contains("domain"), "{e}");
     }
 
     // --- $VAR expansion ------------------------------------------------------
@@ -1189,6 +2040,7 @@ scale = 2
                 version: None,
             },
             env: vec![("A".into(), "$X".into()), ("B".into(), "plain".into())],
+            params: vec![],
             after: vec![],
             publish: vec![],
             volume: vec![],
@@ -1347,6 +2199,126 @@ scale = 2
             "stale arch digest dropped"
         );
     }
+
+    // --- params -----------------------------------------------------------
+
+    #[test]
+    fn member_params_parse_and_stay_raw() {
+        let s = stack_of(
+            r#"
+[[app]]
+run = "postgres@17"
+name = "db"
+params = { database = "todos", password = "$PW" }
+"#,
+        );
+        let m = &s.members[0];
+        assert!(m.params.contains(&("password".into(), "$PW".into())));
+        let x = expand_member_params(m, &|k| (k == "PW").then(|| "s".into())).unwrap();
+        assert_eq!(x["password"], "s");
+    }
+
+    #[test]
+    fn env_refs_derive_the_edge_and_order() {
+        let s = stack_of(
+            r#"
+[[app]]
+run = "./server"
+e = ["DATABASE_URL={db.url}"]
+[[app]]
+run = "postgres@17"
+name = "db"
+"#,
+        );
+        assert_eq!(
+            s.members.last().unwrap().name,
+            "server",
+            "db ordered first via the ref"
+        );
+    }
+
+    #[test]
+    fn ref_to_unknown_member_is_an_error() {
+        let e = stack_err(
+            r#"
+[[app]]
+run = "./server"
+e = ["X={ghost.url}"]
+"#,
+        );
+        assert!(e.contains("no stack member named `ghost`"), "{e}");
+    }
+
+    #[test]
+    fn live_param_in_env_is_rejected_with_the_wait_hint() {
+        let e = stack_err(
+            r#"
+[[app]]
+run = "./server"
+e = ["S={db.state}"]
+[[app]]
+run = "postgres@17"
+name = "db"
+"#,
+        );
+        assert!(e.contains("is live"), "{e}");
+    }
+
+    // --- member_manifest ----------------------------------------------------
+
+    #[test]
+    fn member_manifest_reads_a_local_dirs_ply_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("ply.toml"),
+            "[package]\nname = \"server\"\nversion = \"1.0.0\"\nentrypoint = [\"node\"]\n",
+        )
+        .unwrap();
+        let m = member_manifest(&dir.path().display().to_string(), Some(dir.path())).unwrap();
+        assert_eq!(m.package.name, "server");
+    }
+
+    #[test]
+    fn member_manifest_reads_the_embedded_manifest_of_an_image() {
+        let dir = tempfile::tempdir().unwrap();
+        let image = dir.path().join("pkg.img");
+        crate::image::squashfs::write_image(
+            &[],
+            &[crate::image::squashfs::ExtraFile {
+                path: "/.manifest.toml".into(),
+                bytes: b"[package]\nname = \"db\"\nversion = \"17.0.0\"\n".to_vec(),
+                mode: 0o444,
+            }],
+            &image,
+        )
+        .unwrap();
+        let m = member_manifest(&image.display().to_string(), None).unwrap();
+        assert_eq!(m.package.name, "db");
+        assert_eq!(m.package.version.to_string(), "17.0.0");
+    }
+
+    /// `run = "./app.img"` parses to `MemberSource::Path` exactly like a
+    /// directory does (see its doc comment) — `dir` arrives `Some`, but
+    /// naming a FILE, not a directory. `member_manifest` must still read
+    /// the embedded manifest, not try `<img>/ply.toml`.
+    #[test]
+    fn member_manifest_reads_an_img_file_passed_as_a_path_member() {
+        let dir = tempfile::tempdir().unwrap();
+        let image = dir.path().join("app.img");
+        crate::image::squashfs::write_image(
+            &[],
+            &[crate::image::squashfs::ExtraFile {
+                path: "/.manifest.toml".into(),
+                bytes: b"[package]\nname = \"app\"\nversion = \"2.0.0\"\n".to_vec(),
+                mode: 0o444,
+            }],
+            &image,
+        )
+        .unwrap();
+        let m = member_manifest(&image.display().to_string(), Some(&image)).unwrap();
+        assert_eq!(m.package.name, "app");
+        assert_eq!(m.package.version.to_string(), "2.0.0");
+    }
 }
 
 #[cfg(test)]
@@ -1413,6 +2385,7 @@ mod member_hole_tests {
                 version: None,
             },
             env: vec![],
+            params: vec![],
             after: vec![],
             publish: publish.iter().map(|s| s.to_string()).collect(),
             volume: vec![],
@@ -1465,6 +2438,531 @@ mod member_hole_tests {
         assert_eq!(
             expand_member_list(&m.domain, &m.name, "domain", &lookup).unwrap(),
             vec!["todos.example.com"]
+        );
+    }
+}
+
+#[cfg(test)]
+mod resolve_tests {
+    use super::*;
+    use crate::secrets::SecretStore;
+
+    const DB_MANIFEST: &str = r#"
+[package]
+name = "db"
+version = "17.0.0"
+entrypoint = ["postgres"]
+
+[params]
+database = "todos"
+password = { secret = true }
+url = "postgres://postgres:{password}@{host}:{port}/{database}"
+
+[env]
+POSTGRES_DB = "{database}"
+POSTGRES_PASSWORD = "{password}"
+"#;
+
+    const PLAIN_MANIFEST: &str = r#"
+[package]
+name = "server"
+version = "1.0.0"
+entrypoint = ["node", "server.js"]
+"#;
+
+    /// A `MemberInput` with everything but the fields a test cares about
+    /// defaulted the way a bare `[[app]]` block would arrive.
+    fn input(name: &str, manifest: Option<&str>) -> MemberInput {
+        let manifest = manifest.map(|t| Manifest::parse(t).unwrap());
+        MemberInput {
+            name: name.to_string(),
+            version: manifest.as_ref().map(|m| m.package.version.to_string()),
+            manifest,
+            env: Vec::new(),
+            params: BTreeMap::new(),
+            after: Vec::new(),
+            publish: Vec::new(),
+            domain: Vec::new(),
+            port: None,
+            scale: None,
+            image: None,
+        }
+    }
+
+    fn env_of<'a>(res: &'a Resolution, member: &str, key: &str) -> &'a ResolvedEnv {
+        res.env[member]
+            .iter()
+            .find(|e| e.key == key)
+            .unwrap_or_else(|| panic!("no {key} in {member}'s resolved env: {:?}", res.env[member]))
+    }
+
+    #[test]
+    fn container_port_takes_the_segment_after_the_last_colon() {
+        assert_eq!(container_port(&["internal:5433:5432".into()]), Some(5432));
+        assert_eq!(container_port(&["internal:5432".into()]), Some(5432));
+        assert_eq!(container_port(&["3000".into()]), Some(3000));
+        assert_eq!(container_port(&[]), None);
+        assert_eq!(container_port(&["internal:notaport".into()]), None);
+    }
+
+    #[test]
+    fn cross_member_ref_resolves_taints_and_derives_the_wait() {
+        let root = tempfile::tempdir().unwrap();
+        let secrets = SecretStore::for_stack(root.path());
+
+        let mut db = input("db", Some(DB_MANIFEST));
+        db.publish = vec!["internal:5432".to_string()];
+        db.port = Some(5432);
+        let mut server = input("server", Some(PLAIN_MANIFEST));
+        server.env = vec![("DATABASE_URL".to_string(), "{db.url}".to_string())];
+
+        let resolution = resolve_stack(&[db, server], Some(&secrets), false).unwrap();
+
+        let secret = secrets
+            .get("db", "password")
+            .unwrap()
+            .expect("minted and persisted");
+        assert_eq!(
+            secret.len(),
+            32,
+            "the minted secret shape from secrets::mint"
+        );
+
+        let pg_db = env_of(&resolution, "db", "POSTGRES_DB");
+        assert_eq!(pg_db.value, "todos");
+        assert!(!pg_db.secret);
+        assert_eq!(pg_db.source, EnvSource::SelfEnv);
+
+        let pg_pw = env_of(&resolution, "db", "POSTGRES_PASSWORD");
+        assert_eq!(pg_pw.value, secret);
+        assert!(pg_pw.secret);
+
+        let url = env_of(&resolution, "server", "DATABASE_URL");
+        assert_eq!(
+            url.value,
+            format!("postgres://postgres:{secret}@db.ply:5432/todos")
+        );
+        assert!(url.secret, "a value built from a secret hole stays tainted");
+        assert_eq!(url.source, EnvSource::ParamRef("{db.url}".to_string()));
+
+        // no explicit `after` on server, but the {db.url} ref is itself the
+        // wait — derived, not declared.
+        assert_eq!(resolution.waits["server"], vec!["db".to_string()]);
+        assert!(resolution.waits["db"].is_empty());
+    }
+
+    #[test]
+    fn a_member_with_no_params_or_holes_resolves_byte_for_byte_unchanged() {
+        let mut web = input("web", Some(PLAIN_MANIFEST));
+        web.env = vec![
+            ("A".to_string(), "plain".to_string()),
+            ("B".to_string(), "also plain".to_string()),
+        ];
+        let original_env = web.env.clone();
+
+        let resolution = resolve_stack(&[web], None, false).unwrap();
+
+        // `Resolution.env` is the single source of truth both callers read
+        // — additive: no {} holes, no params, so every entry is the
+        // original (key, value) pair, in the original order, tagged
+        // `StackE`, never secret.
+        let resolved: Vec<(String, String)> = resolution.env["web"]
+            .iter()
+            .map(|e| (e.key.clone(), e.value.clone()))
+            .collect();
+        assert_eq!(resolved, original_env);
+        for e in &resolution.env["web"] {
+            assert_eq!(e.source, EnvSource::StackE);
+            assert!(!e.secret);
+        }
+    }
+
+    const SECRET_ONLY_MANIFEST: &str = r#"
+[package]
+name = "db"
+version = "17.0.0"
+entrypoint = ["postgres"]
+
+[params]
+password = { secret = true }
+
+[env]
+POSTGRES_PASSWORD = "{password}"
+"#;
+
+    #[test]
+    fn plan_only_renders_will_mint_for_a_missing_mintable_secret_without_writing() {
+        let root = tempfile::tempdir().unwrap();
+        let secrets = SecretStore::for_stack(root.path());
+
+        let db = input("db", Some(SECRET_ONLY_MANIFEST));
+        let resolution = resolve_stack(&[db], Some(&secrets), true).unwrap();
+
+        let pg_pw = env_of(&resolution, "db", "POSTGRES_PASSWORD");
+        assert_eq!(pg_pw.value, "(will mint)");
+        assert!(pg_pw.secret);
+
+        assert_eq!(
+            secrets.get("db", "password").unwrap(),
+            None,
+            "plan_only must never write the secret file"
+        );
+    }
+
+    #[test]
+    fn plan_only_still_refuses_a_missing_external_secret() {
+        let root = tempfile::tempdir().unwrap();
+        let secrets = SecretStore::for_stack(root.path());
+        let api = input(
+            "api",
+            Some(
+                r#"
+[package]
+name = "api"
+version = "1.0.0"
+entrypoint = ["api"]
+
+[params]
+stripe_key = { secret = true, external = true }
+"#,
+            ),
+        );
+        let e = resolve_stack(&[api], Some(&secrets), true)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("external"), "{e}");
+        assert!(e.contains("ply secret set api.stripe_key"), "{e}");
+    }
+
+    /// `ply up <stack> --plan` (or `ply up some.toml --plan`) with no lock
+    /// dir reaches `resolve_stack(_, None, true)` for real — a preview mints
+    /// nothing, so it must not require a directory to store secrets in
+    /// either. Locks in the `mint` closure's `plan_only` branch: no store at
+    /// all previews the same way an empty store does (mintable → tainted
+    /// `(will mint)`, no file written anywhere; external → still refused).
+    /// The non-plan path is untouched — still a hard error naming the gap.
+    #[test]
+    fn plan_only_without_a_secret_store_previews_mintable_secrets_and_still_refuses_external_ones()
+    {
+        let db = input("db", Some(SECRET_ONLY_MANIFEST));
+        let resolution = resolve_stack(&[db], None, true).unwrap();
+
+        let pg_pw = env_of(&resolution, "db", "POSTGRES_PASSWORD");
+        assert_eq!(pg_pw.value, "(will mint)");
+        assert!(pg_pw.secret);
+
+        let api = input(
+            "api",
+            Some(
+                r#"
+[package]
+name = "api"
+version = "1.0.0"
+entrypoint = ["api"]
+
+[params]
+stripe_key = { secret = true, external = true }
+"#,
+            ),
+        );
+        let e = resolve_stack(&[api], None, true).unwrap_err().to_string();
+        assert!(e.contains("external"), "{e}");
+        assert!(e.contains("ply secret set api.stripe_key"), "{e}");
+
+        // Not `--plan`: still the original hard error, no directory to mint
+        // into or persist a secret file in.
+        let db = input("db", Some(SECRET_ONLY_MANIFEST));
+        let e = resolve_stack(&[db], None, false).unwrap_err().to_string();
+        assert!(e.contains("no directory to store secrets in"), "{e}");
+    }
+
+    #[test]
+    fn several_refs_in_one_value_label_the_source_with_the_first_only() {
+        let db = input(
+            "db",
+            Some(
+                r#"
+[package]
+name = "db"
+version = "17.0.0"
+entrypoint = ["postgres"]
+
+[params]
+user = "postgres"
+database = "todos"
+"#,
+            ),
+        );
+        let mut server = input("server", Some(PLAIN_MANIFEST));
+        server.env = vec![("X".to_string(), "{db.user}-{db.database}".to_string())];
+
+        let resolution = resolve_stack(&[db, server], None, false).unwrap();
+
+        let x = env_of(&resolution, "server", "X");
+        assert_eq!(x.value, "postgres-todos");
+        assert_eq!(
+            x.source,
+            EnvSource::ParamRef("{db.user}".to_string()),
+            "several holes in one value label the source with the FIRST ref only"
+        );
+        // both refs still each contribute to the (deduplicated) wait list.
+        assert_eq!(resolution.waits["server"], vec!["db".to_string()]);
+    }
+
+    #[test]
+    fn a_member_without_a_manifest_has_no_params_and_no_self_config() {
+        let resolution = resolve_stack(&[input("ext", None)], None, false).unwrap();
+        assert!(resolution.env["ext"].is_empty());
+        assert!(resolution.waits["ext"].is_empty());
+    }
+
+    #[test]
+    fn a_params_override_on_a_member_without_a_manifest_is_an_error() {
+        let mut ext = input("ext", None);
+        ext.params = BTreeMap::from([("foo".to_string(), "bar".to_string())]);
+        let e = resolve_stack(&[ext], None, false).unwrap_err().to_string();
+        assert!(e.contains("declares no params"), "{e}");
+    }
+
+    /// `<member>.ply` resolves wherever a stack runs (`ply up`'s netns
+    /// loopback alias; the host's rootful `/etc/hosts` bridge entry) — so
+    /// `{host}` is available unconditionally, whether or not the member
+    /// publishes a port at all.
+    #[test]
+    fn host_fact_is_always_present() {
+        let db = input(
+            "db",
+            Some(
+                r#"
+[package]
+name = "db"
+version = "17.0.0"
+entrypoint = ["postgres"]
+
+[params]
+hostname = "{host}"
+"#,
+            ),
+        );
+        // no publish entry at all — host still resolves.
+        let resolution = resolve_stack(&[db], None, false).unwrap();
+        assert_eq!(
+            resolution.namespaces["db"]["hostname"]
+                .as_ref()
+                .unwrap()
+                .value,
+            "db.ply"
+        );
+    }
+
+    /// `port`/`addr`/`base_url` are NOT unconditional like `host` — they
+    /// still need a published port (the caller passes `port: None` without
+    /// one), and `{port}`/`{addr}`/`{base_url}` name that gap the same way
+    /// they always have.
+    #[test]
+    fn port_ref_without_a_publish_entry_still_names_the_gap() {
+        let db = input(
+            "db",
+            Some(
+                r#"
+[package]
+name = "db"
+version = "17.0.0"
+entrypoint = ["postgres"]
+
+[params]
+addr_ref = "{addr}"
+
+[env]
+ADDR = "{addr_ref}"
+"#,
+            ),
+        );
+        let e = resolve_stack(&[db], None, false).unwrap_err().to_string();
+        assert!(e.contains("publishes no port"), "{e}");
+    }
+
+    /// C1: the same param, UNREFERENCED, must not fail the stack — the keg
+    /// `[params]` tables ship a computed `url` reading `{host}`/`{port}`,
+    /// and a member of either keg with no `publish` would otherwise fail
+    /// `ply up`/`--plan`/`reconcile` before anything even asked for `url`.
+    #[test]
+    fn an_unreferenced_computed_param_that_reads_an_absent_fact_resolves_the_rest() {
+        let db = input(
+            "db",
+            Some(
+                r#"
+[package]
+name = "db"
+version = "17.0.0"
+entrypoint = ["postgres"]
+
+[params]
+database = "todos"
+url = "postgres://x@{host}:{port}/{database}"
+
+[env]
+POSTGRES_DB = "{database}"
+"#,
+            ),
+        );
+        // no publish entry, no [ports]: `{port}` has no value, but nothing
+        // reads `url`, so the rest of the namespace resolves.
+        let resolution = resolve_stack(&[db], None, false).unwrap();
+        assert_eq!(env_of(&resolution, "db", "POSTGRES_DB").value, "todos");
+    }
+
+    /// C1(b): with nothing published, the `{port}` fact falls back to the
+    /// manifest's own single `[ports]` entry — "only for apps with a
+    /// published/labeled port", per the spec.
+    #[test]
+    fn the_port_fact_falls_back_to_a_single_declared_port() {
+        let db = input(
+            "db",
+            Some(
+                r#"
+[package]
+name = "db"
+version = "17.0.0"
+entrypoint = ["postgres"]
+
+[ports]
+db = 5432
+
+[params]
+url = "postgres://x@{host}:{port}/todos"
+
+[env]
+DB_URL = "{url}"
+"#,
+            ),
+        );
+        let resolution = resolve_stack(&[db], None, false).unwrap();
+        assert_eq!(
+            env_of(&resolution, "db", "DB_URL").value,
+            "postgres://x@db.ply:5432/todos"
+        );
+    }
+
+    #[test]
+    fn self_config_attribution_distinguishes_override_minted_and_manifest_env() {
+        let root = tempfile::tempdir().unwrap();
+        let secrets = SecretStore::for_stack(root.path());
+        let mut db = input(
+            "db",
+            Some(
+                r#"
+[package]
+name = "db"
+version = "17.0.0"
+entrypoint = ["postgres"]
+
+[params]
+database = "todos"
+region = "us-east"
+password = { secret = true }
+
+[env]
+POSTGRES_DB = "{database}"
+POSTGRES_REGION = "{region}"
+POSTGRES_PASSWORD = "{password}"
+"#,
+            ),
+        );
+        db.params = BTreeMap::from([("database".to_string(), "prod_todos".to_string())]);
+
+        let resolution = resolve_stack(&[db], Some(&secrets), false).unwrap();
+
+        assert_eq!(
+            env_of(&resolution, "db", "POSTGRES_DB").source,
+            EnvSource::Override,
+            "a param the stack overrode is tagged Override"
+        );
+        assert_eq!(
+            env_of(&resolution, "db", "POSTGRES_REGION").source,
+            EnvSource::SelfEnv,
+            "a plain manifest default, not overridden, stays SelfEnv"
+        );
+        match &env_of(&resolution, "db", "POSTGRES_PASSWORD").source {
+            EnvSource::Minted(path) => assert_eq!(path, "secrets/db.password"),
+            other => panic!("expected Minted, got {other:?}"),
+        }
+    }
+
+    // --- Debug masking --------------------------------------------------------
+
+    #[test]
+    fn secret_env_entries_mask_their_value_in_debug_output() {
+        let entry = ResolvedEnv {
+            key: "PASSWORD".to_string(),
+            value: "s3cr3t-value".to_string(),
+            secret: true,
+            source: EnvSource::SelfEnv,
+        };
+        let debug = format!("{entry:?}");
+        assert!(debug.contains("********"), "{debug}");
+        assert!(!debug.contains("s3cr3t-value"), "{debug}");
+
+        // a non-secret entry prints its value verbatim, unmasked.
+        let plain = ResolvedEnv {
+            key: "NODE_ENV".to_string(),
+            value: "production".to_string(),
+            secret: false,
+            source: EnvSource::StackE,
+        };
+        assert!(format!("{plain:?}").contains("production"));
+    }
+
+    #[test]
+    fn a_resolutions_debug_output_never_leaks_a_leaf_secret() {
+        // `namespaces`/`env` mask through `Resolved`/`ResolvedEnv`'s own
+        // `Debug`; this test is about `secret_values` specifically — a bare
+        // `BTreeSet<String>` that a derived `Debug` would print verbatim —
+        // and about a namespace's CAPTURED failure messages, which a
+        // derived `Debug` would likewise print as the raw strings they are.
+        let mut namespaces = BTreeMap::new();
+        namespaces.insert(
+            "db".to_string(),
+            BTreeMap::from([
+                (
+                    "password".to_string(),
+                    Ok(Resolved {
+                        value: "s3cr3t-leaf".to_string(),
+                        secret: true,
+                    }),
+                ),
+                (
+                    "url".to_string(),
+                    Err("db.url: stray `{` in `s3cr3t-leaf{`".to_string()),
+                ),
+            ]),
+        );
+        let resolution = Resolution {
+            namespaces,
+            secret_values: BTreeSet::from(["s3cr3t-leaf".to_string()]),
+            ..Default::default()
+        };
+        let debug = format!("{resolution:?}");
+        assert!(!debug.contains("s3cr3t-leaf"), "{debug}");
+        assert!(debug.contains("<unresolved>"), "{debug}");
+    }
+
+    /// The host path's own shape: secrets come from a deployments store, and
+    /// a member's waits are `after` ∪ derived — the list reconcile turns
+    /// into `--after` flags and systemd `After=` directives.
+    #[test]
+    fn waits_union_explicit_after_with_derived_edges() {
+        let db = input("db", Some(PLAIN_MANIFEST));
+        let cache = input("cache", Some(PLAIN_MANIFEST));
+        let mut server = input("server", Some(PLAIN_MANIFEST));
+        server.after = vec!["cache".to_string()];
+        server.env = vec![("DB_HOST".to_string(), "{db.host}".to_string())];
+
+        let resolution = resolve_stack(&[db, cache, server], None, false).unwrap();
+        assert_eq!(
+            resolution.waits["server"],
+            vec!["cache".to_string(), "db".to_string()],
+            "explicit entries keep their written order; derived edges follow"
         );
     }
 }

@@ -28,6 +28,9 @@ ffmpeg = { source = "alias", version = "6.1" }
 [env]
 NODE_ENV = "production"
 
+[params]                          # optional: named values other apps read as {myapp.x} — see below
+api_key = { secret = true }       # minted per stack; add external = true for BYO
+
 [ports]
 web = 3000                        # label of what the app binds — not a host claim
 
@@ -117,6 +120,11 @@ nested table in TOML.
 **`[env]`** — composed after package contributions, before CLI overrides
 (`-e`, `--env-file`); last wins.
 
+**`[params]`** — named values other apps interpolate with `{app.param}`,
+and this manifest's own `[env]` can reference with bare `{param}`. Secrets,
+computed values, and built-in facts (`host`, `port`, …) all go through the
+same namespace. See below.
+
 **`[ports]`** — documentation the tooling reads: `ply proxy` falls back to
 these ports for an unpublished app, and `[health]` checks them. Never a host port
 binding — that is `--publish`, deliberately a run-time decision rather than
@@ -153,15 +161,117 @@ with no `[sources] default`, resolves from the official registry. Declare
 (`{ path, scope, ephemeral }`) is for when you need `scope = "shared"` or
 `ephemeral = true`.
 
+## `[params]`
+
+A param is a named value a package exposes; consumers interpolate it with
+`{app.param}` — see [Stacks & local dev](/docs/stacks/) for the consumer
+side. Here is the provider side, the shape a real keg ships:
+
+```toml
+[params]
+user     = "postgres"                                               # plain value = default
+database = "postgres"
+password = { secret = true }                                        # minted per stack
+url      = "postgres://{user}:{password}@{host}:{port}/{database}"  # computed — interpolates others
+
+[env]                                  # the provider configures ITSELF from the same namespace
+POSTGRES_USER     = "{user}"
+POSTGRES_DB       = "{database}"
+POSTGRES_PASSWORD = "{password}"
+```
+
+- A plain string is a default value. `{ secret = true }` mints a strong
+  32-character value the first time a stack starts and stores it as a
+  0600 file — never write a value alongside `secret = true`; minting *is*
+  the default, so a manifest that tries fails to build. Add
+  `external = true` and ply never mints: startup refuses until the
+  operator provides the value (`ply secret set`, or a stack
+  `params =`/`$VAR` override) — named, loud, no silent empty string.
+- A computed param is just a param whose value contains `{other}` holes,
+  resolved against the same package's own namespace. `url` above is not a
+  special mechanism — it is a param that references its neighbors, same as
+  any other.
+- **Bare `{param}` in `[env]` reaches this same namespace** — declared
+  params plus the built-in facts below — the moment a `[params]` table
+  exists, even an empty one. A manifest with no `[params]` table is
+  unchanged: `{`/`}` in `[env]` stay literal text, so nothing here breaks
+  an existing manifest that hasn't opted in. Escapes: `{{` → literal `{`,
+  `}}` → literal `}`. `$VAR` keeps its own rules and runs first — a value
+  can mix both (`$VAR` reaches the ambient system, `{}` reaches the
+  params namespace).
+- **Built-in facts** — free on every package, no declaration needed:
+
+  ```
+  name  version  host  port  addr  base_url  scale  arch  image
+  ```
+
+  `addr` is `{host}:{port}`; `base_url` is `http://{host}:{port}` (http by
+  convention). `port` is the container-side port of the first `--publish`,
+  falling back to the package's own `[ports]` entry when it declares
+  exactly one — so a keg that labels its port reads `{port}` even with no
+  `--publish`. `host` is the `<name>.ply` address, which exists inside a
+  stack and for a rootful run, but not for a bare rootless one.
+  Referencing one that this run doesn't have is an error naming the gap,
+  never a blank value — but only where it is *read*: a computed param
+  nothing references (a keg's `url` on a run that publishes nothing) is
+  simply unavailable, not fatal. `host`/`port` resolve per run mode
+  (rootless loopback, rootful bridge, stack netns) — the reference is the
+  same everywhere, the value is not.
+- **Reserved names** — the built-ins above, plus the live set (populated by
+  the runtime, never user-declared: `state instances started_at
+  restarts`), plus `self` — cannot be redeclared in `[params]`:
+
+  ```
+  name version host port addr base_url scale arch image state instances started_at restarts self
+  ```
+
+  Referencing a *live* name (`state`, `instances`, `started_at`,
+  `restarts`) from `[env]` or a computed param's default is a manifest
+  error: those values change after launch, so baking one into env would be
+  a stale-config bug waiting to happen. Read a live value from
+  `/run/ply/self/<name>` at runtime, or wait on it with a stack `after`
+  condition — see [Stacks & local dev](/docs/stacks/).
+
+Images that carry `[params]` need ply 0.1.69 or newer — an older binary
+rejects the unknown table outright (a manifest is parsed with unknown
+fields denied), so update ply before pulling an image that declares one.
+
+### Running a keg with params directly
+
+`[params]`/`[env]` holes aren't only a stack thing: a bare `ply run` on an
+image whose manifest declares `[params]` resolves that manifest's own
+hole-y `[env]` too, against the app's own declared defaults and facts —
+`ply run postgres@17 -e POSTGRES_PASSWORD=dev` gets `POSTGRES_USER` and
+`POSTGRES_DB` defaulted to `postgres`/`postgres` with no further flags,
+and either is still overridable with `-e`. A declared param nothing in
+`[env]` reads never gets in the way: postgres's computed
+`url = "…@{host}:{port}/…"` wants an address a rootless run doesn't have,
+and that only matters if something asks for `url`.
+
+A hole that reads a **secret** param is different: a standalone run has
+nowhere durable to keep a minted value the way a stack does, so it refuses
+to start rather than silently mint one or leave the literal `{password}`
+in the child's environment:
+
+```
+postgres: [env] POSTGRES_PASSWORD reads a secret param — pass -e POSTGRES_PASSWORD=… , or run it from a stack (ply up mints secrets)
+```
+
+Pass the value yourself (`-e POSTGRES_PASSWORD=dev`) for a standalone run,
+or run the same image inside a stack instead — `ply up` mints and stores
+it. An explicit `-e KEY=value` always wins and is never re-resolved,
+whether or not the key it names reads a secret. A manifest with no
+`[params]` table is untouched by any of this.
+
 ## Two more files, same grammar
 
 **`[[app]]`** — a file with `[[app]]` blocks is a stack file: several apps
 wired for `ply up`, optionally headed by a `[stack]` table (name, version,
 `env_file`). It is the `[[app]]` array that makes it a stack — a `[stack]`
 table alone does not. Each member is `run = "postgres@17"` (registry app) or
-`run = "./server"` (local app dir), plus `env`, `after`, `publish`, `domain`,
-`volume`, `scale`. Registry members pin into the stack dir's
-`ply.lock` (`ref`, `version`, `digest.<arch>`). See
+`run = "./server"` (local app dir), plus `name`, `env`, `params`, `after`,
+`publish`, `domain`, `volume`, `scale`. Registry members pin into the stack
+dir's `ply.lock` (`ref`, `version`, `digest.<arch>`). See
 [Stacks & local dev](/docs/stacks/).
 
 **`ply.dev.toml`** — a gitignorable dev overlay next to an app's ply.toml,

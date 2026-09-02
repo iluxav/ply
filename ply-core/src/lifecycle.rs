@@ -379,10 +379,23 @@ pub fn render_unit(
              Wants=network-online.target\n"
         )
     };
+    // `after` entries are `--after` conditions (`member`, `member.param`,
+    // `member.param == '…'`), not bare unit names — the ordering directives
+    // key on the app each one names, deduped (a bare `a` and a conditional
+    // `a.x == 'y'` on the same app must not order-and-want it twice). The
+    // ExecStart side, built from `run_flags` above, keeps the raw
+    // conditions verbatim — `quote_unit_arg` already keeps a
+    // whitespace-bearing one as a single argument.
+    let mut seen = BTreeSet::new();
     for dep in after {
-        unit.push_str(&format!(
-            "After=ply-{dep}.service\nWants=ply-{dep}.service\n"
-        ));
+        let app = crate::runtime::after::parse_wait(dep)
+            .map(|w| w.app)
+            .unwrap_or_else(|_| dep.clone());
+        if seen.insert(app.clone()) {
+            unit.push_str(&format!(
+                "After=ply-{app}.service\nWants=ply-{app}.service\n"
+            ));
+        }
     }
     unit.push_str(&format!(
         "\n\
@@ -618,6 +631,46 @@ mod tests {
         assert!(
             !plain.contains("After=ply-"),
             "no dependency lines without --after:\n{plain}"
+        );
+    }
+
+    #[test]
+    fn render_unit_orders_on_the_apps_a_condition_names_not_the_raw_condition() {
+        let flags = vec![
+            "--after".to_string(),
+            "a.finish_boot == 'ok'".into(),
+            "--after".into(),
+            "a".into(),
+        ];
+        // A conditional dep and a bare dep on the same app: the ordering
+        // directive must key on `a`, once — not on the raw condition string
+        // (which systemd would parse as three bogus unit names) and not
+        // twice for the two `--after` entries naming the same app.
+        let unit = render_unit(
+            "app",
+            "/usr/local/bin/ply",
+            "app.img",
+            "/srv/app.img",
+            &flags,
+            &["a.finish_boot == 'ok'".into(), "a".into()],
+            false,
+        );
+        assert_eq!(
+            unit.matches("After=ply-a.service").count(),
+            1,
+            "one ordering directive for `a`, not one per --after entry: {unit}"
+        );
+        assert_eq!(unit.matches("Wants=ply-a.service").count(), 1, "{unit}");
+        let unit_section = unit.split("[Service]").next().unwrap();
+        assert!(
+            !unit_section.contains("finish_boot"),
+            "the raw condition must not leak into a unit name: {unit_section}"
+        );
+        // ExecStart (in [Service]) keeps the raw condition, quoted as one
+        // argument — only the ordering directives above are rewritten.
+        assert!(
+            unit.contains("--after \"a.finish_boot == 'ok'\" --after a"),
+            "{unit}"
         );
     }
 

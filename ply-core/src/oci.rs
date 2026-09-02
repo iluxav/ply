@@ -463,6 +463,7 @@ pub fn import(spec: &str, output: &Path) -> Result<ImportOutcome> {
         },
         dependencies: Default::default(),
         env,
+        params: None,
         ports,
         volumes,
         resources: None,

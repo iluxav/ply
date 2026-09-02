@@ -410,6 +410,7 @@ pub fn commit(name: &str, version: &Version, output: Option<&Path>) -> Result<Co
         },
         dependencies: Default::default(),
         env: Default::default(),
+        params: None,
         ports: Default::default(),
         volumes: Default::default(),
         resources: None,

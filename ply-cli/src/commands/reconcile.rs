@@ -3,8 +3,8 @@
 //! Runs as a oneshot from ply-deployments.path (kernel inotify on the dir),
 //! or by hand. Idempotent by construction: it converges, never accumulates.
 
-use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use ply_core::deployments::{self, Spec, UNIT_MARKER};
@@ -127,7 +127,7 @@ pub fn exec(args: crate::cli::ReconcileArgs) -> Result<()> {
                     desired.insert(name.clone());
                     continue;
                 }
-                match apply(&name, &spec, &mut app_names) {
+                match apply(&name, &spec, &mut app_names, None) {
                     Ok(applied) => {
                         changed_units |= applied.changed;
                         desired.insert(name.clone());
@@ -366,35 +366,184 @@ fn converge_stack(
 
     let mut oks = 0usize;
     let mut errs: Vec<String> = Vec::new();
+
+    // --- fetch every member first -------------------------------------------
+    // A member's `{db.url}` resolves out of `db`'s manifest, and that
+    // manifest lives inside `db`'s image — so nothing can be applied until
+    // every image is on this host. A member that fails here is reported
+    // exactly as an apply failure is, and the rest still converge; what it
+    // cannot do is disappear quietly, because a member referencing its
+    // namespace will fail below naming it.
+    let mut pending: Vec<(String, Spec, Fetched)> = Vec::new();
+    let mut inputs: Vec<ply_core::stack::MemberInput> = Vec::new();
+    // Who depends on whom, for every member — including the ones that fail
+    // below, since it is precisely their dependants that must not converge.
+    let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut failed: BTreeSet<String> = BTreeSet::new();
     for member in &stack.members {
         // reserve the unit first: a failed beat must not orphan it
         desired.insert(member.name.clone());
+        edges.insert(member.name.clone(), member_edges(member));
         let spec = match Spec::from_stack_member(member, stack_label, &lookup) {
             Ok(s) => s,
             Err(e) => {
                 deployments::write_status(&member.name, false, &format!("{e:#}"));
                 errs.push(format!("{}: {e}", member.name));
+                failed.insert(member.name.clone());
                 continue;
             }
         };
-        match apply(&member.name, &spec, app_names) {
-            Ok(applied) => {
-                *changed_units |= applied.changed;
-                deployments::write_status(&member.name, true, &applied.detail);
-                if !applied.detail.starts_with("unchanged") {
-                    ply_core::runtime::events::emit(&member.name, "deploy", &applied.detail);
-                }
-                oks += 1;
+        let prepared = (|| -> Result<(Fetched, ply_core::stack::MemberInput)> {
+            let fetched = fetch_image(&member.name, &spec)?;
+            let image = fetched.image.display().to_string();
+            let manifest = ply_core::stack::member_manifest(&image, None)
+                .with_context(|| format!("reading the manifest inside {}", fetched.shown))?;
+            let input = ply_core::stack::MemberInput {
+                name: member.name.clone(),
+                version: Some(manifest.package.version.to_string()),
+                manifest: Some(manifest),
+                // the member's own written order, `$VAR` expanded and `{}`
+                // holes still raw — `spec.env` is a map, and the resolver
+                // reads these in order
+                env: ply_core::stack::expand_member_env(member, &lookup)?,
+                params: ply_core::stack::expand_member_params(member, &lookup)?,
+                after: member.after.clone(),
+                publish: spec.publish.clone(),
+                domain: spec.domain.clone(),
+                port: ply_core::stack::container_port(&spec.publish),
+                scale: member.scale,
+                image: fetched.image_fact.clone(),
+            };
+            Ok((fetched, input))
+        })();
+        match prepared {
+            Ok((fetched, input)) => {
+                pending.push((member.name.clone(), spec, fetched));
+                inputs.push(input);
             }
             Err(e) => {
                 deployments::write_status(&member.name, false, &format!("{e:#}"));
                 ply_core::runtime::events::emit(&member.name, "deploy-failed", &format!("{e:#}"));
                 eprintln!("ply: reconcile {}: {e:#}", member.name);
                 errs.push(format!("{}: {e}", member.name));
+                failed.insert(member.name.clone());
             }
         }
     }
-    // aggregate status on the stack file itself — the deploy screen's row
+
+    // --- take the failures and their dependants out of the beat -------------
+    // A member whose peer is missing cannot be resolved (its `{db.url}` has
+    // no namespace to read) and must not be started ahead of it either — so
+    // it sits this beat out, keeping the unit it already has. A member that
+    // depends on nothing broken is unaffected: it resolves and converges as
+    // usual, and never carries a diagnostic about someone else.
+    if !failed.is_empty() {
+        let blocked = blocked_by_failures(&failed, &edges);
+        let mut keep_pending = Vec::with_capacity(pending.len());
+        let mut keep_inputs = Vec::with_capacity(inputs.len());
+        for ((member, spec, fetched), input) in pending.into_iter().zip(inputs) {
+            // `Some(None)` — a member's own failure — never reaches here:
+            // one that failed above was never pushed to `pending`.
+            if let Some(Some(dep)) = blocked.get(&member) {
+                let detail = format!(
+                    "waiting: `{dep}` did not converge this beat, and this member depends on it"
+                );
+                deployments::write_status(&member, false, &detail);
+                eprintln!("ply: reconcile {member}: {detail}");
+                errs.push(format!("{member}: depends on `{dep}`"));
+                continue;
+            }
+            keep_pending.push((member, spec, fetched));
+            keep_inputs.push(input);
+        }
+        pending = keep_pending;
+        inputs = keep_inputs;
+    }
+
+    // --- resolve the whole stack --------------------------------------------
+    // Same resolver `ply up` runs, so a `{}` ref means the same thing here;
+    // secrets come from this host's own store (`.secrets/<stack>/`), minted
+    // on first converge.
+    let secrets = ply_core::secrets::SecretStore::for_deployments(name);
+    let resolution = match ply_core::stack::resolve_stack(&inputs, Some(&secrets), false) {
+        Ok(resolution) => resolution,
+        Err(e) => {
+            // What is left resolves as a whole or not at all — writing
+            // units for the members that happen to resolve, while their
+            // peers keep yesterday's values, is a half-wired stack nobody
+            // asked for. A MISSING member is not this arm's case any more
+            // (the exclusion above already took those out with their
+            // dependants); reaching here means the stack file itself is
+            // wrong — a `{db.typo}`, an undeclared param — which is every
+            // member's problem and nobody's to route around. Every unit
+            // stays exactly as it is; the failure names the member and the
+            // ref.
+            let detail = format!("resolving stack params: {e}");
+            for (member, _, _) in &pending {
+                deployments::write_status(member, false, &detail);
+            }
+            eprintln!("ply: reconcile {name}: {detail}");
+            errs.push(detail);
+            write_stack_status(name, oks, &errs);
+            return;
+        }
+    };
+
+    // --- apply, one unit per member -----------------------------------------
+    for (member, mut spec, fetched) in pending {
+        let entries = resolution
+            .env
+            .get(&member)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        // Secret-tainted values never reach the unit: units live
+        // world-readable under /etc/systemd/system, the env file is 0600.
+        let (flags, file) = split_env(entries);
+        spec.env = flags.into_iter().collect();
+        let had_secrets = !file.is_empty();
+        match write_member_secrets_file(name, &member, &file) {
+            Ok(path) => spec.env_file = path,
+            Err(e) => {
+                deployments::write_status(&member, false, &format!("{e:#}"));
+                ply_core::runtime::events::emit(&member, "deploy-failed", &format!("{e:#}"));
+                eprintln!("ply: reconcile {member}: {e:#}");
+                errs.push(format!("{member}: {e}"));
+                continue;
+            }
+        }
+        // after ∪ derived_after: a `{db.url}` reference IS a wait, whether
+        // or not `after =` names it too — the same list `ply up` gates on.
+        if let Some(waits) = resolution.waits.get(&member) {
+            spec.after = waits.clone();
+        }
+        match apply(&member, &spec, app_names, Some(fetched)) {
+            Ok(applied) => {
+                // The unit on disk no longer names the file: only now is
+                // dropping a stale one from an earlier beat safe.
+                if !had_secrets {
+                    remove_member_secrets_file(name, &member);
+                }
+                *changed_units |= applied.changed;
+                deployments::write_status(&member, true, &applied.detail);
+                if !applied.detail.starts_with("unchanged") {
+                    ply_core::runtime::events::emit(&member, "deploy", &applied.detail);
+                }
+                oks += 1;
+            }
+            Err(e) => {
+                deployments::write_status(&member, false, &format!("{e:#}"));
+                ply_core::runtime::events::emit(&member, "deploy-failed", &format!("{e:#}"));
+                eprintln!("ply: reconcile {member}: {e:#}");
+                errs.push(format!("{member}: {e}"));
+            }
+        }
+    }
+    write_stack_status(name, oks, &errs);
+}
+
+/// The aggregate status on the stack FILE itself — the deploy screen's row
+/// for the stack, above its members'.
+fn write_stack_status(name: &str, oks: usize, errs: &[String]) {
     if errs.is_empty() {
         deployments::write_status(name, true, &format!("stack: {oks} member(s) ok"));
     } else {
@@ -410,9 +559,221 @@ fn converge_stack(
     }
 }
 
-fn apply(name: &str, spec: &Spec, app_names: &mut BTreeSet<String>) -> Result<Applied> {
-    // Resolve the image: registry runnable, or a file already on this host.
+/// The members one stack member depends on: its explicit `after` entries
+/// (each parsed down to the app it names — `db`, `db.finish_boot == 'ok'`
+/// and friends all order on `db`) unioned with the edges its `{app.param}`
+/// references imply. The same union `stack::topo_sort` orders on and
+/// `resolve_stack` returns as `waits`; here it answers "who does this
+/// member need in order to converge at all?".
+fn member_edges(member: &ply_core::stack::Member) -> BTreeSet<String> {
+    let mut edges: BTreeSet<String> = member
+        .after
+        .iter()
+        .map(|dep| {
+            ply_core::runtime::after::parse_wait(dep)
+                .map(|w| w.app)
+                .unwrap_or_else(|_| dep.clone())
+        })
+        .collect();
+    edges.extend(ply_core::stack::derived_after(member));
+    edges
+}
+
+/// Every member that cannot converge this beat, and the peer to name for
+/// it: the members in `failed` (whose own error is already recorded, so
+/// their value is `None`), plus — transitively — every member that names an
+/// excluded one in its `after` or through a `{app.param}` reference, whose
+/// value is the excluded dependency it waits on.
+///
+/// This is what keeps one member's fetch failure from freezing the whole
+/// stack. `resolve_stack` is deliberately all-or-nothing (a half-resolved
+/// stack is worse than an unchanged one), so a member whose namespace is
+/// gone has to be taken out of the resolve set together with everything
+/// that reads it — and only that. A member that depends on nothing broken
+/// keeps converging, and never gets stamped with somebody else's error.
+///
+/// `edges` maps each member to the members it depends on (explicit `after`
+/// apps ∪ `stack::derived_after`). Pure: names and edges only, no fetching.
+fn blocked_by_failures(
+    failed: &BTreeSet<String>,
+    edges: &BTreeMap<String, BTreeSet<String>>,
+) -> BTreeMap<String, Option<String>> {
+    let mut blocked: BTreeMap<String, Option<String>> =
+        failed.iter().map(|m| (m.clone(), None)).collect();
+    // Fixpoint rather than a graph walk: a stack is a handful of members,
+    // and this way a cycle (which `stack::parse` already rejects) could not
+    // loop forever here either.
+    loop {
+        let mut grew = false;
+        for (member, deps) in edges {
+            if blocked.contains_key(member) {
+                continue;
+            }
+            // sorted (BTreeSet): the peer named in the status is stable
+            // across beats, not whichever edge happened to be first.
+            if let Some(dep) = deps.iter().find(|d| blocked.contains_key(*d)) {
+                blocked.insert(member.clone(), Some(dep.clone()));
+                grew = true;
+            }
+        }
+        if !grew {
+            return blocked;
+        }
+    }
+}
+
+/// What [`split_env`] answers: the plain pairs the unit carries as `-e`
+/// flags, and the secret-tainted pairs that go to the 0600 env file.
+type EnvSplit = (Vec<(String, String)>, Vec<(String, String)>);
+
+/// Split a member's resolved env into what the unit may carry and what it
+/// may not: plain values become `-e KEY=VALUE` flags in the (world-readable)
+/// unit, secret-tainted ones become lines in a 0600 env file. A repeated key
+/// keeps its LAST entry only — the order `resolve_stack` produces already
+/// means "explicit stack `e =` beats provider self-config", and collapsing
+/// it here keeps that true across the two delivery channels.
+fn split_env(entries: &[ply_core::stack::ResolvedEnv]) -> EnvSplit {
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    let mut last: Vec<&ply_core::stack::ResolvedEnv> = Vec::new();
+    for entry in entries.iter().rev() {
+        if seen.insert(entry.key.as_str()) {
+            last.push(entry);
+        }
+    }
+    last.reverse();
+    let mut flags = Vec::new();
+    let mut file = Vec::new();
+    for entry in last {
+        let pair = (entry.key.clone(), entry.value.clone());
+        if entry.secret {
+            file.push(pair);
+        } else {
+            flags.push(pair);
+        }
+    }
+    (flags, file)
+}
+
+/// Where a stack member's secret env lives:
+/// `<deployments>/.secrets/<stack>/env/<member>.env`. Inside the same
+/// systemd-watch-invisible `.secrets/` directory `SecretStore` uses on a
+/// host — a write there must not retrigger the path unit, and nothing but
+/// root may read it — but in an `env/` SUBDIRECTORY of it, never beside the
+/// secret files themselves. `SecretStore` owns `<member>.<param>` in that
+/// directory, so a flat `<member>.env` here would BE the file for a param
+/// named `env`: this writer would overwrite an operator's secret and the
+/// stale-file sweep would delete it, and `ply secret ls` (which lists every
+/// regular file) would report one bogus `<member>.env` secret per member.
+/// A subdirectory collides with nothing and `list`'s `is_file()` skips it.
+fn member_secrets_path(stack: &str, member: &str) -> PathBuf {
+    deployments::dir()
+        .join(".secrets")
+        .join(stack)
+        .join("env")
+        .join(format!("{member}.env"))
+}
+
+/// Write a member's secret-tainted env as a 0600 file and return its path
+/// for the unit's `--env-file`. No secrets → `None`, and NO removal: see
+/// [`remove_member_secrets_file`].
+fn write_member_secrets_file(
+    stack: &str,
+    member: &str,
+    entries: &[(String, String)],
+) -> Result<Option<String>> {
+    write_env_file(&member_secrets_path(stack, member), entries)
+}
+
+/// Drop a member's now-unneeded secret env file. Best-effort, and called
+/// ONLY after `apply` has rewritten the unit that used to name it: until
+/// that write lands, the installed unit still carries `--env-file <path>`,
+/// and systemd restarting the member in that window would run
+/// `ply run --env-file <gone>` and fail. A failed apply leaves the file
+/// exactly where the still-installed unit expects it.
+fn remove_member_secrets_file(stack: &str, member: &str) {
+    let _ = std::fs::remove_file(member_secrets_path(stack, member));
+}
+
+/// The write itself: `entries` as a 0600 env file at `path` (temp file +
+/// atomic rename, like `SecretStore::set`). Nothing to write is `None` and
+/// touches the filesystem not at all.
+fn write_env_file(path: &Path, entries: &[(String, String)]) -> Result<Option<String>> {
+    if entries.is_empty() {
+        return Ok(None);
+    }
+    let mut body = String::new();
+    for (key, value) in entries {
+        body.push_str(&env_file_line(key, value)?);
+    }
+    let dir = path.parent().expect("a secrets file has a parent dir");
+    let file = path
+        .file_name()
+        .expect("a secrets file has a name")
+        .to_string_lossy()
+        .into_owned();
+    std::os::unix::fs::DirBuilderExt::mode(&mut std::fs::DirBuilder::new(), 0o700)
+        .recursive(true)
+        .create(dir)
+        .with_context(|| format!("creating {}", dir.display()))?;
+    let tmp = dir.join(format!(".{file}.tmp"));
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&tmp)
+            .with_context(|| format!("writing {}", tmp.display()))?;
+        f.write_all(body.as_bytes())
+            .with_context(|| format!("writing {}", tmp.display()))?;
+    }
+    std::fs::rename(&tmp, path).with_context(|| format!("writing {}", path.display()))?;
+    Ok(Some(path.display().to_string()))
+}
+
+/// One `KEY="value"` line that `parse_env_file` reads back byte-for-byte.
+/// The value is ALWAYS double-quoted: that parser trims the value and then
+/// strips one matched pair of surrounding quotes, so quoting is what makes
+/// a leading space, a trailing space, or a value that is itself quoted
+/// survive the round trip — and an inner `"` needs no escaping, since only
+/// the outermost pair is ever stripped. A newline cannot survive a
+/// line-oriented file at all, so it is refused (by key — never printing the
+/// value) instead of being silently truncated.
+fn env_file_line(key: &str, value: &str) -> Result<String> {
+    if value.contains('\n') || value.contains('\r') {
+        bail!(
+            "the resolved value of `{key}` contains a newline — it cannot be delivered \
+             through an env file"
+        );
+    }
+    Ok(format!("{key}=\"{value}\"\n"))
+}
+
+/// What resolving a deployment's source yields: the image file on this
+/// host, the name to show for it, whether a repo rebuild produced new bytes
+/// under the same version (which calls for a roll, not a no-op), and the
+/// `{image}` built-in fact for a stack member.
+struct Fetched {
+    image: PathBuf,
+    shown: String,
+    force_restart: bool,
+    /// The `{image}` fact, when the lane has one to give: the store digest
+    /// for a registry app, the URL for a URL image — the same two answers
+    /// `ply up` gives for the same two member kinds. `None` for the lanes a
+    /// stack member cannot use.
+    image_fact: Option<String>,
+}
+
+/// Resolve a deployment's source lane (`repo`/`url`/`github`/`app`/`image`)
+/// down to an image on this host. Split out of [`apply`] because a stack
+/// has to fetch EVERY member before it writes any unit: a member's
+/// `{db.url}` resolves from `db`'s manifest, and that manifest lives inside
+/// `db`'s image.
+fn fetch_image(name: &str, spec: &Spec) -> Result<Fetched> {
     let mut force_restart = false;
+    let mut image_fact: Option<String> = None;
     let (image, shown): (PathBuf, String) = match (&spec.app, &spec.image, &spec.github) {
         _ if spec.repo.is_some() => {
             let (image, shown, rebuilt) = build_from_repo(name, spec)?;
@@ -424,6 +785,7 @@ fn apply(name: &str, spec: &Spec, app_names: &mut BTreeSet<String>) -> Result<Ap
             let (path, resolved) = ply_core::source::fetch_url_image(url)
                 .with_context(|| format!("fetching {url}"))?;
             println!("{name}: {resolved} (url)");
+            image_fact = Some(url.to_string());
             let shown = resolved.to_string();
             (named_image(name, &path, &shown)?, shown)
         }
@@ -486,7 +848,7 @@ fn apply(name: &str, spec: &Spec, app_names: &mut BTreeSet<String>) -> Result<Ap
             // → same file → no fetch. This is what stops an `auto = true`
             // deployment pulling its whole image every minute.
             let deploys = PathBuf::from("/var/lib/ply/deploys").join(name);
-            let (path, resolved, _digest) = ply_core::catalog::fetch_app_image_unless(
+            let (path, resolved, digest) = ply_core::catalog::fetch_app_image_unless(
                 app,
                 spec.version.as_deref(),
                 &source,
@@ -497,6 +859,7 @@ fn apply(name: &str, spec: &Spec, app_names: &mut BTreeSet<String>) -> Result<Ap
             )
             .with_context(|| format!("fetching `{app}` from the registry"))?;
             println!("{name}: {resolved}");
+            image_fact = Some(digest);
             let shown = resolved.to_string();
             (named_image(name, &path, &shown)?, shown)
         }
@@ -509,6 +872,32 @@ fn apply(name: &str, spec: &Spec, app_names: &mut BTreeSet<String>) -> Result<Ap
             (path, shown)
         }
         _ => unreachable!("Spec::parse enforces exactly one"),
+    };
+    Ok(Fetched {
+        image,
+        shown,
+        force_restart,
+        image_fact,
+    })
+}
+
+/// Converge one deployment onto its unit. `fetched` is the image a caller
+/// already resolved (the stack path, which must fetch every member up
+/// front); a single-app deployment passes `None` and resolves its own.
+fn apply(
+    name: &str,
+    spec: &Spec,
+    app_names: &mut BTreeSet<String>,
+    fetched: Option<Fetched>,
+) -> Result<Applied> {
+    let Fetched {
+        image,
+        shown,
+        force_restart,
+        image_fact: _,
+    } = match fetched {
+        Some(fetched) => fetched,
+        None => fetch_image(name, spec)?,
     };
 
     // The deployment name is the running app's identity (passed as --name):
@@ -1127,6 +1516,337 @@ fn repo_version(checkout: &std::path::Path, spec: &Spec) -> String {
         }
     }
     fallback
+}
+
+#[cfg(test)]
+mod secret_env_tests {
+    use super::*;
+    use ply_core::stack::{EnvSource, ResolvedEnv};
+    use std::os::unix::fs::PermissionsExt;
+
+    fn entry(key: &str, value: &str, secret: bool) -> ResolvedEnv {
+        ResolvedEnv {
+            key: key.to_string(),
+            value: value.to_string(),
+            secret,
+            source: if secret {
+                EnvSource::Minted("secrets/db.password".to_string())
+            } else {
+                EnvSource::StackE
+            },
+        }
+    }
+
+    /// Secret-tainted entries go to the env FILE (mode 0600, unreadable to
+    /// anyone but root); plain ones stay `-e` flags in the world-readable
+    /// unit. Order within each bucket is the resolver's own.
+    #[test]
+    fn split_env_sends_only_tainted_entries_to_the_file() {
+        let entries = vec![
+            entry("POSTGRES_DB", "todos", false),
+            entry("POSTGRES_PASSWORD", "s3cr3t", true),
+            entry("NODE_ENV", "production", false),
+        ];
+        let (flags, file) = split_env(&entries);
+        assert_eq!(
+            flags,
+            vec![
+                ("POSTGRES_DB".to_string(), "todos".to_string()),
+                ("NODE_ENV".to_string(), "production".to_string()),
+            ]
+        );
+        assert_eq!(
+            file,
+            vec![("POSTGRES_PASSWORD".to_string(), "s3cr3t".to_string())]
+        );
+    }
+
+    /// A member with no secrets at all writes no file — that is what keeps
+    /// a params-free stack's unit byte-identical to yesterday's.
+    #[test]
+    fn split_env_of_plain_entries_leaves_the_file_empty() {
+        let (flags, file) = split_env(&[entry("A", "1", false)]);
+        assert_eq!(flags, vec![("A".to_string(), "1".to_string())]);
+        assert!(file.is_empty());
+    }
+
+    /// Whatever the resolver produced has to come back out of
+    /// `parse_env_file` byte-for-byte — a password that loses a trailing
+    /// space, or gets truncated at a `#`, is an auth failure a long way
+    /// from its cause.
+    #[test]
+    fn secret_values_round_trip_through_the_env_file_parser() {
+        let dir = tempfile::tempdir().unwrap();
+        // the real shape: `.secrets/<stack>/env/<member>.env`, both levels
+        // created by the writer
+        let path = dir.path().join("todos").join("env").join("db.env");
+        let values = [
+            ("PLAIN", "s3cr3t"),
+            ("WITH_EQUALS", "postgres://u:p@host:5432/db?x=1"),
+            ("WITH_SPACES", "  padded value  "),
+            ("WITH_HASH", "pa#ss #not-a-comment"),
+            ("WITH_QUOTE", "a\"b"),
+            ("ALREADY_QUOTED", "\"quoted\""),
+            ("SINGLE_QUOTED", "'sq'"),
+            ("EMPTY", ""),
+            ("TRAILING_BACKSLASH", "abc\\"),
+        ];
+        let entries: Vec<(String, String)> = values
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+
+        let written = write_env_file(&path, &entries).unwrap().unwrap();
+        assert_eq!(written, path.display().to_string());
+
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "a unit is world-readable; this is not");
+        for dir in [
+            path.parent().unwrap(),
+            path.parent().unwrap().parent().unwrap(),
+        ] {
+            let mode = std::fs::metadata(dir).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o700, "{}", dir.display());
+        }
+
+        let back: std::collections::BTreeMap<String, String> =
+            ply_core::runtime::run::parse_env_file(&path)
+                .unwrap()
+                .into_iter()
+                .collect();
+        for (k, v) in values {
+            assert_eq!(back[k], v, "{k} did not survive the round trip");
+        }
+    }
+
+    /// A member that stops having secrets (its `[params]` dropped, its ref
+    /// rewritten) asks for no `--env-file` — but its stale file SURVIVES the
+    /// write step. The installed unit still names that path until `apply`
+    /// rewrites it, and systemd restarting the member in that window would
+    /// run `ply run --env-file <gone>`. Only the post-apply removal (which
+    /// a failed apply never reaches) may delete it.
+    #[test]
+    fn no_secrets_asks_for_no_env_file_and_leaves_the_stale_file_for_after_apply() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db.env");
+        write_env_file(&path, &[("PW".to_string(), "x".to_string())]).unwrap();
+        assert!(path.exists());
+
+        assert_eq!(write_env_file(&path, &[]).unwrap(), None);
+        assert!(
+            path.exists(),
+            "the unit still names this file until apply rewrites it"
+        );
+
+        // what the successful-apply arm calls, once the new unit is on disk
+        let _ = std::fs::remove_file(&path);
+        assert!(!path.exists());
+    }
+
+    /// The env file must not land in the `<member>.<param>` namespace
+    /// `SecretStore` owns: flat, `db.env` IS the file for a param named
+    /// `env` — this writer would clobber an operator's secret, the stale
+    /// sweep would delete it, and `ply secret ls` would list one phantom
+    /// secret per member.
+    #[test]
+    fn the_env_file_sits_in_a_subdirectory_not_among_the_secret_files() {
+        let store = ply_core::secrets::SecretStore::for_deployments("todos");
+        let env_file = member_secrets_path("todos", "db");
+        assert_ne!(env_file, store.path("db", "env"));
+        assert!(
+            env_file.ends_with("todos/env/db.env"),
+            "{}",
+            env_file.display()
+        );
+        assert_eq!(
+            env_file.parent().unwrap(),
+            store.path("db", "password").parent().unwrap().join("env"),
+            "a subdirectory OF the store dir — same .secrets/, out of its namespace"
+        );
+    }
+
+    /// The refusal names the KEY. Printing the value would put the secret
+    /// in a status detail, an event and the journal at once.
+    #[test]
+    fn a_newline_in_a_value_is_refused_without_printing_it() {
+        let e = env_file_line("PW", "line1\nline2").unwrap_err().to_string();
+        assert!(e.contains("PW"), "{e}");
+        assert!(!e.contains("line1"), "{e}");
+    }
+
+    /// One member's fetch failure must not freeze the members that do not
+    /// depend on it, nor stamp them with its error.
+    #[test]
+    fn a_failure_blocks_its_dependants_transitively_and_nobody_else() {
+        let edges: BTreeMap<String, BTreeSet<String>> = [
+            ("db", vec![]),
+            ("server", vec!["db"]),
+            ("web", vec!["server"]),
+            ("cache", vec![]),
+        ]
+        .into_iter()
+        .map(|(m, deps)| {
+            (
+                m.to_string(),
+                deps.into_iter()
+                    .map(str::to_string)
+                    .collect::<BTreeSet<_>>(),
+            )
+        })
+        .collect();
+        let failed = BTreeSet::from(["db".to_string()]);
+
+        let blocked = blocked_by_failures(&failed, &edges);
+
+        assert_eq!(
+            blocked.keys().cloned().collect::<Vec<_>>(),
+            vec!["db".to_string(), "server".to_string(), "web".to_string()],
+            "the failure plus its transitive dependants — and nothing else"
+        );
+        assert_eq!(
+            blocked["db"], None,
+            "its own fetch error is already written"
+        );
+        assert_eq!(
+            blocked["server"],
+            Some("db".to_string()),
+            "the status names the peer it waits on"
+        );
+        assert_eq!(
+            blocked["web"],
+            Some("server".to_string()),
+            "transitively blocked, named by its DIRECT missing dependency"
+        );
+        assert!(
+            !blocked.contains_key("cache"),
+            "a member that depends on nothing broken keeps converging"
+        );
+    }
+
+    /// Nothing failed, nothing is blocked — the ordinary beat.
+    #[test]
+    fn no_failures_blocks_nobody() {
+        let edges: BTreeMap<String, BTreeSet<String>> =
+            [("server".to_string(), BTreeSet::from(["db".to_string()]))]
+                .into_iter()
+                .collect();
+        assert!(blocked_by_failures(&BTreeSet::new(), &edges).is_empty());
+    }
+
+    /// The edge set a member is excluded on is the same union the resolver
+    /// waits on: explicit `after` (parsed down to the app) ∪ the members its
+    /// `{app.param}` refs name, across env, publish and domain.
+    #[test]
+    fn member_edges_unions_explicit_after_with_every_derived_ref() {
+        // Built directly rather than parsed: stack parse now REJECTS a `{}`
+        // hole in `publish`/`domain` (v1 never interpolated them), but
+        // `member_edges` — like `stack::derived_after` — still scans those
+        // fields, and this keeps that scan covered.
+        let web = ply_core::stack::Member {
+            name: "web".to_string(),
+            source: ply_core::stack::MemberSource::Path(std::path::PathBuf::from("./web")),
+            env: vec![("DATABASE_URL".to_string(), "{db.url}".to_string())],
+            params: Vec::new(),
+            after: vec!["cache.finish_boot == 'ok'".to_string()],
+            publish: Vec::new(),
+            volume: Vec::new(),
+            domain: vec!["{cdn.hostname}".to_string()],
+            scale: None,
+        };
+        assert_eq!(
+            member_edges(&web),
+            BTreeSet::from(["cache".to_string(), "cdn".to_string(), "db".to_string()]),
+            "a condition orders on the app it names, and every ref is an edge too"
+        );
+    }
+
+    /// The property the whole split exists for: a tainted value is nowhere
+    /// in the flags the unit carries, and the unit reads it from the 0600
+    /// file instead.
+    #[test]
+    fn a_tainted_value_is_absent_from_the_flags_and_present_in_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db.env");
+        let entries = vec![
+            entry("POSTGRES_DB", "todos", false),
+            entry("POSTGRES_PASSWORD", "S3CR3T", true),
+        ];
+        let (flags, file) = split_env(&entries);
+
+        let mut spec = Spec::parse("from = \"postgres@17\"\n").unwrap();
+        spec.env = flags.into_iter().collect();
+        spec.env_file = write_env_file(&path, &file).unwrap();
+
+        let rendered = spec.flags().join(" ");
+        assert!(
+            !rendered.contains("S3CR3T"),
+            "the unit is world-readable: {rendered}"
+        );
+        assert!(rendered.contains("-e POSTGRES_DB=todos"), "{rendered}");
+        assert!(
+            rendered.contains(&format!("--env-file {}", path.display())),
+            "{rendered}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "POSTGRES_PASSWORD=\"S3CR3T\"\n"
+        );
+    }
+
+    /// Additive, at the flag level: a member with no `[params]` and no `{}`
+    /// holes converges to exactly the flags it did before params existed —
+    /// same `-e`s, same `--after`, and no `--env-file` — so its unit text
+    /// is byte-identical and reconcile reports "unchanged".
+    #[test]
+    fn a_params_free_member_keeps_the_flags_it_always_had() {
+        let stack = ply_core::stack::parse(
+            "[[app]]\nrun=\"postgres@17\"\nname=\"db\"\ne=[\"POSTGRES_DB=todos\"]\n\n\
+             [[app]]\nrun=\"umami@3\"\nname=\"web\"\nafter=[\"db\"]\ne=[\"NODE_ENV=production\"]\npublish=[\"internal:3000\"]\n",
+            Path::new("todos.toml"),
+        )
+        .unwrap()
+        .unwrap();
+        let lookup = |_: &str| None;
+
+        let before: Vec<Vec<String>> = stack
+            .members
+            .iter()
+            .map(|m| {
+                Spec::from_stack_member(m, Some("todos"), &lookup)
+                    .unwrap()
+                    .flags()
+            })
+            .collect();
+
+        let inputs: Vec<ply_core::stack::MemberInput> = stack
+            .members
+            .iter()
+            .map(|m| ply_core::stack::MemberInput {
+                name: m.name.clone(),
+                manifest: None,
+                env: ply_core::stack::expand_member_env(m, &lookup).unwrap(),
+                params: Default::default(),
+                after: m.after.clone(),
+                publish: m.publish.clone(),
+                domain: m.domain.clone(),
+                version: None,
+                port: ply_core::stack::container_port(&m.publish),
+                scale: m.scale,
+                image: None,
+            })
+            .collect();
+        let resolution = ply_core::stack::resolve_stack(&inputs, None, false).unwrap();
+
+        for (i, m) in stack.members.iter().enumerate() {
+            let mut spec = Spec::from_stack_member(m, Some("todos"), &lookup).unwrap();
+            let (flags, file) = split_env(&resolution.env[&m.name]);
+            assert!(file.is_empty(), "nothing tainted, nothing to hide");
+            spec.env = flags.into_iter().collect();
+            spec.after = resolution.waits[&m.name].clone();
+            assert_eq!(spec.flags(), before[i], "member `{}`", m.name);
+            assert!(spec.env_file.is_none());
+        }
+    }
 }
 
 #[cfg(test)]
