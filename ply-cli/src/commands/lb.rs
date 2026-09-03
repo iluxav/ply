@@ -6,8 +6,9 @@ use ply_core::runtime::state::{self, InstanceState};
 use crate::cli::ProxyArgs;
 
 /// Where the ply-managed edge keeps its config (installed by
-/// `sudo ply setup --edge`). The watcher writes the apps file; Caddy's root
-/// config imports it.
+/// `sudo ply setup --edge`, Linux-only). The watcher writes the apps file;
+/// Caddy's root config imports it.
+#[cfg(target_os = "linux")]
 pub const EDGE_DIR: &str = "/etc/ply/edge";
 pub const EDGE_CADDYFILE: &str = "/etc/ply/edge/Caddyfile";
 pub const EDGE_APPS_FILE: &str = "/etc/ply/edge/apps/ply.caddy";

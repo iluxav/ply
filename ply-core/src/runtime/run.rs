@@ -5,20 +5,16 @@ use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 
-use nix::sched::CloneFlags;
 use nix::sys::signal::{self, Signal};
-use nix::sys::wait::{waitpid, WaitStatus};
-use nix::unistd::Pid;
 
 use crate::env::compose_env;
 use crate::error::{Error, Result};
 use crate::image::name::{Arch, ImageName, Os};
 use crate::image::read::{read_embedded, read_lockfile, read_manifest};
 use crate::manifest::{Layer, Manifest};
-use crate::runtime::cgroup::Cgroup;
-use crate::runtime::container::{child_main, ContainerSpec};
+use crate::runtime::backend::{Backend, InstanceSpec, Launched, NetworkFacts};
 use crate::runtime::state::InstanceState;
-use crate::runtime::{hosts, loopdev, mount, network, params_tree, state};
+use crate::runtime::{params_tree, state};
 use crate::source::Source;
 use crate::store::Store;
 
@@ -85,75 +81,12 @@ struct PublishWiring {
 }
 
 pub fn run(opts: &RunOptions) -> Result<i32> {
-    // A rootless run with no namespace handed to it makes its own, so that
-    // ONE app is as isolated as a stack's members are: its own ports, no
-    // collision with whatever the machine already runs, a way out through a
-    // user-mode router. `ply up` passes its stack namespace instead, and
-    // rootful already gives every instance a bridge address.
-    let mut own_ns: Option<crate::runtime::netns::NetNs> = None;
-    let mut opts_owned;
-    let opts = if crate::paths::is_root() || opts.netns.is_some() {
-        opts
-    } else {
-        match crate::runtime::netns::NetNs::create().and_then(|ns| ns.enter_user().map(|()| ns)) {
-            Ok(mut ns) => {
-                let dns = match ns.attach_egress() {
-                    Ok(_) => Some(crate::runtime::netns::EGRESS_DNS.to_string()),
-                    Err(e) => {
-                        eprintln!("ply: no outbound network for this app — {e}");
-                        None
-                    }
-                };
-                opts_owned = opts.clone();
-                opts_owned.netns = Some(ns.path());
-                opts_owned.netns_dns = dns;
-                own_ns = Some(ns);
-                &opts_owned
-            }
-            Err(e) => {
-                eprintln!("ply: staying on the host network — {e}");
-                opts
-            }
-        }
-    };
-    let _own_ns = &own_ns; // the namespace lives as long as this run
-    let rootless = !crate::paths::is_root();
-    if opts.privileged {
-        // Never quiet about this: the whole point of the runtime is that the
-        // app ends up with nothing, and --privileged undoes all three layers.
-        eprintln!(
-            "ply: WARNING: --privileged — capabilities kept, no_new_privs off, seccomp off.{}",
-            if rootless {
-                " Rootless, so this is still bounded by your user namespace."
-            } else {
-                " Running as root: the app gets REAL root on this host."
-            }
-        );
+    let backend = crate::runtime::backend::default_backend()?;
+    if let Err(reason) = backend.capability() {
+        return Err(Error::Runtime(reason));
     }
-    if rootless {
-        // Say which network this actually got: with one of its own the app
-        // binds its declared ports and answers to `<name>.ply`, which is the
-        // opposite of what the old banner promised.
-        let net = match &opts.netns {
-            Some(_) => "own network",
-            None => "host network (no .ply names)",
-        };
-        eprintln!("ply: rootless mode — extracted layers, {net}, no cgroup limits");
-        // Ubuntu >= 24.04 strips capabilities from unprivileged user
-        // namespaces unless an AppArmor profile grants `userns`.
-        let restricted =
-            std::fs::read_to_string("/proc/sys/kernel/apparmor_restrict_unprivileged_userns")
-                .map(|v| v.trim() == "1")
-                .unwrap_or(false);
-        if restricted && !Path::new("/etc/apparmor.d/ply").exists() {
-            return Err(Error::Runtime(
-                "this kernel restricts unprivileged user namespaces — one-time fix:\n  \
-                 sudo ply setup\n  \
-                 (or run with sudo instead)"
-                    .into(),
-            ));
-        }
-    }
+    let opts = &backend.preflight(opts.clone())?;
+    let facts = backend.facts();
 
     let store = Store::open_default()?;
     let mut ctx = prepare_app(
@@ -164,7 +97,7 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
         &store,
         RunFacts {
             name_override: opts.name.as_deref(),
-            host_available: !rootless,
+            host_available: facts.own_addresses,
             port: opts.publish.first().map(|p| p.instance_port),
             scale: opts.scale,
         },
@@ -178,28 +111,9 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
         .clone()
         .unwrap_or_else(|| ctx.manifest.package.name.clone());
 
-    // Only apps that need a second uid to exist care about the subid range:
-    // a declared [package] user, or an import whose entrypoint will gosu down.
-    if rootless {
-        let needs_ids =
-            ctx.manifest.package.user.is_some() || ctx.manifest.package.capabilities.is_some();
-        if needs_ids {
-            if let Some(gap) = subid_gap() {
-                eprintln!("ply: warning: {gap}");
-            }
-        }
-    }
-
-    match rootless_scale_guard(
-        rootless,
-        opts.scale,
-        !ctx.manifest.ports.is_empty(),
-        !opts.publish.is_empty(),
-    ) {
-        ScaleGuard::Refuse(msg) => return Err(Error::Runtime(msg.into())),
-        ScaleGuard::Warn(msg) => eprintln!("ply: warning: {msg}"),
-        ScaleGuard::Ok => {}
-    }
+    // What this platform refuses or warns about for this app, before any
+    // host port is claimed.
+    backend.admit(&ctx.manifest, opts)?;
 
     // --publish: claim the host port BEFORE anything starts (fail fast on a
     // taken port), then serve the pool from a dedicated accept thread. The
@@ -214,31 +128,10 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
     let listeners: Vec<(crate::runtime::publish::Publish, std::net::TcpListener)> = opts
         .publish
         .iter()
-        .map(|spec| crate::runtime::publish::bind(*spec, rootless).map(|l| (*spec, l)))
+        .map(|spec| crate::runtime::publish::bind(*spec, facts.loopback).map(|l| (*spec, l)))
         .collect::<Result<Vec<_>>>()?;
-
-    // Joining is best-effort: a stack that cannot get its own network should
-    // still run on the host's, exactly as it did before any of this existed.
-    // What must NOT happen is believing we joined when we did not — the
-    // instance's address is derived from it, and on the host network an
-    // un-injected port makes the pool's backend the proxy's own listener,
-    // which then accepts its own connections until it runs out of threads.
-    let _joined = match &opts.netns {
-        None => false,
-        Some(path) => match std::fs::File::open(path)
-            .map_err(|source| Error::Io {
-                path: path.clone(),
-                source,
-            })
-            .and_then(|ns| crate::runtime::netns::enter(&std::os::fd::OwnedFd::from(ns)))
-        {
-            Ok(()) => true,
-            Err(e) => {
-                eprintln!("ply: staying on the host network — {e}");
-                false
-            }
-        },
-    };
+    backend.attach(opts)?;
+    let net = backend.network(opts);
 
     let mut publishing: Vec<PublishWiring> = Vec::new();
     for (spec, listener) in listeners {
@@ -252,7 +145,7 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
         });
         eprintln!(
             "ply: publishing {}:{} → {} pool",
-            spec.scope.bind_addr(rootless),
+            spec.scope.bind_addr(facts.loopback),
             spec.host_port,
             ctx.manifest.package.name,
         );
@@ -264,7 +157,7 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
     // satisfied that way; the
     // rest expect the app to bind their instance_port itself (an edge reads
     // its ports from its own config, not from PORT).
-    if rootless && opts.publish.len() > 1 && opts.scale > 1 {
+    if !net.alone && opts.publish.len() > 1 && opts.scale > 1 {
         eprintln!(
             "ply: warning: rootless --scale {} with {} published ports — only the first \
              ({}) is injected as PORT; the app must bind the rest itself, and instances \
@@ -280,8 +173,7 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
     // one place that overrides has to be loud about it. Scale is exactly when
     // nobody is watching a single instance's environment.
     if let Some(first) = opts.publish.first() {
-        let injecting =
-            rootless && !alone_in_its_network(rootless, opts) && !first.instance_port_explicit;
+        let injecting = !net.alone && !first.instance_port_explicit;
         if injecting {
             if let Some((_, set)) = ctx.env.iter().find(|(k, _)| k == "PORT") {
                 eprintln!(
@@ -326,7 +218,7 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
         // Resolved only now: the dependency is up, so its parent has recorded
         // where to reach it. Never overrides a value the author set — an
         // explicit [env] or -e wins, so this can only add.
-        let in_stack_network = opts.netns.as_ref().is_some_and(|p| in_namespace(p));
+        let in_stack_network = net.in_stack_network;
         for (key, value) in discovery_env(&wait_apps, in_stack_network) {
             if ctx.env.iter().any(|(k, _)| *k == key) {
                 continue;
@@ -337,9 +229,6 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
         eprintln!("ply: starting {me}");
     }
 
-    if !rootless {
-        network::ensure_bridge()?;
-    }
     let _ = state::reap_stale(); // free IPs/dirs leaked by killed runs
 
     // Same app already running? That's legal (canary: old + new side by
@@ -408,10 +297,18 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
     let mut shutdown_began: Option<std::time::Instant> = None;
     let mut escalated = false;
 
-    let mut instances: Vec<Instance> = Vec::new();
+    let mut instances: Vec<Running> = Vec::new();
     for _ in 0..opts.scale.max(1) {
-        let instance = launch_instance(&ctx, opts, &store, rootless, None, 0, publishing.as_ref())?;
-        let sig_idx = register_child(instance.child.as_raw());
+        let instance = launch_instance(
+            backend.as_ref(),
+            &ctx,
+            opts,
+            &net,
+            None,
+            0,
+            publishing.as_ref(),
+        )?;
+        let sig_idx = register_child(instance.inner.child_pid().unwrap_or(0));
         slots.insert(
             instance.n,
             SlotInfo {
@@ -434,18 +331,13 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
     // Reap, respawn per policy, exit when nothing is left to wait for.
     let mut exit_code = 0;
     loop {
-        // Collect every child death that's already happened.
-        let mut deaths: Vec<(Pid, i32, bool)> = Vec::new(); // (pid, code, failed)
-        loop {
-            use nix::sys::wait::WaitPidFlag;
-            match waitpid(Pid::from_raw(-1), Some(WaitPidFlag::WNOHANG)) {
-                Ok(WaitStatus::StillAlive) => break,
-                Ok(WaitStatus::Exited(pid, code)) => deaths.push((pid, code, code != 0)),
-                Ok(WaitStatus::Signaled(pid, sig, _)) => deaths.push((pid, 128 + sig as i32, true)),
-                Ok(_) => continue,
-                Err(nix::errno::Errno::EINTR) => continue,
-                Err(nix::errno::Errno::ECHILD) => break,
-                Err(e) => return Err(Error::Runtime(format!("waitpid: {e}"))),
+        // Collect every instance death that's already happened.
+        let mut deaths: Vec<(u32, i32, bool)> = Vec::new(); // (slot, code, failed)
+        for running in instances.iter_mut() {
+            match running.inner.try_wait() {
+                Ok(Some(code)) => deaths.push((running.n, code, code != 0)),
+                Ok(None) => {}
+                Err(e) => return Err(e),
             }
         }
 
@@ -468,16 +360,15 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                     SHUTDOWN_GRACE.as_secs(),
                 );
                 for instance in &instances {
-                    let _ = signal::kill(instance.child, Signal::SIGKILL);
+                    let _ = instance.inner.signal(Signal::SIGKILL);
                 }
             }
         }
 
-        for (pid, code, failed) in deaths {
-            let Some(pos) = instances.iter().position(|i| i.child == pid) else {
+        for (slot, code, failed) in deaths {
+            let Some(pos) = instances.iter().position(|i| i.n == slot) else {
                 continue;
             };
-            let slot = instances[pos].n;
             let info = slots.get_mut(&slot).expect("live instance has a slot");
             update_child(info.sig_idx, 0);
             drop(instances.remove(pos)); // unmount, remove state + hosts now
@@ -543,16 +434,16 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                 ),
             );
             match launch_instance(
+                backend.as_ref(),
                 &ctx,
                 opts,
-                &store,
-                rootless,
+                &net,
                 Some(slot),
                 info.restarts,
                 &publishing,
             ) {
                 Ok(instance) => {
-                    update_child(info.sig_idx, instance.child.as_raw());
+                    update_child(info.sig_idx, instance.inner.child_pid().unwrap_or(0));
                     info.started = std::time::Instant::now();
                     instances.push(instance);
                 }
@@ -588,7 +479,7 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                         &store,
                         RunFacts {
                             name_override: Some(identity.as_str()),
-                            host_available: !rootless,
+                            host_available: facts.own_addresses,
                             port: opts.publish.first().map(|p| p.instance_port),
                             scale: opts.scale,
                         },
@@ -634,16 +525,17 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                             let mut grown = 0;
                             for _ in current..target {
                                 match launch_instance(
+                                    backend.as_ref(),
                                     &ctx,
                                     opts,
-                                    &store,
-                                    rootless,
+                                    &net,
                                     None,
                                     0,
                                     &publishing,
                                 ) {
                                     Ok(instance) => {
-                                        let sig_idx = register_child(instance.child.as_raw());
+                                        let sig_idx =
+                                            register_child(instance.inner.child_pid().unwrap_or(0));
                                         slots.insert(
                                             instance.n,
                                             SlotInfo {
@@ -754,18 +646,27 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                                 &format!("no instance .{slot}"),
                             );
                         } else {
-                            crate::runtime::events::emit(
-                                &app_name,
-                                "terminal",
-                                &format!("shell opened into {app_name}.{slot}"),
-                            );
-                            crate::runtime::term::spawn(&app_name, slot, &nonce);
-                            crate::runtime::control::write_result(
-                                &app_name,
-                                "exec",
-                                true,
-                                &format!("terminal serving at term-{nonce}.sock"),
-                            );
+                            match backend.terminal(&app_name, slot, &nonce) {
+                                Ok(()) => {
+                                    crate::runtime::events::emit(
+                                        &app_name,
+                                        "terminal",
+                                        &format!("shell opened into {app_name}.{slot}"),
+                                    );
+                                    crate::runtime::control::write_result(
+                                        &app_name,
+                                        "exec",
+                                        true,
+                                        &format!("terminal serving at term-{nonce}.sock"),
+                                    );
+                                }
+                                Err(e) => crate::runtime::control::write_result(
+                                    &app_name,
+                                    "exec",
+                                    false,
+                                    &e.to_string(),
+                                ),
+                            }
                         }
                     }
                 }
@@ -784,10 +685,10 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
 
                 let restarts = slots.get(&slot).map(|s| s.restarts).unwrap_or(0);
                 let outcome = launch_instance(
+                    backend.as_ref(),
                     &ctx,
                     opts,
-                    &store,
-                    rootless,
+                    &net,
                     Some(slot),
                     restarts,
                     &publishing,
@@ -806,7 +707,7 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                 match outcome {
                     Ok(instance) => {
                         if let Some(info) = slots.get_mut(&slot) {
-                            update_child(info.sig_idx, instance.child.as_raw());
+                            update_child(info.sig_idx, instance.inner.child_pid().unwrap_or(0));
                             info.started = std::time::Instant::now();
                         }
                         eprintln!(
@@ -835,17 +736,20 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                             ctx.image.display()
                         );
                         match launch_instance(
+                            backend.as_ref(),
                             &ctx,
                             opts,
-                            &store,
-                            rootless,
+                            &net,
                             Some(slot),
                             restarts,
                             &publishing,
                         ) {
                             Ok(instance) => {
                                 if let Some(info) = slots.get_mut(&slot) {
-                                    update_child(info.sig_idx, instance.child.as_raw());
+                                    update_child(
+                                        info.sig_idx,
+                                        instance.inner.child_pid().unwrap_or(0),
+                                    );
                                     info.started = std::time::Instant::now();
                                 }
                                 instances.push(instance);
@@ -884,30 +788,24 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
     Ok(exit_code)
 }
 
-/// Deliberate stop: TERM, up to 10s to comply, then KILL. Reaps the child so
-/// its death never reaches the policy loop.
-fn stop_instance(instance: Instance, stop_signal: Signal) {
-    use nix::sys::wait::WaitPidFlag;
-    let child = instance.child;
+/// Deliberate stop: the declared signal, up to 10s to comply, then KILL.
+/// Reaps the instance so its death never reaches the policy loop.
+fn stop_instance(mut instance: Running, stop_signal: Signal) {
     // The in-container init forwards whatever it receives, so an image that
     // wants SIGQUIT (nginx) or SIGWINCH (httpd) gets to drain instead of
     // being SIGKILLed when the 10s patience below runs out.
-    let _ = signal::kill(child, stop_signal);
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    while let Ok(WaitStatus::StillAlive) = waitpid(child, Some(WaitPidFlag::WNOHANG)) {
-        if std::time::Instant::now() >= deadline {
-            let _ = signal::kill(child, Signal::SIGKILL);
-            let _ = waitpid(child, None);
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
-    drop(instance); // unmount, remove state + hosts
+    crate::runtime::supervise::stop_with_patience(
+        instance.inner.as_mut(),
+        stop_signal,
+        std::time::Duration::from_secs(10),
+        std::time::Duration::from_millis(100),
+    );
+    drop(instance); // pools, state, params tree, then the backend's teardown
 }
 
 /// The deploy health gate. With [health] port: TCP connect within grace.
 /// Without: the process just has to be alive after a short settle.
-fn wait_healthy(ctx: &AppContext, instance: &Instance) -> bool {
+fn wait_healthy(ctx: &AppContext, instance: &Running) -> bool {
     let (port, grace) = match &ctx.manifest.health {
         Some(health) => (
             health.port,
@@ -916,12 +814,6 @@ fn wait_healthy(ctx: &AppContext, instance: &Instance) -> bool {
         ),
         None => (None, std::time::Duration::from_secs(1)),
     };
-    let ip = InstanceState::path(&instance.app, instance.n)
-        .exists()
-        .then(|| std::fs::read_to_string(InstanceState::path(&instance.app, instance.n)).ok())
-        .flatten()
-        .and_then(|text| serde_json::from_str::<InstanceState>(&text).ok())
-        .map(|s| s.ip);
 
     // Live params tree: state=healthy on pass, state=unhealthy on fail. A
     // write failure here must not turn a real health result into a launch
@@ -932,48 +824,38 @@ fn wait_healthy(ctx: &AppContext, instance: &Instance) -> bool {
         }
     };
 
-    let deadline = std::time::Instant::now() + grace;
-    let mut last_err: Option<std::io::Error> = None;
-    loop {
-        let alive = unsafe { nix::libc::kill(instance.child.as_raw(), 0) == 0 };
-        if !alive {
+    use crate::runtime::supervise::Health;
+    match crate::runtime::supervise::health_gate(
+        instance.inner.as_ref(),
+        port,
+        grace,
+        std::time::Duration::from_millis(200),
+    ) {
+        Health::Healthy => {
+            publish_state("healthy");
+            true
+        }
+        Health::Died => {
             eprintln!(
                 "ply: health gate: {}.{} died during grace",
                 instance.app, instance.n
             );
             publish_state("unhealthy");
-            return false;
+            false
         }
-        if let (Some(port), Some(ip)) = (port, ip) {
-            let addr = std::net::SocketAddr::from((ip, port));
-            match crate::runtime::publish::connect_either_family(
-                addr,
-                std::time::Duration::from_millis(300),
-            ) {
-                Ok(_) => {
-                    publish_state("healthy");
-                    return true;
-                }
-                Err(e) => last_err = Some(e),
-            }
+        // Only reachable with a declared port, so `unwrap_or(0)` never prints.
+        Health::NoAnswer(last_err) => {
+            eprintln!(
+                "ply: health gate: no answer on {}:{} within {grace:?} — last error: {}",
+                instance.inner.ip(),
+                port.unwrap_or(0),
+                last_err
+                    .map(|e| e.to_string())
+                    .unwrap_or_else(|| "none".into()),
+            );
+            publish_state("unhealthy");
+            false
         }
-        if std::time::Instant::now() >= deadline {
-            if let Some(port) = port {
-                eprintln!(
-                    "ply: health gate: no answer on {}:{port} within {grace:?} — last error: {}",
-                    ip.map(|i| i.to_string())
-                        .unwrap_or_else(|| "<no ip in state!>".into()),
-                    last_err
-                        .map(|e| e.to_string())
-                        .unwrap_or_else(|| "none".into()),
-                );
-                publish_state("unhealthy");
-                return false;
-            }
-            publish_state("healthy");
-            return true; // no port to probe: surviving the grace window is the bar
-        }
-        std::thread::sleep(std::time::Duration::from_millis(200));
     }
 }
 
@@ -1429,12 +1311,12 @@ POSTGRES_PASSWORD = "{password}"
     }
 }
 
-struct Instance {
+/// One instance as the supervisor holds it: the backend's handle plus the
+/// host-side bookkeeping that is the same on every platform.
+struct Running {
     app: String,
     n: u32,
-    child: Pid,
-    _cgroup: Option<Cgroup>,
-    guard: InstanceGuard,
+    inner: Box<dyn crate::runtime::backend::Instance>,
     /// Published pools this instance is registered in (removed on Drop, so
     /// every stop path — death, roll, shutdown — also stops traffic).
     pools: Vec<crate::runtime::publish::Pool>,
@@ -1442,7 +1324,7 @@ struct Instance {
 
 /// How many instances of `app` are alive right now, straight from the state
 /// pool — the `instances` live fact, and the "is anything of this app left?"
-/// gate `Drop for Instance` reads. `alive()` filtered: a state file outlives
+/// gate `Drop for Running` reads. `alive()` filtered: a state file outlives
 /// the process it describes until its parent reaps it.
 fn live_instance_count(app: &str) -> usize {
     state::list()
@@ -1452,12 +1334,11 @@ fn live_instance_count(app: &str) -> usize {
         .count()
 }
 
-impl Drop for Instance {
+impl Drop for Running {
     fn drop(&mut self) {
         for pool in &self.pools {
             pool.remove(self.n);
         }
-        let _ = hosts::remove_entry(&self.app, self.n);
         InstanceState::remove(&self.app, self.n);
         // Live params tree: state=stopped once nothing of this app is left
         // running. InstanceState::remove just above already dropped this
@@ -1481,7 +1362,8 @@ impl Drop for Instance {
         if let Err(e) = params_tree::publish(&self.app, "instances", &alive.to_string()) {
             eprintln!("ply: warning: params tree {}/instances: {e}", self.app);
         }
-        let _ = &self.guard; // unmounts layers, removes instance dir
+        // `inner` drops after this body: the backend's own teardown —
+        // the hosts entry, the layer unmounts, the instance directory.
     }
 }
 
@@ -1541,43 +1423,44 @@ fn populated_siblings(app_dir: &Path, name: &str, suffix: &str) -> Vec<String> {
     found
 }
 
-/// Is this process inside the namespace at `path`? Compared by identity,
-/// not by whether a join was attempted — believing a failed join is what
-/// turns a proxy into its own backend.
-/// Is this instance the only thing in its network? Rootful, always (its own
-/// bridge address). Rootless, only when the run has a namespace it is really
-/// in AND there is one instance — every instance of a run shares that one
-/// namespace, so past the first they contend for the same ports.
-fn alone_in_its_network(rootless: bool, opts: &RunOptions) -> bool {
-    !rootless || (opts.netns.as_ref().is_some_and(|p| in_namespace(p)) && opts.scale <= 1)
+/// Removes the instance directory unless disarmed.
+///
+/// `allocate_instance` has already claimed `run_dir()/instances/<app>.<n>`,
+/// and a claimed slot is not free: `allocate_instance` skips a directory
+/// that exists, so the next run of this app lands on n+1 — a different,
+/// EMPTY per-instance volume, which is the outage documented on
+/// `populated_siblings`. Every error exit between `allocate_instance` and a
+/// successful `backend.launch` therefore has to undo the claim. A launch
+/// that succeeds hands the directory to the backend's `Instance`, which
+/// owns it from then on, so the guard is disarmed there.
+struct PendingDir(Option<PathBuf>);
+
+impl PendingDir {
+    /// The backend owns the directory now — leave it alone.
+    fn disarm(&mut self) {
+        self.0.take();
+    }
 }
 
-fn in_namespace(path: &std::path::Path) -> bool {
-    let ino = |p: &std::path::Path| {
-        std::fs::metadata(p)
-            .ok()
-            .map(|m| std::os::unix::fs::MetadataExt::ino(&m))
-    };
-    match (ino(path), ino(std::path::Path::new("/proc/self/ns/net"))) {
-        (Some(a), Some(b)) => a == b,
-        _ => false,
+impl Drop for PendingDir {
+    fn drop(&mut self) {
+        if let Some(dir) = self.0.take() {
+            let _ = crate::paths::force_remove_dir_all(&dir);
+        }
     }
 }
 
 fn launch_instance(
+    backend: &dyn Backend,
     ctx: &AppContext,
     opts: &RunOptions,
-    store: &Store,
-    rootless: bool,
+    net: &NetworkFacts,
     slot: Option<u32>,
     restarts: u32,
     publish: &[PublishWiring],
-) -> Result<Instance> {
+) -> Result<Running> {
     let manifest = &ctx.manifest;
-    let entrypoint = &ctx.entrypoint;
     let env = &ctx.env;
-    let app_image = &ctx.image;
-    let dep_images = &ctx.dep_images;
     // Identity (state pool, .ply name, volumes, control) comes from --name
     // when given; the image's own name still drives the /opt/<name> prefix.
     let app: String = opts
@@ -1585,6 +1468,8 @@ fn launch_instance(
         .clone()
         .unwrap_or_else(|| manifest.package.name.clone());
     let (instance_dir, n) = allocate_instance(&app, slot)?;
+    // From here to a successful launch, every `?` gives the slot back.
+    let mut pending_dir = PendingDir(Some(instance_dir.clone()));
     let run_user = manifest
         .package
         .user
@@ -1672,65 +1557,6 @@ fn launch_instance(
         }
         binds.push((host, container.clone()));
     }
-    let guard = InstanceGuard {
-        dir: instance_dir.clone(),
-        mounted_layers: std::cell::RefCell::new(Vec::new()),
-    };
-
-    // Layers: root loop-mounts squashfs; rootless uses store-cached
-    // extractions (unprivileged kernels can't mount squashfs).
-    let mut layers: Vec<PathBuf> = Vec::new();
-    let all_images: Vec<PathBuf> = std::iter::once(app_image.to_path_buf())
-        .chain(dep_images.iter().cloned())
-        .collect();
-    for (i, img) in all_images.iter().enumerate() {
-        if rootless {
-            let digest = crate::digest::sha256_file(img)?;
-            let rootfs = store.extracted_rootfs(img, &digest)?;
-            // overlayfs splits lowerdir at `:` — store paths contain
-            // `sha256:`, so hand the kernel a colon-free symlink instead
-            let link = instance_dir.join("layers").join(i.to_string());
-            std::os::unix::fs::symlink(&rootfs, &link).map_err(|source| Error::Io {
-                path: link.clone(),
-                source,
-            })?;
-            layers.push(link);
-        } else {
-            let target = instance_dir.join("layers").join(i.to_string());
-            let (device, dev_fd) = loopdev::attach_ro(img)?;
-            mount::mount_squashfs_ro(&device, &target)?;
-            drop(dev_fd); // mount holds the device now; autoclear arms for unmount
-            guard.mounted_layers.borrow_mut().push(target.clone());
-            layers.push(target);
-        }
-    }
-
-    // Sync pipe: the child waits for cgroup + network before setup.
-    let (sync_rx, sync_tx) =
-        nix::unistd::pipe().map_err(|e| Error::Runtime(format!("pipe: {e}")))?;
-    // Log tee: the child's stdout+stderr become this pipe; a copier thread
-    // passes the stream through to the parent's stdout (journald/terminal
-    // behavior unchanged) while also feeding the bounded log ring that
-    // `ply logs` and the dashboard read.
-    let (log_rx, log_tx) =
-        nix::unistd::pipe().map_err(|e| Error::Runtime(format!("log pipe: {e}")))?;
-
-    let keep_net_bind = manifest.ports.values().any(|p| *p < 1024);
-    let keep_caps =
-        crate::runtime::security::keep_set(manifest.package.capabilities.as_ref(), keep_net_bind)?;
-    if !keep_caps.is_empty() {
-        // Anything above the empty default is worth one line of output — the
-        // whole promise of the runtime is that the app ends up with nothing.
-        eprintln!(
-            "ply: {app} keeps {} capability/ies: {}",
-            keep_caps.len(),
-            keep_caps
-                .iter()
-                .map(|c| c.to_string())
-                .collect::<Vec<_>>()
-                .join(" ")
-        );
-    }
     let mut spec_env = env.to_vec();
     if let Some(user) = &run_user {
         for pair in spec_env.iter_mut() {
@@ -1749,12 +1575,7 @@ fn launch_instance(
     // Skipped when the spec named the instance port: that is the author
     // saying where the app listens, and an imported image cannot be talked
     // out of it.
-    //
-    // Namespace membership is asked of the kernel rather than remembered —
-    // a failed join must never look like a successful one, or the pool ends
-    // up pointing at the proxy itself.
-    let alone_in_its_network = alone_in_its_network(rootless, opts);
-    let injected_port = match (publish.first(), rootless && !alone_in_its_network) {
+    let injected_port = match (publish.first(), !net.alone) {
         (Some(w), true) if !w.spec.instance_port_explicit => {
             let port = crate::runtime::publish::allocate_loopback_port()?;
             match spec_env.iter_mut().find(|(k, _)| k == "PORT") {
@@ -1765,10 +1586,15 @@ fn launch_instance(
         }
         _ => None,
     };
-    let spec = ContainerSpec {
-        layers,
+    let spec = InstanceSpec {
+        app: app.clone(),
+        package: manifest.package.name.clone(),
+        n,
         instance_dir: instance_dir.clone(),
-        hostname: app.clone(),
+        images: std::iter::once(ctx.image.clone())
+            .chain(ctx.dep_images.iter().cloned())
+            .collect(),
+        entrypoint: ctx.entrypoint.clone(),
         cwd: manifest
             .package
             .workdir
@@ -1776,24 +1602,23 @@ fn launch_instance(
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(format!("/opt/{}", manifest.package.name))),
         env: spec_env,
-        argv: entrypoint.to_vec(),
+        hostname: app.clone(),
         binds,
-        sync_rx,
         volume_targets,
-        keep_caps,
+        run_user,
+        capabilities: manifest.package.capabilities.clone(),
+        keep_net_bind: manifest.ports.values().any(|p| *p < 1024),
         privileged: opts.privileged,
-        rootless,
+        resources: manifest.resources.clone(),
         dns: opts.netns_dns.clone(),
         local_aliases: opts.netns_peers.clone(),
-        run_user,
-        log_fd: Some(log_tx),
     };
 
     // Live params tree: publish before spawn. The child's own mount
     // sequence (runtime/container.rs) re-binds each PARENT_OWNED file
     // read-only over itself inside /run/ply/self and needs the target to
-    // already exist — this has to land before clone() below, not later at
-    // the InstanceState save. Best-effort: a write failure here must not
+    // already exist — this has to land before the backend clones the child,
+    // not later at the InstanceState save. Best-effort: a write failure here must not
     // block the app from starting.
     {
         let launched_at = std::time::SystemTime::now()
@@ -1804,7 +1629,7 @@ fn launch_instance(
         // launch — the "fact the parent already knows" version of a count.
         // `alive()` matters: a state file outlives a dead instance until
         // its parent reaps it, and counting those would publish an
-        // `instances` that only ever grows (`Drop for Instance` republishes
+        // `instances` that only ever grows (`Drop for Running` republishes
         // the remaining count on the way down).
         let instance_count = live_instance_count(&app) + 1;
         let publish_fact = |key: &str, value: &str| {
@@ -1831,111 +1656,88 @@ fn launch_instance(
         publish_fact("version", &manifest.package.version.to_string());
     }
 
-    let mut stack = vec![0u8; 1024 * 1024];
-    let mut flags = CloneFlags::CLONE_NEWNS
-        | CloneFlags::CLONE_NEWPID
-        | CloneFlags::CLONE_NEWUTS
-        | CloneFlags::CLONE_NEWIPC;
-    if rootless {
-        // user ns grants the mount rights; host netns (no veth privileges)
-        flags |= CloneFlags::CLONE_NEWUSER;
-    } else {
-        flags |= CloneFlags::CLONE_NEWNET;
-    }
-    let child = unsafe {
-        nix::sched::clone(
-            Box::new(|| child_main(&spec)),
-            &mut stack,
-            flags,
-            Some(nix::libc::SIGCHLD),
-        )
-    }
-    .map_err(|e| Error::Runtime(format!("clone: {e}")))?;
-
-    // cgroup + veth (root) / uid maps (rootless) while the child is parked
-    // on the pipe. The network lock serializes IP pick + veth setup across
-    // concurrent `ply run`s (two parents reading state simultaneously would
-    // pick the same IP and collide on the derived veth name) and is held
-    // until this instance's state file makes the IP visible to others.
-    let _net_lock = if rootless {
-        None
-    } else {
-        Some(network::lock()?)
-    };
-    let prepared = (|| -> Result<(Option<Cgroup>, Ipv4Addr)> {
-        if rootless {
-            write_id_maps(child.as_raw())?;
-            return Ok((None, Ipv4Addr::new(127, 0, 0, 1)));
-        }
-        let cgroup = Cgroup::create(&format!("{app}.{n}"), manifest.resources.as_ref())?;
-        cgroup.add_pid(child.as_raw())?;
-        let used: Vec<Ipv4Addr> = state::list()?.iter().map(|s| s.ip).collect();
-        let ip = network::allocate_ip(&used)?;
-        network::setup_instance(child.as_raw(), ip)?;
-        Ok((Some(cgroup), ip))
-    })();
-    let (cgroup, ip) = match prepared {
-        Ok(ok) => ok,
-        Err(e) => {
-            drop(sync_tx); // EOF → child aborts
-            let _ = signal::kill(child, Signal::SIGKILL);
-            let _ = waitpid(child, None);
-            return Err(e);
-        }
-    };
-
     let started = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let state = InstanceState {
-        app: app.clone(),
-        n,
-        pid: child.as_raw(),
-        ip,
-        ports: manifest.ports.clone(),
-        image: app_image.display().to_string(),
-        started,
-        restarts,
-        // Rootless --publish moves the app: ply injects a per-instance
-        // loopback port as PORT, so that — not the manifest's — is where the
-        // app actually listens. Probing the manifest's port would knock on a
-        // door nobody opened, the instance would never report healthy, and
-        // every `--after` dependant would time out.
-        health_port: match (injected_port, manifest.health.as_ref().and_then(|h| h.port)) {
-            (Some(injected), Some(_)) => Some(injected),
-            (_, declared) => declared,
-        },
-        // The first spec is the app's canonical address — what `--after`
-        // hands to dependants and what `ply lb` emits.
-        published_port: publish.first().map(|w| w.spec.host_port),
-        instance_port: publish.first().map(|w| w.spec.instance_port),
-        published_addr: publish.first().map(|w| {
-            format!(
-                "{}:{}",
-                w.spec.scope.connect_addr(rootless),
-                w.spec.host_port
-            )
-        }),
-        domains: opts.domains.clone(),
+    let loopback = net.facts.loopback;
+    // Handed to the backend, which calls it once the instance's pid and
+    // address are known and BEFORE the instance runs.
+    let mut record = |pid: i32, ip: Ipv4Addr| -> Result<()> {
+        InstanceState {
+            app: app.clone(),
+            n,
+            pid,
+            ip,
+            ports: manifest.ports.clone(),
+            image: ctx.image.display().to_string(),
+            started,
+            restarts,
+            // Rootless --publish moves the app: ply injects a per-instance
+            // loopback port as PORT, so that — not the manifest's — is where the
+            // app actually listens. Probing the manifest's port would knock on a
+            // door nobody opened, the instance would never report healthy, and
+            // every `--after` dependant would time out.
+            health_port: match (injected_port, manifest.health.as_ref().and_then(|h| h.port)) {
+                (Some(injected), Some(_)) => Some(injected),
+                (_, declared) => declared,
+            },
+            // The first spec is the app's canonical address — what `--after`
+            // hands to dependants and what `ply lb` emits.
+            published_port: publish.first().map(|w| w.spec.host_port),
+            instance_port: publish.first().map(|w| w.spec.instance_port),
+            published_addr: publish.first().map(|w| {
+                format!(
+                    "{}:{}",
+                    w.spec.scope.connect_addr(loopback),
+                    w.spec.host_port
+                )
+            }),
+            domains: opts.domains.clone(),
+        }
+        .save()
     };
-    state.save()?;
-    if !rootless {
-        hosts::add_entry(&app, n, ip)?; // /etc/hosts needs root
-    }
+    let Launched {
+        mut instance,
+        output,
+    } = backend.launch(&spec, &mut record)?;
+    pending_dir.disarm(); // the instance owns its directory from here
 
-    // Parent half of the log tee: our copy of the write end must close or
-    // the copier would never see EOF when the instance dies.
-    drop(spec.log_fd);
+    // The ring is created only once the instance is actually running.
+    // `RingWriter::create` is not idempotent: it renames `<app>.<n>.log` to
+    // `.log.1` and starts an empty live file, and there is exactly one
+    // rotation slot. Created before the launch, any backend failure (loop
+    // devices, the squashfs mounts, clone, the cgroup, the veth) would push
+    // the last good generation into `.1`, and the restart's retry would push
+    // the empty ring over it — `ply logs` would be blank exactly when the
+    // owner needs it.
+    let mut ring = match crate::runtime::logring::RingWriter::create(&app, n) {
+        Ok(ring) => ring,
+        Err(e) => {
+            // The instance is already running; take it down before reporting.
+            // `instance` drops on return: hosts entry, unmounts, instance dir.
+            // The state file falls to `reap_stale`, as a killed launch always did.
+            crate::runtime::supervise::stop_with_patience(
+                instance.as_mut(),
+                Signal::SIGKILL,
+                std::time::Duration::ZERO,
+                std::time::Duration::from_millis(50),
+            );
+            return Err(e);
+        }
+    };
+
+    // The log tee: a copier thread passes the instance's combined output
+    // through to the parent's stdout (journald/terminal behavior unchanged)
+    // while also feeding the bounded log ring that `ply logs` and the
+    // dashboard read.
     {
-        let mut ring = crate::runtime::logring::RingWriter::create(&app, n)?;
-        let log_rx = log_rx;
+        let mut output = output;
         std::thread::spawn(move || {
             use std::io::{Read, Write};
-            let mut file = std::fs::File::from(log_rx);
             let mut buf = [0u8; 8192];
             loop {
-                match file.read(&mut buf) {
+                match output.read(&mut buf) {
                     Ok(0) | Err(_) => break, // instance ended
                     Ok(size) => {
                         let chunk = &buf[..size];
@@ -1948,32 +1750,27 @@ fn launch_instance(
         });
     }
 
-    // Release the child.
-    let _ = nix::unistd::write(&sync_tx, &[1u8]);
-    drop(sync_tx);
-
+    let ip = instance.ip();
     // Join the published pool: rootful backends live on the bridge at the
     // shared instance port; rootless ones on their injected loopback port.
     let pools: Vec<crate::runtime::publish::Pool> = publish
         .iter()
         .enumerate()
         .map(|(i, wiring)| {
-            let backend = match injected_port {
+            let addr = match injected_port {
                 // only the first spec gets the injected loopback port
                 Some(port) if i == 0 => std::net::SocketAddr::from(([127, 0, 0, 1], port)),
                 _ => std::net::SocketAddr::from((ip, wiring.spec.instance_port)),
             };
-            wiring.pool.insert(n, backend);
+            wiring.pool.insert(n, addr);
             wiring.pool.clone()
         })
         .collect();
 
-    Ok(Instance {
-        app: app.clone(),
+    Ok(Running {
+        app,
         n,
-        child,
-        _cgroup: cgroup,
-        guard,
+        inner: instance,
         pools,
     })
 }
@@ -2031,230 +1828,6 @@ pub fn discovery_env(after: &[String], in_stack_network: bool) -> Vec<(String, S
         }
     }
     out
-}
-
-/// A `/etc/subuid` or `/etc/subgid` delegation: `<name>:<start>:<count>`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SubIdRange {
-    pub start: u32,
-    pub count: u32,
-}
-
-/// This user's line in a subid file. Entries are keyed by name, but the
-/// numeric id is accepted too — both spellings appear in the wild.
-pub fn parse_subid(text: &str, user: &str, id: u32) -> Option<SubIdRange> {
-    let id = id.to_string();
-    for line in text.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let f: Vec<&str> = line.split(':').collect();
-        if f.len() < 3 || (f[0] != user && f[0] != id) {
-            continue;
-        }
-        if let (Ok(start), Ok(count)) = (f[1].parse::<u32>(), f[2].parse::<u32>()) {
-            if count > 0 {
-                return Some(SubIdRange { start, count });
-            }
-        }
-    }
-    None
-}
-
-/// The invoking user's name, read from the host's passwd file.
-/// Our own id map, rewritten so a child sees the same ids we do. An entry
-/// `inside outside count` becomes `inside inside count`: the child's view
-/// matches ours, and every id it names is one we actually hold.
-///
-/// Empty when we are the initial namespace (mapping everything), which is
-/// not something to hand a child — the helpers deal with that case.
-fn mirror_own_map(file: &str) -> String {
-    let Ok(map) = std::fs::read_to_string(format!("/proc/self/{file}")) else {
-        return String::new();
-    };
-    let mut out = String::new();
-    for line in map.lines() {
-        let f: Vec<&str> = line.split_whitespace().collect();
-        if f.len() != 3 {
-            return String::new();
-        }
-        if f == ["0", "0", "4294967295"] {
-            return String::new(); // the initial namespace
-        }
-        out.push_str(&format!("{} {} {}\n", f[0], f[0], f[2]));
-    }
-    out
-}
-
-fn username_for(uid: u32) -> Option<String> {
-    let text = std::fs::read_to_string("/etc/passwd").ok()?;
-    text.lines()
-        .map(|l| l.split(':').collect::<Vec<_>>())
-        .find(|f| f.len() > 2 && f[2].parse::<u32>() == Ok(uid))
-        .map(|f| f[0].to_string())
-}
-
-fn have(tool: &str) -> bool {
-    std::env::var("PATH")
-        .unwrap_or_default()
-        .split(':')
-        .any(|d| !d.is_empty() && Path::new(d).join(tool).exists())
-}
-
-/// Map the invoking user into the child's user namespace.
-///
-/// Without a delegated subuid range only ONE id exists inside (root = you),
-/// and every other uid is unmapped: `chown redis .` and `setuid(70)` both
-/// fail with EINVAL, which breaks `[package] user` and every imported image
-/// that drops privileges. A `/etc/subuid` range fixes that, but the kernel
-/// only lets an unprivileged process write a single-entry map — writing a
-/// range needs CAP_SETUID in the parent namespace, which is exactly what the
-/// setuid-root `newuidmap`/`newgidmap` helpers are for. Same mechanism
-/// rootless podman and docker use.
-/// Map a child's user namespace from OUT HERE.
-///
-/// The child cannot map itself: AppArmor's `apparmor_restrict_unprivileged_userns`
-/// (Ubuntu 24.04+) leaves an unprivileged user namespace without the
-/// capabilities its own `uid_map`/`setgroups` writes need. The setuid
-/// `newuidmap`/`newgidmap` helpers are how this is done everywhere, and how
-/// ply has always done it for containers.
-pub(crate) fn write_id_maps(pid: i32) -> Result<()> {
-    let uid = nix::unistd::getuid().as_raw();
-    let gid = nix::unistd::getgid().as_raw();
-    let user = username_for(uid).unwrap_or_default();
-
-    let sub = |file: &str, id: u32| {
-        std::fs::read_to_string(file)
-            .ok()
-            .and_then(|t| parse_subid(&t, &user, id))
-    };
-    let ranges = match (sub("/etc/subuid", uid), sub("/etc/subgid", gid)) {
-        (Some(u), Some(g)) if have("newuidmap") && have("newgidmap") => Some((u, g)),
-        _ => None,
-    };
-
-    // Write the child's maps ourselves when we may. Inside a namespace ply
-    // created (`ply up`'s fleet) we hold CAP_SETUID/CAP_SETGID over our
-    // children, and the setuid helpers are powerless there anyway: host
-    // root is unmapped, so their setuid bit does nothing and they fail with
-    // EPERM. Outside, this write is refused and the helpers below run
-    // exactly as before.
-    //
-    // The child gets OUR id space, one-to-one — the ids we may delegate are
-    // precisely the ones mapped to us, and `/proc/self/uid_map` is the only
-    // honest account of those.
-    if let Some((umap, gmap)) = (mirror_own_map("uid_map"), mirror_own_map("gid_map")).into() {
-        let direct = |file: &str, contents: &str| -> std::io::Result<()> {
-            std::fs::write(format!("/proc/{pid}/{file}"), contents)
-        };
-        // NOT setgroups=deny: irreversible, and gosu/su-exec need setgroups
-        // on their way down to a service user.
-        if !umap.is_empty()
-            && !gmap.is_empty()
-            && direct("gid_map", &gmap).is_ok()
-            && direct("uid_map", &umap).is_ok()
-        {
-            return Ok(());
-        }
-    }
-
-    if let Some((u, g)) = ranges {
-        // NOT setgroups=deny here: that is irreversible, and gosu/su-exec
-        // call setgroups() on their way down to a service user. The helpers
-        // are setuid-root, so they can write gid_map without it.
-        let helper = |tool: &str, args: [String; 7]| -> Result<()> {
-            let out = std::process::Command::new(tool)
-                .args(&args)
-                .output()
-                .map_err(|e| Error::Runtime(format!("{tool}: {e}")))?;
-            if !out.status.success() {
-                return Err(Error::Runtime(format!(
-                    "{tool} {}: {}",
-                    args.join(" "),
-                    String::from_utf8_lossy(&out.stderr).trim()
-                )));
-            }
-            Ok(())
-        };
-        // RootIsYou: inside 0 -> your uid (1 id), then inside 1.. -> the
-        // delegated range. Identity: every id keeps its number, so the
-        // subuid range is usable by nested namespaces under the same names.
-        helper(
-            "newuidmap",
-            [
-                pid.to_string(),
-                "0".into(),
-                uid.to_string(),
-                "1".into(),
-                "1".into(),
-                u.start.to_string(),
-                u.count.to_string(),
-            ],
-        )?;
-        helper(
-            "newgidmap",
-            [
-                pid.to_string(),
-                "0".into(),
-                gid.to_string(),
-                "1".into(),
-                "1".into(),
-                g.start.to_string(),
-                g.count.to_string(),
-            ],
-        )?;
-        return Ok(());
-    }
-
-    // Fallback: the single-id map. Everything still runs except apps that
-    // need a second uid to exist — say so once, with the fix.
-    let write = |file: &str, contents: String| -> Result<()> {
-        let path = format!("/proc/{pid}/{file}");
-        std::fs::write(&path, contents).map_err(|source| Error::Io {
-            path: path.into(),
-            source,
-        })
-    };
-    write("setgroups", "deny".into())?;
-    write("gid_map", format!("0 {gid} 1"))?;
-    write("uid_map", format!("0 {uid} 1"))?;
-    Ok(())
-}
-
-/// Why the single-id map is in play, for the one-line warning at startup.
-/// None when a delegated range is usable.
-pub fn subid_gap() -> Option<&'static str> {
-    // Inside a namespace ply owns, the range comes from the map we already
-    // hold, not from /etc/subuid — where this process is uid 0 and would
-    // look up "root" and find nothing. Warning there would be false.
-    if !mirror_own_map("uid_map").is_empty() {
-        return None;
-    }
-    let uid = nix::unistd::getuid().as_raw();
-    let gid = nix::unistd::getgid().as_raw();
-    let user = username_for(uid).unwrap_or_default();
-    let has_range = |file: &str, id: u32| {
-        std::fs::read_to_string(file)
-            .ok()
-            .and_then(|t| parse_subid(&t, &user, id))
-            .is_some()
-    };
-    if !has_range("/etc/subuid", uid) || !has_range("/etc/subgid", gid) {
-        return Some(
-            "no /etc/subuid+/etc/subgid range for this user — only uid 0 exists inside, so \
-             `[package] user` and imported images that drop privileges will fail with EINVAL.\n\
-             ply:          fix: sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 $USER",
-        );
-    }
-    if !have("newuidmap") || !have("newgidmap") {
-        return Some(
-            "newuidmap/newgidmap not installed — a delegated subuid range exists but the kernel \
-             will not let an unprivileged process apply it, so only uid 0 exists inside.\n\
-             ply:          fix: sudo apt install uidmap   (or: dnf install shadow-utils)",
-        );
-    }
-    None
 }
 
 #[cfg(test)]
@@ -2331,6 +1904,8 @@ mod multi_publish_tests {
 #[cfg(test)]
 mod discovery_tests {
     use super::*;
+    // Its subject moved to the Linux backend with `launch_instance`'s use of it.
+    use crate::runtime::ns::alone_in_its_network;
 
     #[test]
     fn env_file_strips_quotes_trims_and_refuses_shellisms() {
@@ -2429,76 +2004,6 @@ mod discovery_tests {
     }
 }
 
-#[cfg(test)]
-mod subid_tests {
-    use super::*;
-
-    const SUBUID: &str = "# a comment
-iluxa:100000:65536
-someoneelse:200000:65536
-";
-
-    #[test]
-    fn finds_the_range_for_this_user() {
-        assert_eq!(
-            parse_subid(SUBUID, "iluxa", 1000),
-            Some(SubIdRange {
-                start: 100000,
-                count: 65536
-            })
-        );
-    }
-
-    #[test]
-    fn matches_by_numeric_id_too() {
-        // some distros write the uid instead of the name
-        assert_eq!(
-            parse_subid("1000:100000:65536\n", "", 1000),
-            Some(SubIdRange {
-                start: 100000,
-                count: 65536
-            })
-        );
-    }
-
-    #[test]
-    fn another_users_delegation_is_not_ours() {
-        assert_eq!(parse_subid(SUBUID, "nobody", 65534), None);
-    }
-
-    #[test]
-    fn junk_lines_are_skipped_not_fatal() {
-        let text = "broken\n# comment\nnocolons\na:b:c\niluxa:100000:65536\n";
-        assert_eq!(
-            parse_subid(text, "iluxa", 1000),
-            Some(SubIdRange {
-                start: 100000,
-                count: 65536
-            })
-        );
-    }
-
-    #[test]
-    fn a_zero_width_delegation_is_no_delegation() {
-        // a range of 0 ids maps nothing — treat it as absent rather than
-        // handing newuidmap an argument it will reject
-        assert_eq!(parse_subid("iluxa:100000:0\n", "iluxa", 1000), None);
-    }
-
-    #[test]
-    fn the_range_covers_the_service_uids_that_matter() {
-        let r = parse_subid(SUBUID, "iluxa", 1000).unwrap();
-        // redis 999, nginx 101, postgres 70, memcached 11211 all land inside
-        for uid in [70u32, 101, 999, 11211] {
-            assert!(
-                uid >= 1 && uid <= r.count,
-                "uid {uid} outside 1..={}",
-                r.count
-            );
-        }
-    }
-}
-
 /// How long a stop waits for instances to go quietly before SIGKILL.
 ///
 /// Strictly inside `lifecycle::SYSTEMD_STOP_TIMEOUT_SECS`: the supervisor
@@ -2584,11 +2089,7 @@ fn allocate_instance(app: &str, slot: Option<u32>) -> Result<(PathBuf, u32)> {
         if dir.exists() {
             // stale leftover from a crashed predecessor — self-heal
             // (unmount any layer mounts first or removal fails on EBUSY)
-            if let Ok(entries) = std::fs::read_dir(dir.join("layers")) {
-                for entry in entries.filter_map(|e| e.ok()) {
-                    mount::unmount_detach(&entry.path());
-                }
-            }
+            crate::runtime::backend::scrub_instance_dir(&dir);
             let _ = crate::paths::force_remove_dir_all(&dir);
         }
         std::fs::create_dir(&dir).map_err(|source| Error::Io {
@@ -2620,22 +2121,6 @@ fn allocate_instance(app: &str, slot: Option<u32>) -> Result<(PathBuf, u32)> {
         }
     }
     Err(Error::Runtime(format!("no free instance slot for {app}")))
-}
-
-/// Unmounts layer mounts and removes the instance dir on drop — including
-/// error paths.
-struct InstanceGuard {
-    dir: PathBuf,
-    mounted_layers: std::cell::RefCell<Vec<PathBuf>>,
-}
-
-impl Drop for InstanceGuard {
-    fn drop(&mut self) {
-        for target in self.mounted_layers.borrow().iter() {
-            mount::unmount_detach(target);
-        }
-        let _ = crate::paths::force_remove_dir_all(&self.dir);
-    }
 }
 
 /// Parse an --env-file: KEY=VALUE lines, `#` comments, blanks ignored.
@@ -2690,34 +2175,6 @@ fn unquote(v: &str) -> &str {
             &v[1..v.len() - 1]
         }
         _ => v,
-    }
-}
-
-/// Can `--scale N` work in this mode? Rootless instances share the host
-/// network namespace (no per-instance IPs without root), so N > 1 instances
-/// of a port-binding app all race for the same port and N-1 crash with
-/// EADDRINUSE. Refuse up front when the manifest declares ports; warn when
-/// it doesn't (the app may still bind something undeclared).
-enum ScaleGuard {
-    Ok,
-    Warn(&'static str),
-    Refuse(&'static str),
-}
-
-fn rootless_scale_guard(rootless: bool, scale: u32, has_ports: bool, publish: bool) -> ScaleGuard {
-    match (rootless, scale, has_ports, publish) {
-        // --publish makes the parent the listener; past one instance each
-        // gets its own injected PORT, so nothing collides.
-        (_, _, _, true) | (false, _, _, _) | (true, 0 | 1, _, _) => ScaleGuard::Ok,
-        (true, _, true, false) => ScaleGuard::Refuse(
-            "rootless instances share one network, so every instance would bind the same declared port (EADDRINUSE for all but the first).\n\
-             publish the pool through the parent:  ply run --publish <port> --scale N …\n\
-             or run it rootful for per-instance IPs:  sudo ply run --scale N …\n\
-             or stay rootless with --scale 1",
-        ),
-        (true, _, false, false) => ScaleGuard::Warn(
-            "rootless instances share one network — if these instances bind the same port they will collide (per-instance IPs need root, or use --publish)",
-        ),
     }
 }
 
@@ -2803,6 +2260,73 @@ mod tests {
         );
     }
 
+    /// A launch that fails after `allocate_instance` must give the slot back.
+    /// Leaving it behind is not cosmetic: `allocate_instance` skips an
+    /// existing directory, so the next run of the app takes n+1 and comes up
+    /// on a fresh, EMPTY per-instance volume — the plybox-db outage.
+    #[test]
+    fn an_unfinished_launch_gives_its_instance_slot_back() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+
+        let armed = tmp.path().join("app.1");
+        std::fs::create_dir(&armed).expect("slot dir");
+        drop(PendingDir(Some(armed.clone())));
+        assert!(
+            !armed.exists(),
+            "an armed guard must remove the slot it holds",
+        );
+
+        // Disarmed: the launch succeeded and the backend's Instance owns the
+        // directory; removing it here would unmount a live instance's layers.
+        let kept = tmp.path().join("app.2");
+        std::fs::create_dir(&kept).expect("slot dir");
+        let mut guard = PendingDir(Some(kept.clone()));
+        guard.disarm();
+        drop(guard);
+        assert!(
+            kept.exists(),
+            "a disarmed guard must leave the directory to the backend",
+        );
+    }
+
+    /// Why the log ring is created only AFTER `backend.launch` succeeds:
+    /// `RingWriter::create` rotates, and there is exactly one rotation slot.
+    /// A ring created before a launch that then failed would spend that slot
+    /// on nothing, and the restart's retry would push the empty ring over the
+    /// last good generation — `ply logs` blank exactly when it is needed.
+    #[test]
+    fn creating_a_ring_twice_spends_the_one_rotation_slot() {
+        // XDG_RUNTIME_DIR is process-global; paths.rs owns the lock.
+        let _guard = crate::paths::ENV_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let previous = std::env::var_os("XDG_RUNTIME_DIR");
+        std::env::set_var("XDG_RUNTIME_DIR", tmp.path());
+
+        let live = crate::runtime::logring::path("web", 1);
+        let rotated = live.with_extension("log.1");
+
+        let mut ring = crate::runtime::logring::RingWriter::create("web", 1).expect("ring");
+        ring.append(b"the generation the owner needs\n");
+        drop(ring);
+        assert!(!rotated.exists(), "nothing rotated by the first create");
+
+        crate::runtime::logring::RingWriter::create("web", 1).expect("ring");
+        assert!(
+            rotated.exists(),
+            "a second create rotates the live ring into the only slot there is",
+        );
+        assert_eq!(
+            std::fs::read_to_string(&live).expect("live ring"),
+            "",
+            "and leaves an empty live ring behind",
+        );
+
+        match previous {
+            Some(v) => std::env::set_var("XDG_RUNTIME_DIR", v),
+            None => std::env::remove_var("XDG_RUNTIME_DIR"),
+        }
+    }
+
     /// The plybox-db outage: a second instance came up on data.2 while
     /// data.1 held the registry, and nothing said so until the site had been
     /// serving an empty database for hours.
@@ -2834,47 +2358,5 @@ mod tests {
             populated_siblings(&app, "data", "2"),
             vec!["data.1".to_string()]
         );
-    }
-
-    #[test]
-    fn rootful_and_single_instance_pass() {
-        assert!(matches!(
-            rootless_scale_guard(false, 8, true, false),
-            ScaleGuard::Ok
-        ));
-        assert!(matches!(
-            rootless_scale_guard(true, 1, true, false),
-            ScaleGuard::Ok
-        ));
-    }
-
-    #[test]
-    fn publish_lifts_the_rootless_scale_refusal() {
-        assert!(matches!(
-            rootless_scale_guard(true, 4, true, true),
-            ScaleGuard::Ok
-        ));
-        assert!(matches!(
-            rootless_scale_guard(true, 4, false, true),
-            ScaleGuard::Ok
-        ));
-    }
-
-    #[test]
-    fn rootless_scale_with_declared_ports_refuses() {
-        let ScaleGuard::Refuse(msg) = rootless_scale_guard(true, 4, true, false) else {
-            panic!("expected refusal");
-        };
-        assert!(msg.contains("EADDRINUSE"));
-        assert!(msg.contains("sudo ply run"));
-        assert!(msg.contains("--publish"));
-    }
-
-    #[test]
-    fn rootless_scale_without_ports_warns() {
-        assert!(matches!(
-            rootless_scale_guard(true, 4, false, false),
-            ScaleGuard::Warn(_)
-        ));
     }
 }

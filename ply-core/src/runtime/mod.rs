@@ -1,18 +1,15 @@
 pub mod after;
-pub mod cgroup;
-pub mod container;
+pub mod backend;
 pub mod control;
 pub mod events;
-pub mod exec;
 pub mod hosts;
 pub mod logring;
-pub mod loopdev;
-pub mod mount;
-pub mod netns;
-pub mod network;
+/// The Linux backend and everything only it may use: namespaces, mounts,
+/// loop devices, cgroups, capabilities, seccomp, the bridge, `ply exec`.
+#[cfg(target_os = "linux")]
+pub mod ns;
 pub mod params_tree;
 pub mod publish;
 pub mod run;
-pub mod security;
 pub mod state;
-pub mod term;
+pub mod supervise;

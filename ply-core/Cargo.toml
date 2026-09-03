@@ -18,12 +18,16 @@ walkdir.workspace = true
 serde_json.workspace = true
 ureq.workspace = true
 nix.workspace = true
-caps.workspace = true
-seccompiler.workspace = true
 tempfile.workspace = true
 tar.workspace = true
 flate2.workspace = true
 zstd.workspace = true
+
+# Linux-only: capability bounding sets and seccomp filters. Everything that
+# uses them lives under runtime/ns/ (and craft.rs), behind the same cfg.
+[target.'cfg(target_os = "linux")'.dependencies]
+caps.workspace = true
+seccompiler.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

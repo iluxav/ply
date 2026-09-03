@@ -108,12 +108,7 @@ pub fn reap_stale() -> Result<Vec<InstanceState>> {
             .join("instances")
             .join(format!("{}.{}", state.app, state.n));
         if instance_dir.exists() {
-            let layers = instance_dir.join("layers");
-            if let Ok(entries) = std::fs::read_dir(&layers) {
-                for entry in entries.filter_map(|e| e.ok()) {
-                    crate::runtime::mount::unmount_detach(&entry.path());
-                }
-            }
+            crate::runtime::backend::scrub_instance_dir(&instance_dir);
             let _ = crate::paths::force_remove_dir_all(&instance_dir);
         }
         crate::runtime::hosts::remove_entry(&state.app, state.n)?;

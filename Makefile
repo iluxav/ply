@@ -3,13 +3,21 @@
 TARGET := x86_64-unknown-linux-musl
 BIN    := target/$(TARGET)/release/ply
 
-.PHONY: check fmt build test static release release-cli release-web install uninstall registry-catalog registry-push registry registry-all
+.PHONY: check check-darwin fmt build test static release release-cli release-web install uninstall registry-catalog registry-push registry registry-all
 
 # fast feedback: fmt + clippy + tests
 check:
 	cargo fmt --all --check
 	cargo clippy --workspace --all-targets -- -D warnings
 	cargo test --workspace
+
+# The macOS seam gate, runnable on Linux. Needs cargo-zigbuild
+# (`uv tool install cargo-zigbuild`) and a `zig` on PATH; CI runs the same
+# check natively on macos-latest. Clean = 0 errors under -D warnings.
+check-darwin:
+	rustup target add aarch64-apple-darwin >/dev/null
+	cargo-zigbuild check --target aarch64-apple-darwin -p ply-cli
+	cargo-zigbuild clippy --target aarch64-apple-darwin -p ply-cli -- -D warnings
 
 fmt:
 	cargo fmt --all

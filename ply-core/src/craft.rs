@@ -17,8 +17,8 @@ use crate::image::squashfs::{write_image, ExtraFile, TreeSource};
 use crate::lockfile::{LockedPackage, Lockfile};
 use crate::manifest::{Base, Manifest, Package};
 use crate::resolve::Resolver;
-use crate::runtime::container::{child_main, ContainerSpec};
-use crate::runtime::{loopdev, mount};
+use crate::runtime::ns::container::{child_main, ContainerSpec};
+use crate::runtime::ns::{loopdev, mount};
 use crate::source::Source;
 use crate::store::Store;
 

@@ -14,6 +14,14 @@ use std::sync::{Arc, Mutex};
 
 use crate::error::{Error, Result};
 
+/// The rootful bridge gateway's address — instances reach the host there,
+/// so it is also where a depending app (or this pool, binding `internal`)
+/// finds it. A plain fact about the bridge's addressing, not a bridge
+/// operation, so it lives here rather than behind the Linux-only seam:
+/// `runtime::ns::network` imports this constant rather than defining its
+/// own, and this portable pool stays able to name it on every platform.
+pub const GATEWAY: Ipv4Addr = Ipv4Addr::new(10, 77, 0, 1);
+
 /// Who can reach a published port.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BindScope {
@@ -34,7 +42,7 @@ impl BindScope {
         match self {
             BindScope::Public => Ipv4Addr::UNSPECIFIED,
             BindScope::Internal if rootless => Ipv4Addr::LOCALHOST,
-            BindScope::Internal => crate::runtime::network::GATEWAY,
+            BindScope::Internal => GATEWAY,
             BindScope::Addr(a) => *a,
         }
     }
@@ -45,7 +53,7 @@ impl BindScope {
     pub fn connect_addr(&self, rootless: bool) -> Ipv4Addr {
         match self {
             BindScope::Public if rootless => Ipv4Addr::LOCALHOST,
-            BindScope::Public => crate::runtime::network::GATEWAY,
+            BindScope::Public => GATEWAY,
             other => other.bind_addr(rootless),
         }
     }
@@ -233,14 +241,28 @@ pub fn bind(spec: Publish, rootless: bool) -> Result<TcpListener> {
     // `internal` binds the bridge gateway, and on a freshly prepared host
     // the bridge does not exist until the first instance would create it —
     // the listener claim comes first, so create it here (idempotent).
-    if !rootless && addr == crate::runtime::network::GATEWAY {
-        crate::runtime::network::ensure_bridge()?;
+    if !rootless && addr == GATEWAY {
+        ensure_bridge_for_publish()?;
     }
     TcpListener::bind((addr, port)).map_err(|e| {
         Error::Runtime(format!(
             "--publish {port}: cannot bind {addr}:{port}: {e} — published ports are real host ports (one owner per port)"
         ))
     })
+}
+
+/// The bridge itself only exists on Linux (`runtime::ns::network`); `rootless`
+/// is always true elsewhere (there is no rootful backend yet), so `bind`
+/// never reaches here off Linux — this stub exists only so the crate
+/// compiles for a platform that hasn't got a bridge to create.
+#[cfg(target_os = "linux")]
+fn ensure_bridge_for_publish() -> Result<()> {
+    crate::runtime::ns::network::ensure_bridge()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn ensure_bridge_for_publish() -> Result<()> {
+    Ok(())
 }
 
 /// Accept loop — runs on its own thread for the parent's lifetime. Each
@@ -367,7 +389,7 @@ mod tests {
     /// before it spawns anything. From outside, the same address is dead.
     #[test]
     fn a_namespace_backend_is_reachable_only_from_inside() {
-        use crate::runtime::netns::NetNs;
+        use crate::runtime::ns::netns::NetNs;
 
         let ns = match NetNs::create() {
             Ok(ns) => ns,
@@ -383,7 +405,7 @@ mod tests {
         let fd = ns.open().expect("ns fd");
         let (port_tx, port_rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            crate::runtime::netns::enter(&fd).expect("enter");
+            crate::runtime::ns::netns::enter(&fd).expect("enter");
             let l = TcpListener::bind("127.0.0.1:0").expect("bind inside");
             port_tx.send(l.local_addr().unwrap().port()).unwrap();
             for c in l.incoming().flatten() {
@@ -403,7 +425,7 @@ mod tests {
         // …and alive from a thread that joined the namespace
         let fd = ns.open().expect("ns fd");
         let got = std::thread::spawn(move || {
-            crate::runtime::netns::enter(&fd).expect("enter");
+            crate::runtime::ns::netns::enter(&fd).expect("enter");
             let mut conn = connect_either_family(addr, std::time::Duration::from_millis(500))
                 .expect("reaches the backend from inside");
             let mut got = String::new();
@@ -575,17 +597,11 @@ mod tests {
         // rootless shares the host netns; rootful instances reach the host
         // at the bridge gateway. Binding the wrong one silently isolates.
         assert_eq!(BindScope::Internal.bind_addr(true), Ipv4Addr::LOCALHOST);
-        assert_eq!(
-            BindScope::Internal.bind_addr(false),
-            crate::runtime::network::GATEWAY
-        );
+        assert_eq!(BindScope::Internal.bind_addr(false), GATEWAY);
         // Public binds the wildcard but is *reached* at a concrete address
         assert_eq!(BindScope::Public.bind_addr(true), Ipv4Addr::UNSPECIFIED);
         assert_eq!(BindScope::Public.connect_addr(true), Ipv4Addr::LOCALHOST);
-        assert_eq!(
-            BindScope::Public.connect_addr(false),
-            crate::runtime::network::GATEWAY
-        );
+        assert_eq!(BindScope::Public.connect_addr(false), GATEWAY);
     }
 
     #[test]

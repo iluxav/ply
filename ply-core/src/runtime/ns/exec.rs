@@ -169,9 +169,9 @@ pub fn exec(target: &str, cmd: &[String]) -> Result<i32> {
 fn child_exec(instance: &InstanceState, cmd: &[String], env: Vec<CString>) -> i32 {
     // Same clamps as the app itself — an exec'd shell is not a side door.
     let clamps = || -> Result<()> {
-        crate::runtime::security::drop_capabilities(&[])?;
-        crate::runtime::security::no_new_privs()?;
-        crate::runtime::security::apply_seccomp()
+        crate::runtime::ns::security::drop_capabilities(&[])?;
+        crate::runtime::ns::security::no_new_privs()?;
+        crate::runtime::ns::security::apply_seccomp()
     };
     if let Err(e) = clamps() {
         eprintln!("ply exec: {e}");
@@ -188,7 +188,7 @@ fn child_exec(instance: &InstanceState, cmd: &[String], env: Vec<CString>) -> i3
         .find_map(|e| e.strip_prefix("PATH="))
         .unwrap_or("/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
         .to_string();
-    let resolved = crate::runtime::container::resolve_program(&cmd[0], &path);
+    let resolved = crate::runtime::ns::container::resolve_program(&cmd[0], &path);
     let argv: Vec<CString> = cmd
         .iter()
         .map(|a| CString::new(a.as_str()).unwrap())

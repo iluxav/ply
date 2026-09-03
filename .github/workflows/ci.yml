@@ -1,0 +1,24 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup component add clippy rustfmt
+      - run: make check
+
+  # The macOS seam gate (spec: "CI runs cargo check --target
+  # aarch64-apple-darwin -p ply-cli on every push from the first task on").
+  # Native on Apple Silicon runners, so no cross toolchain is needed.
+  darwin:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup target add aarch64-apple-darwin && rustup component add clippy
+      - run: cargo check --target aarch64-apple-darwin -p ply-cli
+      - run: cargo clippy --target aarch64-apple-darwin -p ply-cli -- -D warnings

@@ -331,40 +331,9 @@ pub fn exec(args: UpArgs) -> Result<()> {
     }
     let exe = std::env::current_exe().context("locating the ply binary")?;
 
-    // One network for the stack. Rootful already gives every instance its
-    // own address on the bridge; rootless cannot attach a veth to the host,
-    // so ply makes a namespace it owns and puts the members inside it.
-    // There they bind their own declared ports, reach each other on
-    // loopback as `<name>.ply`, and touch nothing on the machine — which is
-    // what lets one stack file mean the same thing here and on a droplet.
-    let mut egress_dns: Option<String> = None;
-    let netns = match ply_core::paths::is_root() {
-        true => None,
-        false => match ply_core::runtime::netns::NetNs::create()
-            .and_then(|ns| ns.enter_user().map(|()| ns))
-        {
-            // This process now owns the namespaces; the network is still the
-            // host's, so members can fetch what they need. Each joins the
-            // stack's network itself, once it is ready to launch.
-            Ok(mut ns) => {
-                // A namespace with no way out is worse than none for an app
-                // that calls anything: say what happened either way.
-                match ns.attach_egress() {
-                    Ok(router) => {
-                        eprintln!("ply up: stack network ({router})");
-                        egress_dns = Some(ply_core::runtime::netns::EGRESS_DNS.to_string());
-                    }
-                    Err(e) => eprintln!("ply up: stack network, no outbound — {e}"),
-                }
-                Some(ns)
-            }
-            Err(e) => {
-                eprintln!("ply up: {e}");
-                eprintln!("ply up: falling back to the host's network for this run");
-                None
-            }
-        },
-    };
+    // One network for the stack (rootless: a namespace this process owns;
+    // rootful: none needed — the bridge).
+    let (netns, egress_dns) = stack_network();
     let peers: Vec<String> = prepared.iter().map(|p| p.member.clone()).collect();
 
     let mut children: Vec<(String, Child)> = Vec::new();
@@ -442,6 +411,64 @@ pub fn exec(args: UpArgs) -> Result<()> {
         std::thread::sleep(Duration::from_millis(200));
     };
     std::process::exit(code);
+}
+
+/// One network for the stack (rootless: a namespace this process owns;
+/// rootful: none needed — the bridge). Returns it and the resolver its
+/// members should use.
+///
+/// Rootful already gives every instance its own address on the bridge;
+/// rootless cannot attach a veth to the host, so ply makes a namespace it
+/// owns and puts the members inside it. There they bind their own declared
+/// ports, reach each other on loopback as `<name>.ply`, and touch nothing
+/// on the machine — which is what lets one stack file mean the same thing
+/// here and on a droplet.
+#[cfg(target_os = "linux")]
+fn stack_network() -> (Option<ply_core::runtime::ns::netns::NetNs>, Option<String>) {
+    let mut egress_dns: Option<String> = None;
+    let netns = match ply_core::paths::is_root() {
+        true => None,
+        false => match ply_core::runtime::ns::netns::NetNs::create()
+            .and_then(|ns| ns.enter_user().map(|()| ns))
+        {
+            // This process now owns the namespaces; the network is still the
+            // host's, so members can fetch what they need. Each joins the
+            // stack's network itself, once it is ready to launch.
+            Ok(mut ns) => {
+                // A namespace with no way out is worse than none for an app
+                // that calls anything: say what happened either way.
+                match ns.attach_egress() {
+                    Ok(router) => {
+                        eprintln!("ply up: stack network ({router})");
+                        egress_dns = Some(ply_core::runtime::ns::netns::EGRESS_DNS.to_string());
+                    }
+                    Err(e) => eprintln!("ply up: stack network, no outbound — {e}"),
+                }
+                Some(ns)
+            }
+            Err(e) => {
+                eprintln!("ply up: {e}");
+                eprintln!("ply up: falling back to the host's network for this run");
+                None
+            }
+        },
+    };
+    (netns, egress_dns)
+}
+
+/// No stack network on this platform yet (plan 2's switch); members run
+/// on the host's network, as a rootless stack does when the namespace fails.
+#[cfg(not(target_os = "linux"))]
+struct StackNet;
+#[cfg(not(target_os = "linux"))]
+impl StackNet {
+    fn path(&self) -> std::path::PathBuf {
+        unreachable!("stack_network never returns Some on this platform")
+    }
+}
+#[cfg(not(target_os = "linux"))]
+fn stack_network() -> (Option<StackNet>, Option<String>) {
+    (None, None)
 }
 
 /// Determine what stack `ply up` should run and where its lock lives:

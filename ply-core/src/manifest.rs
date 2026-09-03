@@ -185,7 +185,8 @@ pub struct Package {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub include: Vec<String>,
     /// Isolation seam: "ns" (namespaces, default) or "vm" (microVM, future).
-    /// The same composed rootfs enters via pivot_root or virtio-fs.
+    /// The same composed rootfs enters as the new root (namespaces) or a
+    /// mounted disk (virtio-fs).
     #[serde(default = "default_isolation", skip_serializing_if = "is_ns")]
     pub isolation: String,
     /// Run the app as this user instead of root: "name:uid:gid"
@@ -295,6 +296,116 @@ pub struct RunUser {
     pub name: String,
     pub uid: u32,
     pub gid: u32,
+}
+
+/// Every name the `caps` crate's `Capability` enum recognizes (41 variants)
+/// — a fixed copy, checked against the crate itself by
+/// `runtime::ns::security::cap_tests::capability_table_matches_the_caps_crate`
+/// (there, not here: `caps` is a Linux-only dependency of this crate — see
+/// Cargo.toml — and the only files that may name it are `runtime/ns/*` and
+/// `craft.rs`, so the name table lives here and the crate-parity test lives
+/// in `runtime/ns/security.rs`; the `pub(crate)` below is what lets that
+/// test reach this table).
+/// `LINUX_CAPABILITY_NAMES` itself is plain strings, no `caps` crate needed,
+/// so a capability name can be validated without it — kept here rather than
+/// only in `runtime::ns::security` so a typo is caught by `ply build` on
+/// every platform, not only on Linux.
+pub(crate) const LINUX_CAPABILITY_NAMES: &[&str] = &[
+    "CAP_CHOWN",
+    "CAP_DAC_OVERRIDE",
+    "CAP_DAC_READ_SEARCH",
+    "CAP_FOWNER",
+    "CAP_FSETID",
+    "CAP_KILL",
+    "CAP_SETGID",
+    "CAP_SETUID",
+    "CAP_SETPCAP",
+    "CAP_LINUX_IMMUTABLE",
+    "CAP_NET_BIND_SERVICE",
+    "CAP_NET_BROADCAST",
+    "CAP_NET_ADMIN",
+    "CAP_NET_RAW",
+    "CAP_IPC_LOCK",
+    "CAP_IPC_OWNER",
+    "CAP_SYS_MODULE",
+    "CAP_SYS_RAWIO",
+    "CAP_SYS_CHROOT",
+    "CAP_SYS_PTRACE",
+    "CAP_SYS_PACCT",
+    "CAP_SYS_ADMIN",
+    "CAP_SYS_BOOT",
+    "CAP_SYS_NICE",
+    "CAP_SYS_RESOURCE",
+    "CAP_SYS_TIME",
+    "CAP_SYS_TTY_CONFIG",
+    "CAP_MKNOD",
+    "CAP_LEASE",
+    "CAP_AUDIT_WRITE",
+    "CAP_AUDIT_CONTROL",
+    "CAP_SETFCAP",
+    "CAP_MAC_OVERRIDE",
+    "CAP_MAC_ADMIN",
+    "CAP_SYSLOG",
+    "CAP_WAKE_ALARM",
+    "CAP_BLOCK_SUSPEND",
+    "CAP_AUDIT_READ",
+    "CAP_PERFMON",
+    "CAP_BPF",
+    "CAP_CHECKPOINT_RESTORE",
+];
+
+/// Resolve `[package] capabilities` so a typo fails at `ply build`, not at
+/// 3am on the box.
+///
+/// Two layers, not one: on Linux, `runtime::ns::security::keep_set` does the
+/// real resolution (presets included, and name parsing straight off the
+/// `caps` crate) and runs FIRST, so a typo's error text there is unchanged
+/// byte-for-byte from before this platform split existed. Every name that
+/// passes it also passes the portable table check below (the two are kept
+/// in lockstep by
+/// `runtime::ns::security::cap_tests::capability_table_matches_the_caps_crate`),
+/// so on Linux that second check never actually fires — it is there for every OTHER
+/// platform, where `caps` isn't even a dependency (see
+/// `ply-core/Cargo.toml`) and there is no runtime backend yet to resolve
+/// against, but the manifest field is still just a list of strings, and a
+/// typo in it is a typo regardless of what machine ran `ply build`.
+fn validate_capabilities(capabilities: Option<&Capabilities>) -> Result<()> {
+    #[cfg(target_os = "linux")]
+    crate::runtime::ns::security::keep_set(capabilities, false)?;
+    validate_capability_names(capabilities)
+}
+
+/// The portable half of `validate_capabilities`: string matching against
+/// `LINUX_CAPABILITY_NAMES`, mirroring
+/// `runtime::ns::security::parse_capability`'s normalization (trim,
+/// uppercase, prepend `CAP_` if missing) and error text exactly, so a typo
+/// reads the same wherever it's caught.
+fn validate_capability_names(capabilities: Option<&Capabilities>) -> Result<()> {
+    match capabilities {
+        None => Ok(()),
+        Some(Capabilities::Preset(name)) if name.eq_ignore_ascii_case("oci") => Ok(()),
+        Some(Capabilities::Preset(name)) => Err(Error::Manifest(format!(
+            "unknown capabilities preset `{name}` — the only preset is \"oci\" \
+             (Docker's default set); otherwise list the capabilities explicitly"
+        ))),
+        Some(Capabilities::List(names)) => {
+            for name in names {
+                let upper = name.trim().to_ascii_uppercase();
+                let full = if upper.starts_with("CAP_") {
+                    upper
+                } else {
+                    format!("CAP_{upper}")
+                };
+                if !LINUX_CAPABILITY_NAMES.contains(&full.as_str()) {
+                    return Err(Error::Manifest(format!(
+                        "unknown capability `{name}` in package.capabilities (expected e.g. \"chown\", \
+                         \"setuid\", \"net_bind_service\", or the preset \"oci\")"
+                    )));
+                }
+            }
+            Ok(())
+        }
+    }
 }
 
 pub fn parse_user(s: &str) -> Result<RunUser> {
@@ -684,7 +795,7 @@ impl Manifest {
             }
         }
         // Resolve now so a typo fails at `ply build`, not at 3am on the box.
-        crate::runtime::security::keep_set(self.package.capabilities.as_ref(), false)?;
+        validate_capabilities(self.package.capabilities.as_ref())?;
         if let Some(sig) = &self.package.stop_signal {
             parse_stop_signal(sig)?;
         }

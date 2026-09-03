@@ -317,4 +317,31 @@ mod cap_tests {
             "names the valid preset: {err}"
         );
     }
+
+    /// `manifest::LINUX_CAPABILITY_NAMES` is a hand-copied stand-in for this
+    /// crate's own `Capability` enum, used to validate `[package]
+    /// capabilities` on platforms that don't have `caps` as a dependency
+    /// (see `ply-core/Cargo.toml`) — everywhere but Linux. This is the one
+    /// place that copy is checked against the source of truth (`caps::all()`)
+    /// so it can never silently drift; deliberately here rather than next to
+    /// the table in `manifest.rs`, because `caps` is a Linux-only dependency
+    /// of this crate and the only files that may name it are `runtime/ns/*`
+    /// and `craft.rs` — so the name table lives in `manifest.rs` and this
+    /// crate-parity test lives here.
+    #[test]
+    fn capability_table_matches_the_caps_crate() {
+        let mut from_table: Vec<String> = crate::manifest::LINUX_CAPABILITY_NAMES
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        from_table.sort();
+
+        let mut from_crate: Vec<String> = caps::all().iter().map(|c| format!("{c:?}")).collect();
+        from_crate.sort();
+
+        assert_eq!(
+            from_table, from_crate,
+            "manifest::LINUX_CAPABILITY_NAMES has drifted from caps::Capability's own variants"
+        );
+    }
 }
