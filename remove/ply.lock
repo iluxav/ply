@@ -1,0 +1,6 @@
+# stack lock — resolved `run =` member versions; `ply up --refresh` re-resolves
+[stack.db]
+ref = "postgres@17"
+version = "17.10.7"
+digest.arm64 = "sha256:803b5552f13c611e3071684a98851b7a1ff6862cf606826435e6a928fa16fdfa"
+

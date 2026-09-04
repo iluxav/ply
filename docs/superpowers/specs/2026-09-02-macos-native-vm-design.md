@@ -2,6 +2,18 @@
 
 **Date:** 2026-09-02 · **Status:** spec for review · **Supersedes the "parked" status of** `docs/ply-vm.md` (its requirements R1–R6, A1–A7, N1–N2, S1–S3 carry over unchanged unless restated here) · **Builds on:** the `plyvm` spike (github.com/iluxav/plyvm: ~850-line HVF VMM, a 350-line static guest init, the `ply/microvm-kernel` keg)
 
+## Amendments
+
+Three wire-level details below were superseded during milestone 0 and plan 2. The design is unchanged; only these encodings are. **Implement the amendment, not the line in the body** — the crate that owns each of them is `ply-vm-proto`.
+
+| Body says | Now reads | Ruling |
+|---|---|---|
+| the `--vswitch` framing is "one Ethernet frame per message with a u16 length prefix" (Networking) | a **4-byte big-endian** length prefix, then the frame — passt's and gvproxy's own protocol, so existing tooling can read the wire | R0-2, `2026-09-03-libkrun-spike-result.md` |
+| the spec disk is "the last read-only disk" (guest init contract, step 2) | the guest **scans every attached disk for the `PLYSPEC1` magic**. Same contract, one failure mode fewer, no extra cost | R0-5, same document |
+| the params updates are objects — `{"params":{…}}`, `params_seed: {…}` (the VMM, step 5) | ordered **arrays**: `{"params":[["db",[["state","starting"]]]]}`, typed `ply_vm_proto::ParamsTree`. An object is unordered, and this is a sequence of applications | R1-1, `../plans/2026-09-03-macos-vm-backend.md` |
+
+Two kernel-config facts the milestone 0 spike established also belong with the guest contract: `CONFIG_EXT4_FS` and `CONFIG_VIRTIO_CONSOLE` are additions this design needs and plyvm's config lacks, and the initramfs must carry `/dev/null` as well as `/dev/console` or a Rust `std` guest init dies before `main` whenever the console is missing.
+
 ## Goal
 
 A developer on an Apple Silicon Mac installs ply with the same one-liner as on Linux and runs registry kegs and stacks the same way:

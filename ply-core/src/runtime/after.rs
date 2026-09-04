@@ -127,21 +127,56 @@ fn currently_tail(why: &str) -> &str {
         .unwrap_or(why)
 }
 
+/// One instance, as a probe needs to see it: whose it is, where it is, and
+/// how to get there.
+///
+/// `via` is the part that is not obvious. An address is only dialable if the
+/// prober shares a network with it, and a microVM's does not exist outside
+/// its run parent's userspace switch — so a bare `(pid, ip)` pair, which is
+/// all this took before, reads every macOS instance as "not answering".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Endpoint {
+    pub pid: i32,
+    pub ip: Ipv4Addr,
+    /// The switch socket `ip` lives on. `None` — every namespace instance —
+    /// is an address the host dials directly.
+    pub via: Option<std::path::PathBuf>,
+}
+
 /// TCP connect with the health gate's 300 ms budget.
-pub fn probe(ip: Ipv4Addr, port: u16) -> std::result::Result<(), String> {
-    let addr = std::net::SocketAddr::from((ip, port));
-    crate::runtime::publish::connect_either_family(addr, Duration::from_millis(300))
-        .map(drop)
-        .map_err(|e| e.to_string())
+///
+/// `via` routes the connection through a switch that unix socket belongs to,
+/// which is the only way to reach an instance whose address is a machine on
+/// somebody's userspace L2. The switch is asked for a slightly longer
+/// budget than the direct path gets: the answer crosses a socket and a
+/// scheduler on the way back, and a probe that gave up first would report
+/// "timed out" for a port that had already refused.
+pub fn probe(
+    ip: Ipv4Addr,
+    port: u16,
+    via: Option<&std::path::Path>,
+) -> std::result::Result<(), String> {
+    const BUDGET: Duration = Duration::from_millis(300);
+    match via {
+        Some(socket) => crate::runtime::vm::switch::unix::dial(socket, ip, port, BUDGET)
+            .map(drop)
+            .map_err(|e| e.to_string()),
+        None => {
+            let addr = std::net::SocketAddr::from((ip, port));
+            crate::runtime::publish::connect_either_family(addr, BUDGET)
+                .map(drop)
+                .map_err(|e| e.to_string())
+        }
+    }
 }
 
 fn alive(pid: i32) -> bool {
     unsafe { nix::libc::kill(pid, 0) == 0 }
 }
 
-/// Readiness from (pid, ip) pairs and the app's `[health] port`, if any.
-pub fn readiness_of(instances: &[(i32, Ipv4Addr)], health_port: Option<u16>) -> Readiness {
-    let live: Vec<&(i32, Ipv4Addr)> = instances.iter().filter(|(pid, _)| alive(*pid)).collect();
+/// Readiness from an app's instances and its `[health] port`, if any.
+pub fn readiness_of(instances: &[Endpoint], health_port: Option<u16>) -> Readiness {
+    let live: Vec<&Endpoint> = instances.iter().filter(|e| alive(e.pid)).collect();
     if live.is_empty() {
         return Readiness::NotRunning;
     }
@@ -149,8 +184,8 @@ pub fn readiness_of(instances: &[(i32, Ipv4Addr)], health_port: Option<u16>) -> 
         return Readiness::Ready;
     };
     let mut last = String::new();
-    for (_, ip) in live {
-        match probe(*ip, port) {
+    for endpoint in live {
+        match probe(endpoint.ip, port, endpoint.via.as_deref()) {
             Ok(()) => return Readiness::Ready,
             Err(e) => last = e,
         }
@@ -159,15 +194,23 @@ pub fn readiness_of(instances: &[(i32, Ipv4Addr)], health_port: Option<u16>) -> 
 }
 
 /// Readiness of a named app on this host, from its instance state files
-/// (which record the `[health] port` of the image they run).
+/// (which record the `[health] port` of the image they run, and the switch
+/// their address lives on when it lives on one).
 pub fn check(app: &str) -> Readiness {
     let states: Vec<state::InstanceState> = match state::list() {
         Ok(all) => all.into_iter().filter(|s| s.app == app).collect(),
         Err(_) => return Readiness::NotRunning,
     };
     let health_port = states.iter().find_map(|s| s.health_port);
-    let pairs: Vec<(i32, Ipv4Addr)> = states.iter().map(|s| (s.pid, s.ip)).collect();
-    readiness_of(&pairs, health_port)
+    let endpoints: Vec<Endpoint> = states
+        .iter()
+        .map(|s| Endpoint {
+            pid: s.pid,
+            ip: s.ip,
+            via: s.network.clone(),
+        })
+        .collect();
+    readiness_of(&endpoints, health_port)
 }
 
 /// Poll `poll(wait)` for every condition until all are `Ready`. `report`
@@ -372,8 +415,8 @@ mod tests {
     fn probe_distinguishes_open_and_closed_ports() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let open = listener.local_addr().unwrap().port();
-        assert!(probe(Ipv4Addr::LOCALHOST, open).is_ok());
-        assert!(probe(Ipv4Addr::LOCALHOST, CLOSED_PORT).is_err());
+        assert!(probe(Ipv4Addr::LOCALHOST, open, None).is_ok());
+        assert!(probe(Ipv4Addr::LOCALHOST, CLOSED_PORT, None).is_err());
     }
 
     #[test]
@@ -621,29 +664,38 @@ mod tests {
         assert!(WaitingMarker::list_in(dir.path()).is_empty());
     }
 
+    /// An instance the host can dial directly — every namespace one.
+    fn direct(pid: i32) -> Endpoint {
+        Endpoint {
+            pid,
+            ip: Ipv4Addr::LOCALHOST,
+            via: None,
+        }
+    }
+
     #[test]
     fn readiness_from_instances() {
         // No instances → not running; alive + no health → ready.
         assert!(matches!(readiness_of(&[], None), Readiness::NotRunning));
         let me = std::process::id() as i32;
         assert!(matches!(
-            readiness_of(&[(me, Ipv4Addr::LOCALHOST)], None),
+            readiness_of(&[direct(me)], None),
             Readiness::Ready
         ));
         // dead pid only → not running
         assert!(matches!(
-            readiness_of(&[(2_000_000_000, Ipv4Addr::LOCALHOST)], None),
+            readiness_of(&[direct(2_000_000_000)], None),
             Readiness::NotRunning
         ));
         // alive + health port open → ready; closed → unhealthy
         let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let open = l.local_addr().unwrap().port();
         assert!(matches!(
-            readiness_of(&[(me, Ipv4Addr::LOCALHOST)], Some(open)),
+            readiness_of(&[direct(me)], Some(open)),
             Readiness::Ready
         ));
         let closed = CLOSED_PORT;
-        match readiness_of(&[(me, Ipv4Addr::LOCALHOST)], Some(closed)) {
+        match readiness_of(&[direct(me)], Some(closed)) {
             Readiness::Unhealthy(why) => assert!(why.contains(&format!("port {closed}")), "{why}"),
             other => panic!("expected Unhealthy, got {other:?}"),
         }

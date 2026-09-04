@@ -81,6 +81,33 @@ pub fn stop_with_patience(
     }
 }
 
+/// Ask every instance the signal HANDLER could not reach to stop, and say
+/// how many that was.
+///
+/// The handler stops an instance by `kill`ing `child_pid()` — the only thing
+/// that works while the main loop is blocked in the `--after` wait, so
+/// namespace instances are already covered by the time this runs. A microVM
+/// has no child process at all: its `child_pid()` is `None`, and the only
+/// way in is `Instance::signal`, which reaches the guest init over the
+/// control channel. Without this call such an instance received **nothing**
+/// until `SHUTDOWN_GRACE` expired and was then SIGKILLed — `^C` on `ply run`
+/// took ten seconds and returned 255 instead of the app's own exit code, and
+/// a database lost its clean shutdown.
+///
+/// An instance the handler already reached is skipped rather than signalled
+/// again: sending a second SIGTERM to an app that asked for one — nginx's
+/// SIGQUIT drain, httpd's SIGWINCH — is not what a polite stop promises.
+///
+/// Called ONCE, on the loop's first observation of the shutdown.
+pub fn request_stop(instances: &[&dyn Instance], stop: Signal) -> usize {
+    let mut sent = 0;
+    for instance in instances.iter().filter(|i| i.child_pid().is_none()) {
+        let _ = instance.signal(stop);
+        sent += 1;
+    }
+    sent
+}
+
 #[cfg(test)]
 #[derive(Default)]
 pub(crate) struct FakeInstance {
@@ -92,6 +119,9 @@ pub(crate) struct FakeInstance {
     pub answers_from_poll: Option<u32>,
     /// A signal it complies with (ends with `exit`); SIGKILL always ends it (137).
     pub obeys: Option<Signal>,
+    /// `Some` = a real child process the signal handler can `kill` itself;
+    /// `None` (the default) = a microVM, which only the main loop can reach.
+    pub child_pid: Option<i32>,
     pub signals: std::cell::RefCell<Vec<Signal>>,
     ended: std::cell::Cell<Option<i32>>,
 }
@@ -117,7 +147,7 @@ impl Instance for FakeInstance {
         4242
     }
     fn child_pid(&self) -> Option<i32> {
-        None
+        self.child_pid
     }
     fn ip(&self) -> std::net::Ipv4Addr {
         std::net::Ipv4Addr::new(10, 77, 0, 2)
@@ -225,6 +255,43 @@ mod tests {
             *fake.signals.borrow(),
             vec![Signal::SIGTERM, Signal::SIGKILL]
         );
+    }
+
+    #[test]
+    fn a_shutdown_reaches_an_instance_that_is_not_a_child_process() {
+        // A microVM has no pid to kill: `child_pid()` is `None`, so the
+        // signal HANDLER cannot reach it and the main loop must. Before
+        // this, such an instance got nothing for ten seconds and then
+        // SIGKILL — `^C` on `ply run` returned 255 instead of the app's own
+        // code, and the guest never saw the signal at all.
+        let fake = FakeInstance {
+            obeys: Some(Signal::SIGTERM),
+            ..Default::default()
+        };
+        assert_eq!(request_stop(&[&fake as &dyn Instance], Signal::SIGTERM), 1);
+        assert_eq!(*fake.signals.borrow(), vec![Signal::SIGTERM]);
+    }
+
+    #[test]
+    fn an_instance_the_handler_already_signalled_is_not_signalled_twice() {
+        // A namespace instance IS a child process, and the handler killed it
+        // the moment the signal arrived. Signalling it again here would send
+        // a second SIGQUIT to an nginx that is already draining.
+        let child = FakeInstance {
+            child_pid: Some(4243),
+            ..Default::default()
+        };
+        let vm = FakeInstance::default();
+        assert_eq!(
+            request_stop(
+                &[&child as &dyn Instance, &vm as &dyn Instance],
+                Signal::SIGQUIT
+            ),
+            1,
+            "only the instance with no child pid is reached from here"
+        );
+        assert!(child.signals.borrow().is_empty());
+        assert_eq!(*vm.signals.borrow(), vec![Signal::SIGQUIT]);
     }
 
     #[test]

@@ -37,16 +37,20 @@ pub struct RunOptions {
     /// own backend pool, all fed by the same instances. An edge needs :80 and
     /// :443 together; a service may want HTTP plus gRPC or metrics.
     pub publish: Vec<crate::runtime::publish::Publish>,
-    /// Names of the other members sharing `netns`, so `<name>.ply` resolves
-    /// to loopback inside each container.
-    pub netns_peers: Vec<String>,
-    /// The resolver inside `netns` (its user-mode router), when there is one.
-    pub netns_dns: Option<String>,
-    /// A network namespace every instance joins (`/proc/<pid>/ns/net`).
-    /// Rootless, this is how a stack's members share one network: they bind
-    /// their own natural ports there and reach each other on loopback,
-    /// touching no host port. `None` keeps the caller's network.
-    pub netns: Option<PathBuf>,
+    /// Names of the other members sharing `network`, so `<name>.ply`
+    /// resolves: to loopback inside each container on Linux, to the sibling's
+    /// own address on the switch in a microVM.
+    pub network_peers: Vec<String>,
+    /// The resolver inside `network` — the namespace's user-mode router on
+    /// Linux, the switch itself on macOS — when there is one.
+    pub network_dns: Option<String>,
+    /// The stack's network, which every instance of this run joins. A netns
+    /// path (`/proc/<pid>/ns/net`) on Linux, where members bind their own
+    /// natural ports and reach each other on loopback, touching no host
+    /// port; a `--vswitch` unix socket on macOS, where each member is its
+    /// own machine on one userspace L2. `None` keeps the caller's network
+    /// (Linux) or gives this run a private switch of its own (macOS).
+    pub network: Option<PathBuf>,
     /// `--after`: apps on this host that must be healthy before the first
     /// instance launches (waited for once, at parent start).
     pub after: Vec<String>,
@@ -139,7 +143,7 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
         let pool = crate::runtime::publish::Pool::new();
         let serve_pool = pool.clone();
         // The listener was bound out there; the instances live in here.
-        let same_network = opts.netns.is_none();
+        let same_network = opts.network.is_none();
         std::thread::spawn(move || {
             crate::runtime::publish::serve(listener, serve_pool, same_network)
         });
@@ -342,6 +346,20 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
         }
 
         let shutting_down = SHUTTING_DOWN.load(Ordering::SeqCst);
+
+        // Reach the instances the signal HANDLER could not — a microVM has
+        // no pid to `kill`, so this loop is the only way in. See
+        // `supervise::request_stop` for what that costs when it is missing.
+        //
+        // Once, on the first observation of the shutdown: `shutdown_began` is
+        // set by the `get_or_insert_with` just below, so `is_none()` is true
+        // exactly one lap. Sending the stop signal twice to an app that asked
+        // for one is not what `ply stop` promises.
+        if shutting_down && shutdown_began.is_none() && !instances.is_empty() {
+            let waiting: Vec<&dyn crate::runtime::backend::Instance> =
+                instances.iter().map(|r| r.inner.as_ref()).collect();
+            crate::runtime::supervise::request_stop(&waiting, stop_signal);
+        }
 
         // A stop has to END. The container's PID 1 is the app's own
         // entrypoint, and the kernel drops default-action signals to PID 1 —
@@ -1610,8 +1628,8 @@ fn launch_instance(
         keep_net_bind: manifest.ports.values().any(|p| *p < 1024),
         privileged: opts.privileged,
         resources: manifest.resources.clone(),
-        dns: opts.netns_dns.clone(),
-        local_aliases: opts.netns_peers.clone(),
+        dns: opts.network_dns.clone(),
+        local_aliases: opts.network_peers.clone(),
     };
 
     // Live params tree: publish before spawn. The child's own mount
@@ -1661,6 +1679,11 @@ fn launch_instance(
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let loopback = net.facts.loopback;
+    // How another process reaches `ip`, when `ip` alone is not enough — a
+    // microVM's address lives on this parent's switch and nowhere else, and
+    // an `--after` gate in a different `ply run` has no other way to find
+    // it. `None` for every namespace instance, which is the whole of Linux.
+    let reach_via = backend.reach_via();
     // Handed to the backend, which calls it once the instance's pid and
     // address are known and BEFORE the instance runs.
     let mut record = |pid: i32, ip: Ipv4Addr| -> Result<()> {
@@ -1694,6 +1717,7 @@ fn launch_instance(
                 )
             }),
             domains: opts.domains.clone(),
+            network: reach_via.clone(),
         }
         .save()
     };
@@ -1750,19 +1774,23 @@ fn launch_instance(
         });
     }
 
-    let ip = instance.ip();
     // Join the published pool: rootful backends live on the bridge at the
-    // shared instance port; rootless ones on their injected loopback port.
+    // shared instance port; rootless ones on their injected loopback port;
+    // a microVM has no host-dialable address at all and hands over a
+    // connector that goes through the switch (`Instance::connector`).
     let pools: Vec<crate::runtime::publish::Pool> = publish
         .iter()
         .enumerate()
         .map(|(i, wiring)| {
-            let addr = match injected_port {
-                // only the first spec gets the injected loopback port
-                Some(port) if i == 0 => std::net::SocketAddr::from(([127, 0, 0, 1], port)),
-                _ => std::net::SocketAddr::from((ip, wiring.spec.instance_port)),
+            let backend = match injected_port {
+                // only the first spec gets the injected loopback port, and
+                // that one really is a host address: ply forwarded it there.
+                Some(port) if i == 0 => crate::runtime::publish::connector_for(
+                    std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+                ),
+                _ => instance.connector(wiring.spec.instance_port),
             };
-            wiring.pool.insert(n, addr);
+            wiring.pool.insert(n, backend);
             wiring.pool.clone()
         })
         .collect();
@@ -1904,8 +1932,6 @@ mod multi_publish_tests {
 #[cfg(test)]
 mod discovery_tests {
     use super::*;
-    // Its subject moved to the Linux backend with `launch_instance`'s use of it.
-    use crate::runtime::ns::alone_in_its_network;
 
     #[test]
     fn env_file_strips_quotes_trims_and_refuses_shellisms() {
@@ -1958,7 +1984,16 @@ mod discovery_tests {
     }
 
     #[test]
+    // `alone_in_its_network` is the namespace backend's own rule for when an
+    // instance may keep its declared port instead of having PORT injected.
+    // The predicate itself is portable — a truth table over three scalars.
+    // The gate is only about where it LIVES: it moved into `runtime::ns`
+    // with `launch_instance`'s use of it. Worth revisiting if a second
+    // backend ever needs the same rule, at which point `target_os = "linux"`
+    // stops meaning "namespaces".
+    #[cfg(target_os = "linux")]
     fn alone_in_its_network_matches_when_port_is_injected() {
+        use crate::runtime::ns::alone_in_its_network;
         // The PORT-override WARNING and the injection itself read this one
         // predicate, so they cannot drift apart. Rootful is always alone (its
         // own bridge address); rootless with no namespace never is — which is
@@ -1971,9 +2006,9 @@ mod discovery_tests {
             scale,
             links: vec![],
             publish: vec![],
-            netns_peers: vec![],
-            netns_dns: None,
-            netns: netns.map(std::path::PathBuf::from),
+            network_peers: vec![],
+            network_dns: None,
+            network: netns.map(std::path::PathBuf::from),
             after: vec![],
             after_timeout: std::time::Duration::from_secs(60),
             privileged: false,

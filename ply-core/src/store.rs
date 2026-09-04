@@ -61,7 +61,7 @@ impl Store {
             path: entry.clone(),
             source,
         })?;
-        eprintln!("ply: extracting {digest} (rootless runs use extracted layers)");
+        eprintln!("ply: extracting {digest} (unpacked once, then reused)");
         crate::image::extract::extract_rootfs(image, &rootfs)?;
         std::fs::write(&marker, b"").map_err(|source| Error::Io {
             path: marker,

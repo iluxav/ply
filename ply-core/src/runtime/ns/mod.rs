@@ -71,7 +71,7 @@ impl Backend for NsBackend {
         // collision with whatever the machine already runs, a way out through a
         // user-mode router. `ply up` passes its stack namespace instead, and
         // rootful already gives every instance a bridge address.
-        if self.rootless && opts.netns.is_none() {
+        if self.rootless && opts.network.is_none() {
             match NetNs::create().and_then(|ns| ns.enter_user().map(|()| ns)) {
                 Ok(mut ns) => {
                     let dns = match ns.attach_egress() {
@@ -81,8 +81,8 @@ impl Backend for NsBackend {
                             None
                         }
                     };
-                    opts.netns = Some(ns.path());
-                    opts.netns_dns = dns;
+                    opts.network = Some(ns.path());
+                    opts.network_dns = dns;
                     // the namespace lives as long as this backend (the run)
                     *self.own_ns.borrow_mut() = Some(ns);
                 }
@@ -108,7 +108,7 @@ impl Backend for NsBackend {
             // Say which network this actually got: with one of its own the app
             // binds its declared ports and answers to `<name>.ply`, which is the
             // opposite of what the old banner promised.
-            let net = match &opts.netns {
+            let net = match &opts.network {
                 Some(_) => "own network",
                 None => "host network (no .ply names)",
             };
@@ -171,7 +171,7 @@ impl Backend for NsBackend {
         // instance's address is derived from it, and on the host network an
         // un-injected port makes the pool's backend the proxy's own listener,
         // which then accepts its own connections until it runs out of threads.
-        if let Some(path) = &opts.netns {
+        if let Some(path) = &opts.network {
             if let Err(e) = std::fs::File::open(path)
                 .map_err(|source| Error::Io {
                     path: path.clone(),
@@ -191,7 +191,7 @@ impl Backend for NsBackend {
     fn network(&self, opts: &RunOptions) -> NetworkFacts {
         NetworkFacts {
             facts: self.facts(),
-            in_stack_network: opts.netns.as_ref().is_some_and(|p| in_namespace(p)),
+            in_stack_network: opts.network.as_ref().is_some_and(|p| in_namespace(p)),
             alone: alone_in_its_network(self.rootless, opts),
         }
     }
@@ -476,7 +476,7 @@ impl Drop for InstanceGuard {
 /// in AND there is one instance — every instance of a run shares that one
 /// namespace, so past the first they contend for the same ports.
 pub(crate) fn alone_in_its_network(rootless: bool, opts: &RunOptions) -> bool {
-    !rootless || (opts.netns.as_ref().is_some_and(|p| in_namespace(p)) && opts.scale <= 1)
+    !rootless || (opts.network.as_ref().is_some_and(|p| in_namespace(p)) && opts.scale <= 1)
 }
 
 /// Is this process inside the namespace at `path`? Compared by identity,

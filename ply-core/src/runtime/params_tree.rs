@@ -22,7 +22,16 @@ use crate::error::{Error, Result};
 
 /// Files only the parent ever writes. The container mount sequence
 /// re-binds each of these read-only over itself inside `/run/ply/self`.
-pub const PARENT_OWNED: &[&str] = &["state", "instances", "started_at", "restarts"];
+///
+/// The list itself lives in `ply-vm-proto`, because the same boundary is
+/// enforced twice on two sides of a machine boundary — here by
+/// `ns/container.rs`'s per-file read-only re-bind, and inside a microVM by
+/// the guest init, which re-binds the same names over `/run/ply/self` AND
+/// refuses to forward a `publish` event for any of them. A name that left
+/// one copy and not the other would not fail a build; it would just stop
+/// sealing a fact, and `state` is the fact every `--after` dependant gates
+/// on. One constant, so there is nothing to drift.
+pub const PARENT_OWNED: &[&str] = ply_vm_proto::PARENT_OWNED;
 
 /// Root of the whole tree — bind-mounted whole (read-only) into every
 /// container at `/run/ply`.

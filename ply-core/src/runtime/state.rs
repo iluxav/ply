@@ -44,6 +44,20 @@ pub struct InstanceState {
     /// app records the same list. `ply proxy` turns these into vhosts.
     #[serde(default)]
     pub domains: Vec<String>,
+    /// How to reach `ip` from a process that is not this instance's parent.
+    ///
+    /// `None` — every Linux path, and every state file written before this
+    /// field existed — means `ip` is an address the host can dial. A microVM
+    /// instance's is not: it lives on a userspace switch inside its run
+    /// parent, and this names the unix socket that switch listens on. It is
+    /// the only thing that lets a `--after` gate in a DIFFERENT `ply run`
+    /// probe this instance's health port at all.
+    ///
+    /// `skip_serializing_if` — unlike its neighbours — so that `ply ps
+    /// --json` on Linux, where this is always `None`, prints exactly what it
+    /// printed before this field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network: Option<PathBuf>,
 }
 
 fn state_dir() -> PathBuf {

@@ -13,3 +13,7 @@ pub mod publish;
 pub mod run;
 pub mod state;
 pub mod supervise;
+/// The macOS backend and everything only it may use: Hypervisor.framework,
+/// the device models, the guest contract, the userspace switch. Its portable
+/// submodules compile everywhere so Linux CI tests them.
+pub mod vm;

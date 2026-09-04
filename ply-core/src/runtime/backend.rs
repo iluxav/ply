@@ -8,8 +8,9 @@
 //! `preflight` → `facts` → (manifest read) → `admit` → (host ports bound)
 //! → `attach` → `network` → `launch`×N … `terminal` on demand.
 
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use nix::sys::signal::Signal;
@@ -115,6 +116,18 @@ pub trait Instance {
     /// TCP connect to the instance's own `port` — the health gate and the
     /// `--after` probes go through here, never through a raw address.
     fn tcp_open(&self, port: u16, timeout: Duration) -> std::io::Result<()>;
+    /// How a published pool reaches this instance's `port`.
+    ///
+    /// The default is the address `ip()` names, which is what every
+    /// namespace instance wants: the parent is in the same network and can
+    /// dial it. A microVM overrides it, because its address exists only on
+    /// the parent's userspace switch and `TcpStream::connect` to it from
+    /// the host finds nothing at all — the failure `--publish` used to have
+    /// on macOS, where the parent accepted a connection, found no reachable
+    /// backend, and reset it.
+    fn connector(&self, port: u16) -> Arc<dyn crate::runtime::publish::Connector> {
+        crate::runtime::publish::connector_for(SocketAddr::from((self.ip(), port)))
+    }
 }
 
 /// A platform's runtime. One per `ply run`, on the main thread.
@@ -135,6 +148,20 @@ pub trait Backend {
     /// the host's) and prepare the host side (the bridge, rootful).
     fn attach(&self, opts: &RunOptions) -> Result<()>;
     fn network(&self, opts: &RunOptions) -> NetworkFacts;
+    /// The unix socket an instance's address can be reached on from ANOTHER
+    /// process, when the address is not one the host can dial.
+    ///
+    /// `None` — every namespace instance — means "the address in the state
+    /// file is the whole answer". A microVM's is not: `10.77.0.2` names a
+    /// machine on a userspace switch, and a `--after` port probe running in
+    /// a different `ply run` parent has no way to reach it without being
+    /// told which switch to ask. Recorded in the instance state file, which
+    /// is the only place a reader ever looks.
+    ///
+    /// Called once, after `attach`.
+    fn reach_via(&self) -> Option<PathBuf> {
+        None
+    }
     fn launch(&self, spec: &InstanceSpec, record: Record<'_>) -> Result<Launched>;
     /// The `exec` control command: serve a terminal into `app.slot` at
     /// `term-<nonce>.sock`. Backends without one return `Err`.
@@ -163,11 +190,17 @@ pub fn default_backend() -> Result<Box<dyn Backend>> {
     Ok(Box::new(crate::runtime::ns::NsBackend::new()?))
 }
 
-/// No backend on this platform yet — the macOS runtime lands in a later
-/// release.
-#[cfg(not(target_os = "linux"))]
+/// One microVM per instance on Hypervisor.framework.
+#[cfg(target_os = "macos")]
+pub fn default_backend() -> Result<Box<dyn Backend>> {
+    Ok(Box::new(crate::runtime::vm::VmBackend::new()?))
+}
+
+/// Neither Linux namespaces nor macOS microVMs: nothing to run instances
+/// with.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn default_backend() -> Result<Box<dyn Backend>> {
     Err(crate::Error::Runtime(
-        "ply run is not available on this platform yet — the macOS runtime lands in a later release".into(),
+        "ply run has no runtime on this platform — Linux (namespaces) and macOS on Apple Silicon (microVMs) are supported".into(),
     ))
 }
