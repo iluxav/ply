@@ -1,0 +1,34 @@
+# The `ply/microvm-kernel` keg: the Linux kernel and the initramfs that every
+# ply microVM boots on macOS.
+#
+# scripts/build-microvm-kernel.sh copies this file to <staging>/ply.toml and
+# runs `ply build --arch arm64` on the staging directory, whose only content
+# is `boot/{microvm-kernel.img,initramfs.cpio}`.
+#
+# THREE PLACES CARRY THIS VERSION and they must move in one edit:
+#   1. `version` below
+#   2. `KVER` in scripts/build-microvm-kernel.sh (and its pinned KSHA256)
+#   3. `MICROVM_KERNEL` in ply-core/src/runtime/vm/kernel.rs
+# The binary pins (3); no ply.lock ever mentions this package, because the
+# kernel is part of the RUNTIME, not of any app.
+#
+# There is deliberately NO `entrypoint`: this is a keg, not an app, so
+# `ply run ply/microvm-kernel` is refused — there is nothing here a person
+# could run on their machine. The VM backend fetches it through
+# `catalog::fetch_keg_image`, the narrow second door that exists for runtime
+# artifacts; a fake entrypoint here would have made a broken `ply run` look
+# like a feature.
+#
+# `ply build` packs a keg at /opt/<name>-<version>, so the payload lands at
+# /opt/microvm-kernel-<version>/boot/ — which is exactly where
+# `runtime::vm::kernel::keg_payload_dir` looks for it.
+
+[package]
+name = "microvm-kernel"
+version = "6.12.0"
+owner = "ply"
+description = "Linux 6.12 microVM kernel and guest init — the runtime ply boots inside a macOS microVM"
+# The kernel Image and the static e2fsprogs in the initramfs are both
+# GPL-2.0; ply-guest-init, the third component, is MIT like the rest of ply.
+license = "GPL-2.0"
+homepage = "https://github.com/iluxa/ply"

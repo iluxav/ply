@@ -1,0 +1,13 @@
+[package]
+name = "ply-vm-proto"
+description = "The wire contract between ply's VM backend and its guest init: the spec disk and the control channel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Deliberately tiny: this crate is linked into the static guest init, which
+# lives in an initramfs with a size budget. serde_json is the whole cost.
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
