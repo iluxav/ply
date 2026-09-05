@@ -520,27 +520,50 @@ mod tests {
         );
     }
 
+    /// A backend the test opens and closes at will: real sockets made the
+    /// test flaky (a freed port was re-bound by a parallel test).
+    struct Gate {
+        addr: SocketAddr,
+        open: std::sync::atomic::AtomicBool,
+    }
+    impl Connector for Gate {
+        fn connect(&self, _timeout: Duration) -> std::io::Result<Box<dyn Upstream>> {
+            if self.open.load(Ordering::SeqCst) {
+                // Any live stream will do: the listener below never sees it.
+                let l = TcpListener::bind("127.0.0.1:0")?;
+                Ok(Box::new(TcpStream::connect(l.local_addr()?)?))
+            } else {
+                Err(std::io::Error::from(std::io::ErrorKind::ConnectionRefused))
+            }
+        }
+        fn addr(&self) -> SocketAddr {
+            self.addr
+        }
+    }
+
     /// A slot must not be routable before its port accepts: the relay used
     /// to retry the next backend on a refused connect, the kernel cannot,
     /// and 57 requests in the 2026-09-05 roll hit an instance still
     /// starting.
     #[test]
     fn an_instance_joins_its_pools_only_once_its_port_accepts() {
-        let probe = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = probe.local_addr().unwrap();
-        drop(probe); // the port is known but nobody listens yet
+        let addr: SocketAddr = "10.77.0.9:8080".parse().unwrap();
+        let gate = Arc::new(Gate {
+            addr,
+            open: std::sync::atomic::AtomicBool::new(false),
+        });
         let pool = Pool::new();
         let rec = Arc::new(Recording::default());
         pool.mirror(rec.clone());
-        let mut m = Membership::new(vec![(pool.clone(), connector_for(addr))]);
+        let mut m = Membership::new(vec![(pool.clone(), gate.clone())]);
         assert!(!m.ready(Duration::from_millis(100)));
         assert!(!m.joined());
         assert_eq!(
             rec.0.lock().unwrap().last().unwrap(),
             &Vec::<SocketAddr>::new()
         );
-        let _listening = TcpListener::bind(addr).unwrap();
-        assert!(m.ready(Duration::from_millis(500)));
+        gate.open.store(true, Ordering::SeqCst);
+        assert!(m.ready(Duration::from_millis(100)));
         m.join(7);
         assert!(m.joined());
         assert_eq!(rec.0.lock().unwrap().last().unwrap(), &vec![addr]);
