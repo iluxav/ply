@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["ply-core", "ply-cli", "apk2pkg", "deb2pkg"]
+members = ["ply-core", "ply-cli", "ply-vm-proto", "ply-guest-init", "apk2pkg", "deb2pkg"]
 
 [workspace.package]
 version = "0.1.70"
@@ -10,6 +10,7 @@ repository = "https://github.com/iluxa/ply"
 
 [workspace.dependencies]
 ply-core = { path = "ply-core" }
+ply-vm-proto = { path = "ply-vm-proto" }
 anyhow = "1"
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
@@ -20,6 +21,9 @@ hex = "0.4"
 clap = { version = "4", features = ["derive", "wrap_help"] }
 backhand = { version = "0.25", default-features = false, features = ["zstd"] }
 serde_json = "1"
+# The guest init's only non-ply dependency: PID 1 makes syscalls no std
+# wrapper covers (mount, pivot_root, reboot), and this is the whole cost.
+libc = "0.2"
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 nix = { version = "0.31", features = ["sched", "mount", "signal", "hostname", "process", "fs", "ioctl", "user", "term", "poll", "socket", "net"] }
 caps = "0.5"
@@ -31,6 +35,23 @@ tar = "0.4"
 flate2 = "1"
 lzma-rs = "0.3"
 zstd = "0.13"
+
+# The switch's TCP/IP. Pure Rust and no_std-capable, so the userspace network
+# in `runtime/vm/switch` compiles and is tested on Linux CI as well as on the
+# Mac that actually boots a VM. `any_ip` is why it is here rather than a
+# hand-written TCP: guest egress terminates in smoltcp and is bridged to real
+# host sockets, and a hand-rolled TCP that is "correct because the wire is
+# lossless" stops being correct the moment the far end is the real internet
+# (retransmits, windows, MSS).
+smoltcp = { version = "0.14", default-features = false, features = [
+    "std", "medium-ethernet", "proto-ipv4", "socket-tcp", "socket-udp",
+] }
+
+# The macOS VM backend. `applevisor` is a safe wrapper over
+# Hypervisor.framework; `vm-fdt` writes the device tree the kernel boots on.
+# Both are macOS-only and gated in ply-core's Cargo.toml.
+applevisor = { version = "1", features = ["macos-15-0"] }
+vm-fdt = "0.3"
 
 # backhand 0.25.1 writes zero-length files with a dangling fragment ref that
 # the kernel rejects (EINVAL on stat). Until the fix lands upstream

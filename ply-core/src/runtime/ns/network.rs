@@ -8,9 +8,12 @@ use std::net::Ipv4Addr;
 use std::process::Command;
 
 use crate::error::{Error, Result};
+// The gateway address is a portable fact `publish::bind_addr` also needs
+// (`internal` binds/connects here, rootful) — defined once there so this
+// module and that one can never drift apart.
+use crate::runtime::publish::GATEWAY;
 
 pub const BRIDGE: &str = "ply0";
-pub const GATEWAY: Ipv4Addr = Ipv4Addr::new(10, 77, 0, 1);
 pub const SUBNET: &str = "10.77.0.0/16";
 
 fn sh(program: &str, args: &[&str]) -> Result<()> {

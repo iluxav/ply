@@ -9,7 +9,8 @@ use std::path::{Path, PathBuf};
 use nix::sys::stat::{makedev, mknod, Mode, SFlag};
 
 use crate::error::Result;
-use crate::runtime::{hosts, mount, params_tree};
+use crate::runtime::ns::mount;
+use crate::runtime::{hosts, params_tree};
 
 pub struct ContainerSpec {
     /// Mounted layer dirs, top (app) first, base last.
@@ -362,7 +363,7 @@ fn setup_and_exec(spec: &ContainerSpec) -> Result<isize> {
         "mode=1777",
         nix::mount::MsFlags::MS_NOEXEC | nix::mount::MsFlags::MS_NODEV,
     )?;
-    crate::runtime::security::mask_proc()?;
+    crate::runtime::ns::security::mask_proc()?;
 
     nix::unistd::sethostname(&spec.hostname)
         .map_err(|e| crate::Error::Runtime(format!("sethostname: {e}")))?;
@@ -414,7 +415,7 @@ fn setup_and_exec(spec: &ContainerSpec) -> Result<isize> {
             // still works). setuid then clears effective/permitted; nnp +
             // seccomp close the rest.
             if !spec.privileged {
-                if let Err(e) = crate::runtime::security::drop_capabilities(&spec.keep_caps) {
+                if let Err(e) = crate::runtime::ns::security::drop_capabilities(&spec.keep_caps) {
                     eprintln!("ply: rights stripping failed: {e}");
                     std::process::exit(126);
                 }
@@ -433,8 +434,8 @@ fn setup_and_exec(spec: &ContainerSpec) -> Result<isize> {
             }
             if !spec.privileged {
                 let clamps = || -> Result<()> {
-                    crate::runtime::security::no_new_privs()?;
-                    crate::runtime::security::apply_seccomp()
+                    crate::runtime::ns::security::no_new_privs()?;
+                    crate::runtime::ns::security::apply_seccomp()
                 };
                 if let Err(e) = clamps() {
                     eprintln!("ply: rights stripping failed: {e}");
@@ -450,9 +451,9 @@ fn setup_and_exec(spec: &ContainerSpec) -> Result<isize> {
         }
         Ok(nix::unistd::ForkResult::Parent { child }) => {
             if !spec.privileged {
-                crate::runtime::security::drop_capabilities(&[])?;
-                crate::runtime::security::no_new_privs()?;
-                crate::runtime::security::apply_seccomp()?;
+                crate::runtime::ns::security::drop_capabilities(&[])?;
+                crate::runtime::ns::security::no_new_privs()?;
+                crate::runtime::ns::security::apply_seccomp()?;
             }
             Ok(init_loop(child))
         }

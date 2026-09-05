@@ -331,41 +331,11 @@ pub fn exec(args: UpArgs) -> Result<()> {
     }
     let exe = std::env::current_exe().context("locating the ply binary")?;
 
-    // One network for the stack. Rootful already gives every instance its
-    // own address on the bridge; rootless cannot attach a veth to the host,
-    // so ply makes a namespace it owns and puts the members inside it.
-    // There they bind their own declared ports, reach each other on
-    // loopback as `<name>.ply`, and touch nothing on the machine — which is
-    // what lets one stack file mean the same thing here and on a droplet.
-    let mut egress_dns: Option<String> = None;
-    let netns = match ply_core::paths::is_root() {
-        true => None,
-        false => match ply_core::runtime::netns::NetNs::create()
-            .and_then(|ns| ns.enter_user().map(|()| ns))
-        {
-            // This process now owns the namespaces; the network is still the
-            // host's, so members can fetch what they need. Each joins the
-            // stack's network itself, once it is ready to launch.
-            Ok(mut ns) => {
-                // A namespace with no way out is worse than none for an app
-                // that calls anything: say what happened either way.
-                match ns.attach_egress() {
-                    Ok(router) => {
-                        eprintln!("ply up: stack network ({router})");
-                        egress_dns = Some(ply_core::runtime::netns::EGRESS_DNS.to_string());
-                    }
-                    Err(e) => eprintln!("ply up: stack network, no outbound — {e}"),
-                }
-                Some(ns)
-            }
-            Err(e) => {
-                eprintln!("ply up: {e}");
-                eprintln!("ply up: falling back to the host's network for this run");
-                None
-            }
-        },
-    };
+    // One network for the stack (Linux rootless: a namespace this process
+    // owns; Linux rootful: none needed — the bridge; macOS: a userspace
+    // switch this process runs, which members join over a unix socket).
     let peers: Vec<String> = prepared.iter().map(|p| p.member.clone()).collect();
+    let (netns, egress_dns) = stack_network(&peers);
 
     let mut children: Vec<(String, Child)> = Vec::new();
     for p in &prepared {
@@ -373,7 +343,7 @@ pub fn exec(args: UpArgs) -> Result<()> {
         cmd.arg("run").arg(&p.target);
         cmd.arg("--name").arg(&p.member);
         if let Some(ns) = &netns {
-            cmd.arg("--netns").arg(ns.path());
+            cmd.arg(NETWORK_FLAG).arg(ns.path());
             if let Some(dns) = &egress_dns {
                 cmd.arg("--netns-dns").arg(dns);
             }
@@ -442,6 +412,146 @@ pub fn exec(args: UpArgs) -> Result<()> {
         std::thread::sleep(Duration::from_millis(200));
     };
     std::process::exit(code);
+}
+
+/// What a member is told to join the stack's network with. Two spellings of
+/// one idea: a namespace has a path in `/proc` and a switch has a unix
+/// socket, and only the platform knows which of those the stack has.
+#[cfg(target_os = "linux")]
+const NETWORK_FLAG: &str = "--netns";
+#[cfg(not(target_os = "linux"))]
+const NETWORK_FLAG: &str = "--vswitch";
+
+/// One network for the stack (rootless: a namespace this process owns;
+/// rootful: none needed — the bridge). Returns it and the resolver its
+/// members should use.
+///
+/// Rootful already gives every instance its own address on the bridge;
+/// rootless cannot attach a veth to the host, so ply makes a namespace it
+/// owns and puts the members inside it. There they bind their own declared
+/// ports, reach each other on loopback as `<name>.ply`, and touch nothing
+/// on the machine — which is what lets one stack file mean the same thing
+/// here and on a droplet.
+///
+/// `members` is unused here: a namespace has no address table to seed, and
+/// each member allocates its own inside it.
+#[cfg(target_os = "linux")]
+fn stack_network(
+    _members: &[String],
+) -> (Option<ply_core::runtime::ns::netns::NetNs>, Option<String>) {
+    let mut egress_dns: Option<String> = None;
+    let netns = match ply_core::paths::is_root() {
+        true => None,
+        false => match ply_core::runtime::ns::netns::NetNs::create()
+            .and_then(|ns| ns.enter_user().map(|()| ns))
+        {
+            // This process now owns the namespaces; the network is still the
+            // host's, so members can fetch what they need. Each joins the
+            // stack's network itself, once it is ready to launch.
+            Ok(mut ns) => {
+                // A namespace with no way out is worse than none for an app
+                // that calls anything: say what happened either way.
+                match ns.attach_egress() {
+                    Ok(router) => {
+                        eprintln!("ply up: stack network ({router})");
+                        egress_dns = Some(ply_core::runtime::ns::netns::EGRESS_DNS.to_string());
+                    }
+                    Err(e) => eprintln!("ply up: stack network, no outbound — {e}"),
+                }
+                Some(ns)
+            }
+            Err(e) => {
+                eprintln!("ply up: {e}");
+                eprintln!("ply up: falling back to the host's network for this run");
+                None
+            }
+        },
+    };
+    (netns, egress_dns)
+}
+
+/// One network for the stack: an L2 switch inside THIS process, listening
+/// on a unix socket under `run_dir()`, which every member's `ply run` joins
+/// with `--vswitch`.
+///
+/// It is a process and not a daemon for the same reason the Linux one is a
+/// namespace this process owns: it must die when the stack does. macOS
+/// grants no tap device without `com.apple.vm.networking`, which is
+/// restricted, so the whole network is userspace — and userspace in
+/// somebody's address space is userspace with an owner.
+///
+/// # Every member's address is reserved BEFORE anything starts
+///
+/// A guest's `/etc/hosts` is a copy taken when it boots, so a peer that has
+/// no address yet would get no line and stay unnamed in that guest for the
+/// rest of its life. Reserving here — in stack order, so the addresses are
+/// the same on every run of one stack file — means `web` boots knowing where
+/// `db` will be even if `db` has not been spawned yet, and a member that
+/// restarts comes back on the address its peers already wrote down.
+///
+/// The reservation is made under `<name>.1` with `<name>` aliased onto it,
+/// which is exactly what `VmBackend::launch` does for slot 1 — allocating a
+/// bare `<name>` here instead would hand the alias an address no machine
+/// ever takes.
+#[cfg(not(target_os = "linux"))]
+struct StackNet {
+    /// Held, never read: dropping it stops the switch thread and unlinks
+    /// the socket, which is the whole of this type's job.
+    _server: ply_core::runtime::vm::switch::unix::Server,
+    path: std::path::PathBuf,
+}
+
+#[cfg(not(target_os = "linux"))]
+impl StackNet {
+    fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn stack_network(members: &[String]) -> (Option<StackNet>, Option<String>) {
+    use ply_core::runtime::vm::switch;
+
+    let path = ply_core::paths::run_dir()
+        .join("switch")
+        .join(format!("up-{}.sock", std::process::id()));
+    let (server, warning) = match switch::unix::Server::start(&path) {
+        Ok(started) => started,
+        Err(e) => {
+            eprintln!("ply up: no stack network — {e}");
+            eprintln!("ply up: each member will run on a private network of its own");
+            return (None, None);
+        }
+    };
+    if let Some(warning) = warning {
+        // Without the socket there is a switch and no way for a member to
+        // reach it, which is the same as having none. Say so and fall back
+        // to what a stack did before this existed: a private switch per
+        // member, and no `<name>.ply` between them.
+        eprintln!("ply up: no stack network — {warning}");
+        eprintln!("ply up: each member will run on a private network of its own");
+        return (None, None);
+    }
+    for member in members {
+        // `allocate`, not `attach`: a reservation is an entry in the name
+        // table and nothing else. Attaching here would put a member on the
+        // fabric that no guest is behind, and the real one arriving later
+        // would be the SECOND holder of that MAC.
+        let ip = server.switch().allocate(&format!("{member}.1"));
+        server.switch().alias(member, ip);
+    }
+    eprintln!(
+        "ply up: stack network (userspace switch, {}/{})",
+        switch::GATEWAY,
+        switch::PREFIX_LEN
+    );
+    (
+        Some(StackNet {
+            _server: server,
+            path,
+        }),
+        Some(switch::GATEWAY.to_string()),
+    )
 }
 
 /// Determine what stack `ply up` should run and where its lock lives:

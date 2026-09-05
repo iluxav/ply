@@ -27,6 +27,22 @@ pub const RESERVED: &[&str] = &[
 ];
 
 /// Live params that are populated by the runtime, never user-declared.
+///
+/// Its own list, and deliberately not `ply_vm_proto::PARENT_OWNED` — that
+/// constant's own documentation rules on this: `LIVE` is a params-
+/// *declaration* concept, which is why it sits beside [`RESERVED`], and the
+/// filesystem seal a microVM enforces is a different statement about the
+/// same names. Collapsing them would make the manifest language depend on
+/// the guest wire contract for its vocabulary.
+///
+/// They must nevertheless hold the same names, and "keep them in sync by
+/// eye" is precisely how a security boundary drifts: a name that became live
+/// without becoming parent-owned is a fact an app can forge about itself,
+/// and one that went the other way is an unforgeable fact nobody can wait
+/// on. `live_names_are_exactly_the_parent_owned_seal` pins the pair, and
+/// `every_live_name_is_also_reserved` pins the other invariant this list
+/// carries — a live name a manifest may still declare is a param the runtime
+/// silently overwrites.
 pub const LIVE: &[&str] = &["state", "instances", "started_at", "restarts"];
 
 /// A parameter declaration from a manifest.
@@ -522,6 +538,36 @@ pub fn namespace(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn live_names_are_exactly_the_parent_owned_seal() {
+        // Two lists, one set of names, and two enforcement points that never
+        // meet: this one decides what a manifest may declare, while
+        // `ply_vm_proto::PARENT_OWNED` decides which files an app is
+        // forbidden to write inside a container and inside a microVM. A name
+        // added to one and not the other is not a compile error and not a
+        // test failure anywhere else — it is a fact an app can forge, or a
+        // fact nobody can wait on. `ply-vm-proto`'s own documentation asks
+        // for these to be kept in sync by eye; this is that, mechanised.
+        assert_eq!(
+            LIVE,
+            ply_vm_proto::PARENT_OWNED,
+            "a live param IS a fact only the parent may publish; the two lists moved apart"
+        );
+    }
+
+    #[test]
+    fn every_live_name_is_also_reserved() {
+        // `RESERVED` is what `validate_params` consults FIRST, so a live name
+        // missing from it would be declarable in a manifest and the runtime
+        // would then overwrite an author's own param with a lifecycle fact.
+        for name in LIVE {
+            assert!(
+                RESERVED.contains(name),
+                "`{name}` is a live runtime fact but manifests may still declare it"
+            );
+        }
+    }
 
     /// A resolved param, for the common `ns["x"].value` assertion.
     fn val<'a>(ns: &'a Namespace, name: &str) -> &'a Resolved {

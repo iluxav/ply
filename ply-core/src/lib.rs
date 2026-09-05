@@ -6,6 +6,7 @@ pub mod apps;
 pub mod build;
 pub mod bundle;
 pub mod catalog;
+#[cfg(target_os = "linux")]
 pub mod craft;
 pub mod deployments;
 pub mod dev;

@@ -278,14 +278,22 @@ pub struct RunArgs {
     #[arg(value_name = "IMAGE")]
     pub image: String,
 
-    /// Join this network namespace (`/proc/<pid>/ns/net`) instead of the
-    /// caller's. `ply up` passes the one it made for the stack, so members
-    /// share a network; not something to type by hand.
-    #[arg(long, value_name = "PATH", hide = true)]
-    pub netns: Option<std::path::PathBuf>,
+    /// Join the stack's network instead of the caller's: a network
+    /// namespace (`/proc/<pid>/ns/net`) on Linux. `ply up` passes the one it
+    /// made for the stack, so members share a network; not something to type
+    /// by hand.
+    ///
+    /// `--vswitch PATH` is the second spelling, and the one `ply up` uses
+    /// off Linux: there is no namespace to join on a Mac, so the stack's
+    /// network is a userspace switch in the `ply up` process and this is
+    /// the unix socket that reaches it. One field, because a run joins one
+    /// network and only the platform decides what shape it has.
+    #[arg(long = "netns", alias = "vswitch", value_name = "PATH", hide = true)]
+    pub network: Option<std::path::PathBuf>,
 
-    /// A sibling in `--netns`, so `<name>.ply` resolves to loopback inside
-    /// the container. Repeatable; set by `ply up`.
+    /// A sibling in `--netns`/`--vswitch`, so `<name>.ply` resolves: to
+    /// loopback inside the container on Linux, to the sibling's own address
+    /// on the switch in a microVM. Repeatable; set by `ply up`.
     #[arg(long = "netns-peer", value_name = "NAME", hide = true)]
     pub netns_peer: Vec<String>,
 

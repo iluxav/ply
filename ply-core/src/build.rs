@@ -735,4 +735,71 @@ mod tests {
         let manifest = crate::image::read::read_manifest(&outcome.image_path).unwrap();
         assert!(!manifest.is_app());
     }
+
+    /// TWO facts about this function that live outside this crate depend on:
+    /// `runtime::vm::kernel::keg_payload_dir` and the `keg/boot` staging in
+    /// `scripts/build-microvm-kernel.sh` both compute
+    /// `/opt/microvm-kernel-<version>/boot/microvm-kernel.img` from them.
+    ///
+    ///   1. a keg packs at `/opt/<name>-<version>` (an app gets `/opt/<name>`)
+    ///   2. the `*.img` refusal is TOP-LEVEL ONLY -- a nested one ships
+    ///
+    /// Both fail SILENTLY if they change: the keg still builds, pushes,
+    /// resolves and extracts, with no kernel inside it, and the first symptom
+    /// is a Mac that cannot boot a VM. The `.git` rule right above was itself
+    /// widened from depth-1 to all depths because depth-1 was judged a bug --
+    /// "keep build output out of the image at any depth" is the same sentence
+    /// about `.img`, so this is not a hypothetical drift.
+    ///
+    /// If this test is ever deliberately changed, the kernel keg's payload
+    /// MOVES: fix `keg_payload_dir`, the build script's `keg/boot`, and
+    /// publish a new keg, in that edit.
+    #[test]
+    fn a_kegs_nested_img_ships_and_a_top_level_one_does_not() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("boot")).unwrap();
+        std::fs::write(dir.path().join("boot/microvm-kernel.img"), b"Image").unwrap();
+        std::fs::write(dir.path().join("boot/initramfs.cpio"), b"cpio").unwrap();
+        // A previous build's own output, sitting where `ply build` leaves it.
+        std::fs::write(dir.path().join("microvm-kernel.img"), b"stale").unwrap();
+        // The real keg's name and version, so the assertion below is the
+        // literal path the VM backend reads.
+        std::fs::write(
+            dir.path().join("ply.toml"),
+            r#"
+            [package]
+            name = "microvm-kernel"
+            version = "6.12.0"
+            "#,
+        )
+        .unwrap();
+        let outcome = build(&BuildOptions {
+            dir: dir.path().to_path_buf(),
+            output: None,
+            allow_insecure: false,
+            allow_secrets: false,
+            arch: None,
+        })
+        .unwrap();
+        let listing: Vec<String> = {
+            let file = std::fs::File::open(&outcome.image_path).unwrap();
+            let fs =
+                backhand::FilesystemReader::from_reader(std::io::BufReader::new(file)).unwrap();
+            fs.files()
+                .map(|n| n.fullpath.to_string_lossy().into_owned())
+                .collect()
+        };
+        assert!(
+            listing.contains(&"/opt/microvm-kernel-6.12.0/boot/microvm-kernel.img".to_string()),
+            "a nested *.img must ship, at its full keg path: {listing:?}"
+        );
+        assert!(
+            listing.contains(&"/opt/microvm-kernel-6.12.0/boot/initramfs.cpio".to_string()),
+            "{listing:?}"
+        );
+        assert!(
+            !listing.contains(&"/opt/microvm-kernel-6.12.0/microvm-kernel.img".to_string()),
+            "a TOP-LEVEL *.img must not ship: {listing:?}"
+        );
+    }
 }

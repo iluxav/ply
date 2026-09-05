@@ -95,7 +95,7 @@ impl NetNs {
                         ));
                     }
                     std::mem::forget(ready); // the real reader is used below
-                    if let Err(e) = crate::runtime::run::write_id_maps(child.as_raw()) {
+                    if let Err(e) = crate::runtime::ns::subid::write_id_maps(child.as_raw()) {
                         return Err(fail(child, format!("mapping the holder: {e}")));
                     }
                     let mut go = std::fs::File::from(go_w);

@@ -3,7 +3,7 @@
 TARGET := x86_64-unknown-linux-musl
 BIN    := target/$(TARGET)/release/ply
 
-.PHONY: check fmt build test static release release-cli release-web install uninstall registry-catalog registry-push registry registry-all
+.PHONY: check check-darwin mac-test mac-sign install-mac fmt build test static release release-cli release-web install uninstall registry-catalog registry-push registry registry-all
 
 # fast feedback: fmt + clippy + tests
 check:
@@ -11,8 +11,38 @@ check:
 	cargo clippy --workspace --all-targets -- -D warnings
 	cargo test --workspace
 
+# The macOS seam gate, runnable on Linux. Needs cargo-zigbuild
+# (`uv tool install cargo-zigbuild`) and a `zig` on PATH; CI runs the same
+# check natively on macos-latest. Clean = 0 errors under -D warnings.
+check-darwin:
+	rustup target add aarch64-apple-darwin >/dev/null
+	cargo-zigbuild check --target aarch64-apple-darwin -p ply-cli
+	cargo-zigbuild clippy --target aarch64-apple-darwin -p ply-cli -- -D warnings
+
 fmt:
 	cargo fmt --all
+
+# The macOS microVM suite: it boots real VMs, so it runs only on an Apple
+# Silicon Mac and only when asked. Needs a kernel — either the published
+# `ply/microvm-kernel` keg or PLY_MICROVM_KERNEL pointing at a local build
+# (scripts/build-microvm-kernel.sh); every test skips with a message saying so
+# if it is unset.
+#
+# The suite signs its OWN copy of the binary (see `fn ply` in the test file)
+# rather than relying on a `codesign` step here: hv_vm_create checks
+# com.apple.security.hypervisor at the call, not at load, and cargo re-uplifts
+# target/debug/ply from target/debug/deps on its next invocation — which
+# silently strips any signature applied between the two.
+mac-test:
+	@test "$$(uname -s)" = Darwin || { echo "mac-test: Apple Silicon macOS only"; exit 1; }
+	cargo test -p ply-cli --test macos_vm -- --test-threads=1 --nocapture
+
+# Sign target/debug/ply in place, for running `./target/debug/ply run` by hand.
+# Re-run it after any `cargo build`, which drops the signature.
+mac-sign:
+	cargo build -p ply-cli
+	@printf '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>com.apple.security.hypervisor</key><true/></dict></plist>\n' > target/hv.entitlements
+	codesign --entitlements target/hv.entitlements --force -s - target/debug/ply
 
 build:
 	cargo build --workspace
@@ -57,6 +87,37 @@ release-cli:
 	echo "release-cli: v$$V tagged — release.yml builds both binaries, then creates the"; \
 	echo "release-cli: release with them attached (nothing is 'latest' until it is complete)"; \
 	echo "release-cli: follow with: gh run watch"
+
+# Install a release `ply` on this Mac, signed with the hypervisor entitlement.
+#
+# The entitlement is not optional and its absence is confusing: hv_vm_create
+# checks com.apple.security.hypervisor at the CALL, not at load, so an
+# unsigned binary installs fine, runs fine, resolves the image fine, and then
+# fails the moment it would create a VM.
+#
+# Signing happens on the INSTALLED copy, never on target/release/ply: cargo
+# re-uplifts that path from target/release/deps on its next invocation and
+# silently strips the signature, so a `make install-mac; cargo build` would
+# leave you with a binary that used to work.
+#
+#   make install-mac                      -> /usr/local/bin/ply
+#   make install-mac MAC_PREFIX=~/.local/bin
+MAC_PREFIX ?= /usr/local/bin
+
+install-mac:
+	@test "$$(uname -s)" = Darwin || { echo "install-mac: macOS only — use \`make install\` on Linux"; exit 1; }
+	@test "$$(uname -m)" = arm64 || { echo "install-mac: Apple Silicon only (M1 or later)"; exit 1; }
+	cargo build --release -p ply-cli
+	@printf '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>com.apple.security.hypervisor</key><true/></dict></plist>\n' > target/hv.entitlements
+	@mkdir -p $(MAC_PREFIX)
+	install -m 755 target/release/ply $(MAC_PREFIX)/ply
+	codesign --entitlements target/hv.entitlements --force -s - $(MAC_PREFIX)/ply
+	@echo "installed $$($(MAC_PREFIX)/ply --version) to $(MAC_PREFIX)/ply"
+	@codesign -d --entitlements - $(MAC_PREFIX)/ply 2>&1 | grep -q hypervisor \
+		&& echo "entitlement: com.apple.security.hypervisor ok" \
+		|| { echo "entitlement MISSING — ply run will fail at hv_vm_create"; exit 1; }
+	@echo "note: until \`ply push\` publishes the kernel keg, set PLY_MICROVM_KERNEL"
+	@echo "      to a directory holding microvm-kernel.img + initramfs.cpio"
 
 # build the static binary and install it as `ply` (exactly one file lands on the host)
 install: static

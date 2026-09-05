@@ -13,6 +13,13 @@ pub struct Cgroup {
     pub dir: PathBuf,
 }
 
+/// The instance's cgroup directory, `/sys/fs/cgroup/ply-<app>.<n>` — for a
+/// reader that only wants the path (`ply stats`), not a live `Cgroup`
+/// handle it would own and remove on drop.
+pub fn instance_dir(app: &str, n: u32) -> PathBuf {
+    Path::new(CGROUP_ROOT).join(format!("ply-{app}.{n}"))
+}
+
 impl Cgroup {
     /// Create `/sys/fs/cgroup/ply-<instance>` and apply limits.
     pub fn create(instance: &str, resources: Option<&Resources>) -> Result<Cgroup> {

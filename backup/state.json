@@ -1,0 +1,2046 @@
+{
+ "updated": "2026-09-02T23:47:06Z",
+ "package_count": 23,
+ "image_count": 85,
+ "total_bytes": 816596672,
+ "packages": [
+  {
+   "namespace": "apps",
+   "owner": "apps",
+   "name": "dashboard",
+   "type": "app",
+   "description": "",
+   "license": "",
+   "homepage": "",
+   "versions": [
+    {
+     "version": "0.1.21",
+     "img": "dashboard-0.1.21-linux-x64.img",
+     "arch": "x64",
+     "src": "https://registry.plybox.sh/apps/dashboard/dashboard-0.1.21-linux-x64.img",
+     "path": "apps/dashboard/dashboard-0.1.21-linux-x64.img",
+     "sha256": "6dc008b90e962505853c799eb0043a69c38878a6377b1f0955d5a84848f49e77",
+     "bytes": 3776512,
+     "pushed_at": "2026-08-30T07:36:10.051Z",
+     "volumes": [
+      "/data"
+     ],
+     "links": [
+      "/run/ply:/ply/host/run",
+      "/var/lib/ply/apps:/ply/host/apps",
+      "/var/lib/ply/deployments:/ply/host/deployments",
+      "/sys/fs/cgroup:/ply/host/cgroup",
+      "/proc:/ply/host/proc"
+     ],
+     "dependencies": [
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "0.1.24",
+     "img": "dashboard-0.1.24-linux-x64.img",
+     "arch": "x64",
+     "src": "https://registry.plybox.sh/apps/dashboard/dashboard-0.1.24-linux-x64.img",
+     "path": "apps/dashboard/dashboard-0.1.24-linux-x64.img",
+     "sha256": "a5b6ef3dd458f75d51b5195158b6b0193396392d1f86871b33414743d10d160d",
+     "bytes": 3776512,
+     "pushed_at": "2026-08-30T07:36:12.049Z",
+     "volumes": [
+      "/data"
+     ],
+     "links": [
+      "/run/ply:/ply/host/run",
+      "/var/lib/ply/apps:/ply/host/apps",
+      "/var/lib/ply/deployments:/ply/host/deployments",
+      "/sys/fs/cgroup:/ply/host/cgroup",
+      "/proc:/ply/host/proc"
+     ],
+     "dependencies": [
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "0.1.25",
+     "img": "dashboard-0.1.25-linux-x64.img",
+     "arch": "x64",
+     "src": "https://registry.plybox.sh/apps/dashboard/dashboard-0.1.25-linux-x64.img",
+     "path": "apps/dashboard/dashboard-0.1.25-linux-x64.img",
+     "sha256": "70b0f7532d4ba1d8f2c0f8efe89b4dcb7899f8d164b27c9c58d1f5ee294646fe",
+     "bytes": 3846144,
+     "pushed_at": "2026-08-30T07:36:14.527Z",
+     "volumes": [
+      "/data"
+     ],
+     "links": [
+      "/run/ply:/ply/host/run",
+      "/var/lib/ply/apps:/ply/host/apps",
+      "/var/lib/ply/deployments:/ply/host/deployments",
+      "/sys/fs/cgroup:/ply/host/cgroup",
+      "/proc:/ply/host/proc"
+     ],
+     "dependencies": [
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "0.1.26",
+     "img": "dashboard-0.1.26-linux-arm64.img",
+     "arch": "arm64",
+     "src": "https://registry.plybox.sh/apps/dashboard/dashboard-0.1.26-linux-arm64.img",
+     "path": "apps/dashboard/dashboard-0.1.26-linux-arm64.img",
+     "sha256": "6f91540d33e17cb5820b146c21cc71fdf4ef855f7ce4c13838df66fd680ca218",
+     "bytes": 3862528,
+     "pushed_at": "2026-08-30T07:36:16.561Z",
+     "volumes": [
+      "/data"
+     ],
+     "links": [
+      "/run/ply:/ply/host/run",
+      "/var/lib/ply/apps:/ply/host/apps",
+      "/var/lib/ply/deployments:/ply/host/deployments",
+      "/sys/fs/cgroup:/ply/host/cgroup",
+      "/proc:/ply/host/proc"
+     ],
+     "dependencies": [
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "0.1.26",
+     "img": "dashboard-0.1.26-linux-x64.img",
+     "arch": "x64",
+     "src": "https://registry.plybox.sh/apps/dashboard/dashboard-0.1.26-linux-x64.img",
+     "path": "apps/dashboard/dashboard-0.1.26-linux-x64.img",
+     "sha256": "2171e77140564ad2ef2088b2f6fc6e7df07f894e896b1046b01655436bd37258",
+     "bytes": 3862528,
+     "pushed_at": "2026-08-30T07:36:18.891Z",
+     "volumes": [
+      "/data"
+     ],
+     "links": [
+      "/run/ply:/ply/host/run",
+      "/var/lib/ply/apps:/ply/host/apps",
+      "/var/lib/ply/deployments:/ply/host/deployments",
+      "/sys/fs/cgroup:/ply/host/cgroup",
+      "/proc:/ply/host/proc"
+     ],
+     "dependencies": [
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "0.1.27",
+     "img": "dashboard-0.1.27-linux-arm64.img",
+     "arch": "arm64",
+     "src": "https://github.com/iluxav/ply-dashboard/releases/download/v0.1.27/dashboard-0.1.27-linux-arm64.img",
+     "url": "https://github.com/iluxav/ply-dashboard/releases/download/v0.1.27/dashboard-0.1.27-linux-arm64.img",
+     "sha256": "30d690a0e1611cfbbafd509d0ec3e03ce83124be2bce0dc9fbb04f4b05e37475",
+     "bytes": 3862528,
+     "pushed_at": "2026-08-30T19:02:25.439Z"
+    },
+    {
+     "version": "0.1.27",
+     "img": "dashboard-0.1.27-linux-x64.img",
+     "arch": "x64",
+     "src": "https://github.com/iluxav/ply-dashboard/releases/download/v0.1.27/dashboard-0.1.27-linux-x64.img",
+     "url": "https://github.com/iluxav/ply-dashboard/releases/download/v0.1.27/dashboard-0.1.27-linux-x64.img",
+     "sha256": "4ed7288003f08ac2dd89cbe05eeacf41e7bd648c45b3bad919af4b6af2153076",
+     "bytes": 3862528,
+     "pushed_at": "2026-08-30T19:02:19.123Z"
+    },
+    {
+     "version": "0.1.28",
+     "img": "dashboard-0.1.28-linux-arm64.img",
+     "arch": "arm64",
+     "src": "https://registry.plybox.sh/apps/dashboard/dashboard-0.1.28-linux-arm64.img",
+     "path": "apps/dashboard/dashboard-0.1.28-linux-arm64.img",
+     "sha256": "2a0080816d9d1ae400a77a16b3d88ee406d41c773f36e2b1337989e29a76833e",
+     "bytes": 3862528,
+     "pushed_at": "2026-08-30T19:10:10.626Z",
+     "volumes": [
+      "/data"
+     ],
+     "links": [
+      "/run/ply:/ply/host/run",
+      "/var/lib/ply/apps:/ply/host/apps",
+      "/var/lib/ply/deployments:/ply/host/deployments",
+      "/sys/fs/cgroup:/ply/host/cgroup",
+      "/proc:/ply/host/proc"
+     ],
+     "dependencies": [
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "0.1.28",
+     "img": "dashboard-0.1.28-linux-x64.img",
+     "arch": "x64",
+     "src": "https://registry.plybox.sh/apps/dashboard/dashboard-0.1.28-linux-x64.img",
+     "path": "apps/dashboard/dashboard-0.1.28-linux-x64.img",
+     "sha256": "4a37b9cdb80269b2e7aaf1238c17d74575fa329a0581039c27f5050d509a095a",
+     "bytes": 3862528,
+     "pushed_at": "2026-08-30T19:10:12.976Z",
+     "volumes": [
+      "/data"
+     ],
+     "links": [
+      "/run/ply:/ply/host/run",
+      "/var/lib/ply/apps:/ply/host/apps",
+      "/var/lib/ply/deployments:/ply/host/deployments",
+      "/sys/fs/cgroup:/ply/host/cgroup",
+      "/proc:/ply/host/proc"
+     ],
+     "dependencies": [
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "0.1.29",
+     "img": "dashboard-0.1.29-linux-arm64.img",
+     "arch": "arm64",
+     "src": "https://registry.plybox.sh/apps/dashboard/dashboard-0.1.29-linux-arm64.img",
+     "path": "apps/dashboard/dashboard-0.1.29-linux-arm64.img",
+     "sha256": "04c83900912e515af8ede7b116b538d30c6df072d9fa1640c06511e5a8941f8b",
+     "bytes": 3862528,
+     "pushed_at": "2026-08-30T20:29:39.202Z",
+     "volumes": [
+      "/data"
+     ],
+     "links": [
+      "/run/ply:/ply/host/run",
+      "/var/lib/ply/apps:/ply/host/apps",
+      "/var/lib/ply/deployments:/ply/host/deployments",
+      "/sys/fs/cgroup:/ply/host/cgroup",
+      "/proc:/ply/host/proc"
+     ],
+     "dependencies": [
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "0.1.29",
+     "img": "dashboard-0.1.29-linux-x64.img",
+     "arch": "x64",
+     "src": "https://registry.plybox.sh/apps/dashboard/dashboard-0.1.29-linux-x64.img",
+     "path": "apps/dashboard/dashboard-0.1.29-linux-x64.img",
+     "sha256": "3d99dee34587457d128c840e191dac1b0d5071bc838aa53b489fc470793b20a3",
+     "bytes": 3862528,
+     "pushed_at": "2026-08-30T20:29:43.534Z",
+     "volumes": [
+      "/data"
+     ],
+     "links": [
+      "/run/ply:/ply/host/run",
+      "/var/lib/ply/apps:/ply/host/apps",
+      "/var/lib/ply/deployments:/ply/host/deployments",
+      "/sys/fs/cgroup:/ply/host/cgroup",
+      "/proc:/ply/host/proc"
+     ],
+     "dependencies": [
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "0.1.30",
+     "img": "dashboard-0.1.30-linux-arm64.img",
+     "arch": "arm64",
+     "src": "https://registry.plybox.sh/apps/dashboard/dashboard-0.1.30-linux-arm64.img",
+     "path": "apps/dashboard/dashboard-0.1.30-linux-arm64.img",
+     "sha256": "825da2b9d7bbc9a7fda6e21d19de38c2072a757d2b6be997aface205a4bd3ee7",
+     "bytes": 3866624,
+     "pushed_at": "2026-08-31T00:33:08.503Z",
+     "volumes": [
+      "/data"
+     ],
+     "links": [
+      "/run/ply:/ply/host/run",
+      "/var/lib/ply/apps:/ply/host/apps",
+      "/var/lib/ply/deployments:/ply/host/deployments",
+      "/sys/fs/cgroup:/ply/host/cgroup",
+      "/proc:/ply/host/proc"
+     ],
+     "dependencies": [
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "0.1.30",
+     "img": "dashboard-0.1.30-linux-x64.img",
+     "arch": "x64",
+     "src": "https://registry.plybox.sh/apps/dashboard/dashboard-0.1.30-linux-x64.img",
+     "path": "apps/dashboard/dashboard-0.1.30-linux-x64.img",
+     "sha256": "be7aecfc0d446bc2064f078461c4d71851a70b193b7368664b8e34648d60e7d2",
+     "bytes": 3866624,
+     "pushed_at": "2026-08-31T00:33:12.357Z",
+     "volumes": [
+      "/data"
+     ],
+     "links": [
+      "/run/ply:/ply/host/run",
+      "/var/lib/ply/apps:/ply/host/apps",
+      "/var/lib/ply/deployments:/ply/host/deployments",
+      "/sys/fs/cgroup:/ply/host/cgroup",
+      "/proc:/ply/host/proc"
+     ],
+     "dependencies": [
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "0.1.31",
+     "img": "dashboard-0.1.31-linux-arm64.img",
+     "arch": "arm64",
+     "src": "https://registry.plybox.sh/apps/dashboard/dashboard-0.1.31-linux-arm64.img",
+     "path": "apps/dashboard/dashboard-0.1.31-linux-arm64.img",
+     "sha256": "e46132797192eca31e7f965cf50891aef3550af1fcc5fd7da10eb48f8e8c587e",
+     "bytes": 3866624,
+     "pushed_at": "2026-08-31T00:38:21.299Z",
+     "volumes": [
+      "/data"
+     ],
+     "links": [
+      "/run/ply:/ply/host/run",
+      "/var/lib/ply/apps:/ply/host/apps",
+      "/var/lib/ply/deployments:/ply/host/deployments",
+      "/sys/fs/cgroup:/ply/host/cgroup",
+      "/proc:/ply/host/proc"
+     ],
+     "dependencies": [
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "0.1.31",
+     "img": "dashboard-0.1.31-linux-x64.img",
+     "arch": "x64",
+     "src": "https://registry.plybox.sh/apps/dashboard/dashboard-0.1.31-linux-x64.img",
+     "path": "apps/dashboard/dashboard-0.1.31-linux-x64.img",
+     "sha256": "e4cb39d31e198fa51ea7d46581afdd68c337cdf429ef78440eaf77cc77e0c8ba",
+     "bytes": 3866624,
+     "pushed_at": "2026-08-31T00:38:25.792Z",
+     "volumes": [
+      "/data"
+     ],
+     "links": [
+      "/run/ply:/ply/host/run",
+      "/var/lib/ply/apps:/ply/host/apps",
+      "/var/lib/ply/deployments:/ply/host/deployments",
+      "/sys/fs/cgroup:/ply/host/cgroup",
+      "/proc:/ply/host/proc"
+     ],
+     "dependencies": [
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "0.1.32",
+     "img": "dashboard-0.1.32-linux-arm64.img",
+     "arch": "arm64",
+     "src": "https://registry.plybox.sh/apps/dashboard/dashboard-0.1.32-linux-arm64.img",
+     "path": "apps/dashboard/dashboard-0.1.32-linux-arm64.img",
+     "sha256": "616bece834f78b14ba00c56f7d68b39c035931a3020b0f94b38b4bd9433140a0",
+     "bytes": 3866624,
+     "pushed_at": "2026-08-31T00:47:22.342Z",
+     "volumes": [
+      "/data"
+     ],
+     "links": [
+      "/run/ply:/ply/host/run",
+      "/var/lib/ply/apps:/ply/host/apps",
+      "/var/lib/ply/deployments:/ply/host/deployments",
+      "/sys/fs/cgroup:/ply/host/cgroup",
+      "/proc:/ply/host/proc"
+     ],
+     "dependencies": [
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "0.1.32",
+     "img": "dashboard-0.1.32-linux-x64.img",
+     "arch": "x64",
+     "src": "https://registry.plybox.sh/apps/dashboard/dashboard-0.1.32-linux-x64.img",
+     "path": "apps/dashboard/dashboard-0.1.32-linux-x64.img",
+     "sha256": "1b97bcef6e60de6a3babfffa4cb4a1f2527780943ab1b519db9921ff954f1b14",
+     "bytes": 3866624,
+     "pushed_at": "2026-08-31T00:47:27.183Z",
+     "volumes": [
+      "/data"
+     ],
+     "links": [
+      "/run/ply:/ply/host/run",
+      "/var/lib/ply/apps:/ply/host/apps",
+      "/var/lib/ply/deployments:/ply/host/deployments",
+      "/sys/fs/cgroup:/ply/host/cgroup",
+      "/proc:/ply/host/proc"
+     ],
+     "dependencies": [
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "0.1.33",
+     "img": "dashboard-0.1.33-linux-arm64.img",
+     "arch": "arm64",
+     "src": "https://registry.plybox.sh/apps/dashboard/dashboard-0.1.33-linux-arm64.img",
+     "path": "apps/dashboard/dashboard-0.1.33-linux-arm64.img",
+     "sha256": "4a5d884a13fa4985999a9280468e481a69355818f72083dc0a5ed3a1ee260eff",
+     "bytes": 3866624,
+     "pushed_at": "2026-08-31T01:24:33.005Z",
+     "volumes": [
+      "/data"
+     ],
+     "links": [
+      "/run/ply:/ply/host/run",
+      "/var/lib/ply/apps:/ply/host/apps",
+      "/var/lib/ply/deployments:/ply/host/deployments",
+      "/sys/fs/cgroup:/ply/host/cgroup",
+      "/proc:/ply/host/proc"
+     ],
+     "dependencies": [
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "0.1.33",
+     "img": "dashboard-0.1.33-linux-x64.img",
+     "arch": "x64",
+     "src": "https://registry.plybox.sh/apps/dashboard/dashboard-0.1.33-linux-x64.img",
+     "path": "apps/dashboard/dashboard-0.1.33-linux-x64.img",
+     "sha256": "ea80b7d95a516a97338d8de01e8576060a2708d989bbe4cb51ce2c672f356666",
+     "bytes": 3866624,
+     "pushed_at": "2026-08-31T01:24:37.272Z",
+     "volumes": [
+      "/data"
+     ],
+     "links": [
+      "/run/ply:/ply/host/run",
+      "/var/lib/ply/apps:/ply/host/apps",
+      "/var/lib/ply/deployments:/ply/host/deployments",
+      "/sys/fs/cgroup:/ply/host/cgroup",
+      "/proc:/ply/host/proc"
+     ],
+     "dependencies": [
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "namespace": "apps",
+   "owner": "apps",
+   "name": "notify",
+   "type": "app",
+   "description": "",
+   "license": "",
+   "homepage": "",
+   "versions": [
+    {
+     "version": "0.1.0",
+     "img": "notify-0.1.0-linux-arm64.img",
+     "arch": "arm64",
+     "src": "https://registry.plybox.sh/apps/notify/notify-0.1.0-linux-arm64.img",
+     "path": "apps/notify/notify-0.1.0-linux-arm64.img",
+     "sha256": "7cecde0f0b71f8f6d37d6c70e5860238464e8b382dfba72496868d3563b77d98",
+     "bytes": 4247552,
+     "pushed_at": "2026-08-30T07:34:05.453Z",
+     "links": [
+      "/var/lib/ply/apps:/ply/host/apps"
+     ],
+     "dependencies": [
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "0.1.0",
+     "img": "notify-0.1.0-linux-x64.img",
+     "arch": "x64",
+     "src": "https://registry.plybox.sh/apps/notify/notify-0.1.0-linux-x64.img",
+     "path": "apps/notify/notify-0.1.0-linux-x64.img",
+     "sha256": "ebf2734e70f9f1c32ab6e634d40b2dd774b4e62556a7315f17f01cbb9e15257c",
+     "bytes": 4710400,
+     "pushed_at": "2026-08-30T07:34:07.842Z",
+     "links": [
+      "/var/lib/ply/apps:/ply/host/apps"
+     ],
+     "dependencies": [
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "namespace": "apps",
+   "owner": "apps",
+   "name": "pg-backup",
+   "type": "app",
+   "description": "",
+   "license": "",
+   "homepage": "",
+   "versions": [
+    {
+     "version": "0.1.2",
+     "img": "pg-backup-0.1.2-linux-arm64.img",
+     "arch": "arm64",
+     "src": "https://registry.plybox.sh/apps/pg-backup/pg-backup-0.1.2-linux-arm64.img",
+     "path": "apps/pg-backup/pg-backup-0.1.2-linux-arm64.img",
+     "sha256": "e7e55055fae40a0b28be77ae2c39d4e3e06d72d921eb48935223615cc97448df",
+     "bytes": 110592,
+     "pushed_at": "2026-08-30T07:36:06.848Z",
+     "dependencies": [
+      {
+       "name": "rclone",
+       "version": "1.60.1"
+      },
+      {
+       "name": "postgresql-client17",
+       "version": "17.10.0"
+      },
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "0.1.2",
+     "img": "pg-backup-0.1.2-linux-x64.img",
+     "arch": "x64",
+     "src": "https://registry.plybox.sh/apps/pg-backup/pg-backup-0.1.2-linux-x64.img",
+     "path": "apps/pg-backup/pg-backup-0.1.2-linux-x64.img",
+     "sha256": "496bb794bb34e6c78bf6a6ffdb3e636b754821c4d105494aa8bb894a9a3558af",
+     "bytes": 110592,
+     "pushed_at": "2026-08-30T07:36:07.851Z",
+     "dependencies": [
+      {
+       "name": "rclone",
+       "version": "1.60.1"
+      },
+      {
+       "name": "postgresql-client17",
+       "version": "17.10.0"
+      },
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "namespace": "apps",
+   "owner": "apps",
+   "name": "postgres",
+   "type": "app",
+   "description": "",
+   "license": "",
+   "homepage": "",
+   "versions": [
+    {
+     "version": "17.10.3",
+     "img": "postgres-17.10.3-linux-arm64.img",
+     "arch": "arm64",
+     "src": "https://registry.plybox.sh/apps/postgres/postgres-17.10.3-linux-arm64.img",
+     "path": "apps/postgres/postgres-17.10.3-linux-arm64.img",
+     "sha256": "71f8899850952d409268b7ddf5be1d1ebb1996bac1b7da9edd04c074d38438f6",
+     "bytes": 110592,
+     "pushed_at": "2026-08-30T07:36:20.831Z",
+     "volumes": [
+      "/var/lib/postgresql/data"
+     ],
+     "dependencies": [
+      {
+       "name": "postgresql17",
+       "version": "17.10.0"
+      },
+      {
+       "name": "rclone",
+       "version": "1.60.1"
+      },
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "17.10.3",
+     "img": "postgres-17.10.3-linux-x64.img",
+     "arch": "x64",
+     "src": "https://registry.plybox.sh/apps/postgres/postgres-17.10.3-linux-x64.img",
+     "path": "apps/postgres/postgres-17.10.3-linux-x64.img",
+     "sha256": "51639711d74809ff1d80800307bf11de72271fe32e0d7f93c87fc6de8519b1d7",
+     "bytes": 110592,
+     "pushed_at": "2026-08-30T07:36:19.884Z",
+     "volumes": [
+      "/var/lib/postgresql/data"
+     ],
+     "dependencies": [
+      {
+       "name": "rclone",
+       "version": "1.60.1"
+      },
+      {
+       "name": "postgresql17",
+       "version": "17.10.0"
+      },
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "17.10.4",
+     "img": "postgres-17.10.4-linux-x64.img",
+     "arch": "x64",
+     "src": "https://registry.plybox.sh/apps/postgres/postgres-17.10.4-linux-x64.img",
+     "path": "apps/postgres/postgres-17.10.4-linux-x64.img",
+     "sha256": "7c37b27409ffa91ff27ba1c32079ac46945bfc0691247f23ba692bb40f020ba2",
+     "bytes": 110592,
+     "pushed_at": "2026-08-30T00:07:34.098Z",
+     "volumes": [
+      "/var/lib/postgresql/data"
+     ],
+     "dependencies": [
+      {
+       "name": "rclone",
+       "version": "1.60.1"
+      },
+      {
+       "name": "postgresql17",
+       "version": "17.10.0"
+      },
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "17.10.6",
+     "img": "postgres-17.10.6-linux-arm64.img",
+     "arch": "arm64",
+     "src": "https://registry.plybox.sh/apps/postgres/postgres-17.10.6-linux-arm64.img",
+     "path": "apps/postgres/postgres-17.10.6-linux-arm64.img",
+     "sha256": "10e21213c6f3f43216aefadfbacbf8b489a1f25cd68598a7bd847fc815fdec54",
+     "bytes": 110592,
+     "pushed_at": "2026-08-30T18:32:22.463Z",
+     "volumes": [
+      "/var/lib/postgresql/data"
+     ],
+     "dependencies": [
+      {
+       "name": "postgresql17",
+       "version": "17.10.0"
+      },
+      {
+       "name": "rclone",
+       "version": "1.60.1"
+      },
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "17.10.6",
+     "img": "postgres-17.10.6-linux-x64.img",
+     "arch": "x64",
+     "src": "https://registry.plybox.sh/apps/postgres/postgres-17.10.6-linux-x64.img",
+     "path": "apps/postgres/postgres-17.10.6-linux-x64.img",
+     "sha256": "b39ccc18d438c0d946f3a2655dff25006ab97647431b3414df06e6ed5b2d3842",
+     "bytes": 110592,
+     "pushed_at": "2026-08-30T18:32:15.275Z",
+     "volumes": [
+      "/var/lib/postgresql/data"
+     ],
+     "dependencies": [
+      {
+       "name": "rclone",
+       "version": "1.60.1"
+      },
+      {
+       "name": "postgresql17",
+       "version": "17.10.0"
+      },
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "namespace": "apps",
+   "owner": "apps",
+   "name": "redis",
+   "type": "app",
+   "description": "",
+   "license": "",
+   "homepage": "",
+   "versions": [
+    {
+     "version": "8.0.2",
+     "img": "redis-8.0.2-linux-arm64.img",
+     "arch": "arm64",
+     "src": "https://registry.plybox.sh/apps/redis/redis-8.0.2-linux-arm64.img",
+     "path": "apps/redis/redis-8.0.2-linux-arm64.img",
+     "sha256": "e9862ae813d2b6934d76c076f0dd73441f06bfe13699952973c837a91d6340ee",
+     "bytes": 4096,
+     "pushed_at": "2026-08-30T07:36:04.778Z",
+     "volumes": [
+      "/data"
+     ],
+     "dependencies": [
+      {
+       "name": "redis",
+       "version": "8.0.2"
+      },
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "8.0.2",
+     "img": "redis-8.0.2-linux-x64.img",
+     "arch": "x64",
+     "src": "https://registry.plybox.sh/apps/redis/redis-8.0.2-linux-x64.img",
+     "path": "apps/redis/redis-8.0.2-linux-x64.img",
+     "sha256": "fdc49c7c68618cc3ca6114fa2fd41d6fd4f8f13fdd96adf71e8d46b6349a37c5",
+     "bytes": 4096,
+     "pushed_at": "2026-08-30T07:36:05.955Z",
+     "volumes": [
+      "/data"
+     ],
+     "dependencies": [
+      {
+       "name": "redis",
+       "version": "8.0.2"
+      },
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "namespace": "iluxav",
+   "owner": "iluxav",
+   "name": "demo-web-app",
+   "type": "app",
+   "description": "",
+   "license": "",
+   "homepage": "",
+   "versions": [
+    {
+     "version": "0.1.0",
+     "img": "demo-web-app-0.1.0-linux-x64.img",
+     "arch": "x64",
+     "src": "https://registry.plybox.sh/iluxav/demo-web-app/demo-web-app-0.1.0-linux-x64.img",
+     "path": "iluxav/demo-web-app/demo-web-app-0.1.0-linux-x64.img",
+     "sha256": "d3f76fe29bed452f195c3c42973d2f96a694b5507fc0da1558d8369997d90dcd",
+     "bytes": 14270464,
+     "pushed_at": "2026-08-30T18:42:12.041Z",
+     "dependencies": [
+      {
+       "name": "node",
+       "version": "24.18.1"
+      },
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "namespace": "iluxav",
+   "owner": "iluxav",
+   "name": "hello",
+   "type": "app",
+   "description": "",
+   "license": "",
+   "homepage": "",
+   "versions": [
+    {
+     "version": "0.1.0",
+     "img": "hello-0.1.0-linux-x64.img",
+     "arch": "x64",
+     "src": "https://registry.plybox.sh/iluxav/hello/hello-0.1.0-linux-x64.img",
+     "path": "iluxav/hello/hello-0.1.0-linux-x64.img",
+     "sha256": "5a696fb02efd2e2e5c112ea9a75be6df1662df48934a2f0e005bde187a0dfddf",
+     "bytes": 4096,
+     "pushed_at": "2026-08-30T18:17:33.125Z",
+     "dependencies": [
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "namespace": "iluxav",
+   "owner": "iluxav",
+   "name": "server",
+   "type": "app",
+   "description": "",
+   "license": "",
+   "homepage": "",
+   "versions": [
+    {
+     "version": "0.1.0",
+     "img": "server-0.1.0-linux-arm64.img",
+     "arch": "arm64",
+     "src": "https://registry.plybox.sh/iluxav/server/server-0.1.0-linux-arm64.img",
+     "path": "iluxav/server/server-0.1.0-linux-arm64.img",
+     "sha256": "61ab1fec66046963e4a514e4d2b14a14a3b974af897a78ca0cb5b173383129f8",
+     "bytes": 14036992,
+     "pushed_at": "2026-08-30T19:42:40.352Z",
+     "dependencies": [
+      {
+       "name": "node",
+       "version": "24.18.1"
+      },
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "0.1.0",
+     "img": "server-0.1.0-linux-x64.img",
+     "arch": "x64",
+     "src": "https://registry.plybox.sh/iluxav/server/server-0.1.0-linux-x64.img",
+     "path": "iluxav/server/server-0.1.0-linux-x64.img",
+     "sha256": "568f4f6d3f34fcad5db407f3264b475512edde56f46c26b62852bd31c1640bfe",
+     "bytes": 14036992,
+     "pushed_at": "2026-08-30T19:42:43.797Z",
+     "dependencies": [
+      {
+       "name": "node",
+       "version": "24.18.1"
+      },
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "namespace": "iluxav",
+   "owner": "iluxav",
+   "name": "todos",
+   "type": "stack",
+   "description": "",
+   "license": "",
+   "homepage": "",
+   "versions": [
+    {
+     "version": "0.1.0",
+     "img": null,
+     "src": "https://registry.plybox.sh/iluxav/todos/todos-0.1.0.stack.toml",
+     "path": "iluxav/todos/todos-0.1.0.stack.toml",
+     "sha256": "7efee0cfd1d07098cb93ecd3aecb66b71fcb63eeed92a88edfc3e836ef958a58",
+     "bytes": 1728,
+     "pushed_at": "2026-08-30T19:43:54.633Z",
+     "apps": [
+      {
+       "e": [
+        "POSTGRES_PASSWORD=$POSTGRES_PASSWORD",
+        "POSTGRES_DB=todos"
+       ],
+       "run": "postgres@17",
+       "name": "db",
+       "publish": [
+        "internal:5432"
+       ]
+      },
+      {
+       "e": [
+        "DATABASE_URL=postgres://postgres:$POSTGRES_PASSWORD@db.ply:5432/todos"
+       ],
+       "run": "iluxav/server",
+       "name": "server",
+       "after": [
+        "db"
+       ],
+       "publish": [
+        "internal:3001"
+       ]
+      },
+      {
+       "run": "iluxav/web",
+       "name": "web",
+       "after": [
+        "server"
+       ],
+       "domain": [
+        "todos.example.com"
+       ],
+       "publish": [
+        "internal:3000"
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "namespace": "iluxav",
+   "owner": "iluxav",
+   "name": "web",
+   "type": "app",
+   "description": "",
+   "license": "",
+   "homepage": "",
+   "versions": [
+    {
+     "version": "0.1.0",
+     "img": "web-0.1.0-linux-arm64.img",
+     "arch": "arm64",
+     "src": "https://registry.plybox.sh/iluxav/web/web-0.1.0-linux-arm64.img",
+     "path": "iluxav/web/web-0.1.0-linux-arm64.img",
+     "sha256": "07852fcfdb1c66bf04ea32310e8943be44abf8675a05eedcfbe8f92506848746",
+     "bytes": 10924032,
+     "pushed_at": "2026-08-30T19:43:50.508Z",
+     "dependencies": [
+      {
+       "name": "node",
+       "version": "24.18.1"
+      },
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "0.1.0",
+     "img": "web-0.1.0-linux-x64.img",
+     "arch": "x64",
+     "src": "https://registry.plybox.sh/iluxav/web/web-0.1.0-linux-x64.img",
+     "path": "iluxav/web/web-0.1.0-linux-x64.img",
+     "sha256": "10cc246812df93a84febf8ec21ade16d4a4b20469f6392fd803209f3bcac44a0",
+     "bytes": 10924032,
+     "pushed_at": "2026-08-30T19:43:53.236Z",
+     "dependencies": [
+      {
+       "name": "node",
+       "version": "24.18.1"
+      },
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "0.1.1",
+     "img": "web-0.1.1-linux-arm64.img",
+     "arch": "arm64",
+     "src": "https://registry.plybox.sh/iluxav/web/web-0.1.1-linux-arm64.img",
+     "path": "iluxav/web/web-0.1.1-linux-arm64.img",
+     "sha256": "f689a1d37f8c103522230622a9e7d8e023d8e8b95bf0cfa3be9373e3c42f791a",
+     "bytes": 10932224,
+     "pushed_at": "2026-08-31T01:02:54.503Z",
+     "dependencies": [
+      {
+       "name": "node",
+       "version": "24.18.1"
+      },
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "0.1.1",
+     "img": "web-0.1.1-linux-x64.img",
+     "arch": "x64",
+     "src": "https://registry.plybox.sh/iluxav/web/web-0.1.1-linux-x64.img",
+     "path": "iluxav/web/web-0.1.1-linux-x64.img",
+     "sha256": "aac9e76dd7bb01d096c3f9646f559d158e9bd932624c46189cf6619d9bf6bf3b",
+     "bytes": 10932224,
+     "pushed_at": "2026-08-31T01:02:57.218Z",
+     "dependencies": [
+      {
+       "name": "node",
+       "version": "24.18.1"
+      },
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "0.1.2",
+     "img": "web-0.1.2-linux-arm64.img",
+     "arch": "arm64",
+     "src": "https://registry.plybox.sh/iluxav/web/web-0.1.2-linux-arm64.img",
+     "path": "iluxav/web/web-0.1.2-linux-arm64.img",
+     "sha256": "e9ec8930628d8585b89b3ec8bacdabeb63c7577c6259d8585ec66d22e6dc1991",
+     "bytes": 10932224,
+     "pushed_at": "2026-08-31T01:05:26.021Z",
+     "dependencies": [
+      {
+       "name": "node",
+       "version": "24.18.1"
+      },
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "0.1.2",
+     "img": "web-0.1.2-linux-x64.img",
+     "arch": "x64",
+     "src": "https://registry.plybox.sh/iluxav/web/web-0.1.2-linux-x64.img",
+     "path": "iluxav/web/web-0.1.2-linux-x64.img",
+     "sha256": "a642bc6ce8cb21388d1c50ab98d20127ebd888884fe81381c2dad46614f7eaab",
+     "bytes": 10932224,
+     "pushed_at": "2026-08-31T01:05:28.579Z",
+     "dependencies": [
+      {
+       "name": "node",
+       "version": "24.18.1"
+      },
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "0.1.3",
+     "img": "web-0.1.3-linux-arm64.img",
+     "arch": "arm64",
+     "src": "https://registry.plybox.sh/iluxav/web/web-0.1.3-linux-arm64.img",
+     "path": "iluxav/web/web-0.1.3-linux-arm64.img",
+     "sha256": "6727ef268706ed4db66b8675aeca16f2866b937a590454e699216f3082e7f859",
+     "bytes": 10932224,
+     "pushed_at": "2026-08-31T01:08:48.206Z",
+     "dependencies": [
+      {
+       "name": "node",
+       "version": "24.18.1"
+      },
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "0.1.3",
+     "img": "web-0.1.3-linux-x64.img",
+     "arch": "x64",
+     "src": "https://registry.plybox.sh/iluxav/web/web-0.1.3-linux-x64.img",
+     "path": "iluxav/web/web-0.1.3-linux-x64.img",
+     "sha256": "a62778090956047fa7ab89865b0c9d3c2a8fad5725b949b2d58703496018864d",
+     "bytes": 10932224,
+     "pushed_at": "2026-08-31T01:08:50.909Z",
+     "dependencies": [
+      {
+       "name": "node",
+       "version": "24.18.1"
+      },
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "namespace": "ply",
+   "owner": "ply",
+   "name": "caddy",
+   "type": "layer",
+   "description": "",
+   "license": "",
+   "homepage": "",
+   "versions": [
+    {
+     "version": "2.6.2",
+     "img": "caddy-2.6.2-linux-arm64.img",
+     "arch": "arm64",
+     "src": "https://registry.plybox.sh/ply/caddy/caddy-2.6.2-linux-arm64.img",
+     "path": "ply/caddy/caddy-2.6.2-linux-arm64.img",
+     "sha256": "fcef786d963d27f80fb03fbe80189af032609843df33f508a86aa7e9cecc8c04",
+     "bytes": 11272192,
+     "pushed_at": "2026-08-30T07:35:08.755Z"
+    },
+    {
+     "version": "2.6.2",
+     "img": "caddy-2.6.2-linux-x64.img",
+     "arch": "x64",
+     "src": "https://registry.plybox.sh/ply/caddy/caddy-2.6.2-linux-x64.img",
+     "path": "ply/caddy/caddy-2.6.2-linux-x64.img",
+     "sha256": "eaad9d1b4e33a359f1aebfe001c72b85caedb5e35d9f18da15f07f9b2a447c40",
+     "bytes": 12533760,
+     "pushed_at": "2026-08-30T07:35:12.675Z"
+    }
+   ]
+  },
+  {
+   "namespace": "ply",
+   "owner": "ply",
+   "name": "dashboard",
+   "type": "app",
+   "description": "",
+   "license": "",
+   "homepage": "",
+   "versions": [
+    {
+     "version": "0.1.29",
+     "img": "dashboard-0.1.29-linux-arm64.img",
+     "arch": "arm64",
+     "src": "https://registry.plybox.sh/ply/dashboard/dashboard-0.1.29-linux-arm64.img",
+     "path": "ply/dashboard/dashboard-0.1.29-linux-arm64.img",
+     "sha256": "04c83900912e515af8ede7b116b538d30c6df072d9fa1640c06511e5a8941f8b",
+     "bytes": 3862528,
+     "pushed_at": "2026-08-30T20:29:36.916Z",
+     "volumes": [
+      "/data"
+     ],
+     "links": [
+      "/run/ply:/ply/host/run",
+      "/var/lib/ply/apps:/ply/host/apps",
+      "/var/lib/ply/deployments:/ply/host/deployments",
+      "/sys/fs/cgroup:/ply/host/cgroup",
+      "/proc:/ply/host/proc"
+     ],
+     "dependencies": [
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "0.1.29",
+     "img": "dashboard-0.1.29-linux-x64.img",
+     "arch": "x64",
+     "src": "https://registry.plybox.sh/ply/dashboard/dashboard-0.1.29-linux-x64.img",
+     "path": "ply/dashboard/dashboard-0.1.29-linux-x64.img",
+     "sha256": "3d99dee34587457d128c840e191dac1b0d5071bc838aa53b489fc470793b20a3",
+     "bytes": 3862528,
+     "pushed_at": "2026-08-30T20:29:41.521Z",
+     "volumes": [
+      "/data"
+     ],
+     "links": [
+      "/run/ply:/ply/host/run",
+      "/var/lib/ply/apps:/ply/host/apps",
+      "/var/lib/ply/deployments:/ply/host/deployments",
+      "/sys/fs/cgroup:/ply/host/cgroup",
+      "/proc:/ply/host/proc"
+     ],
+     "dependencies": [
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "0.1.30",
+     "img": "dashboard-0.1.30-linux-arm64.img",
+     "arch": "arm64",
+     "src": "https://registry.plybox.sh/ply/dashboard/dashboard-0.1.30-linux-arm64.img",
+     "path": "ply/dashboard/dashboard-0.1.30-linux-arm64.img",
+     "sha256": "825da2b9d7bbc9a7fda6e21d19de38c2072a757d2b6be997aface205a4bd3ee7",
+     "bytes": 3866624,
+     "pushed_at": "2026-08-31T00:33:06.511Z",
+     "volumes": [
+      "/data"
+     ],
+     "links": [
+      "/run/ply:/ply/host/run",
+      "/var/lib/ply/apps:/ply/host/apps",
+      "/var/lib/ply/deployments:/ply/host/deployments",
+      "/sys/fs/cgroup:/ply/host/cgroup",
+      "/proc:/ply/host/proc"
+     ],
+     "dependencies": [
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "0.1.30",
+     "img": "dashboard-0.1.30-linux-x64.img",
+     "arch": "x64",
+     "src": "https://registry.plybox.sh/ply/dashboard/dashboard-0.1.30-linux-x64.img",
+     "path": "ply/dashboard/dashboard-0.1.30-linux-x64.img",
+     "sha256": "be7aecfc0d446bc2064f078461c4d71851a70b193b7368664b8e34648d60e7d2",
+     "bytes": 3866624,
+     "pushed_at": "2026-08-31T00:33:10.383Z",
+     "volumes": [
+      "/data"
+     ],
+     "links": [
+      "/run/ply:/ply/host/run",
+      "/var/lib/ply/apps:/ply/host/apps",
+      "/var/lib/ply/deployments:/ply/host/deployments",
+      "/sys/fs/cgroup:/ply/host/cgroup",
+      "/proc:/ply/host/proc"
+     ],
+     "dependencies": [
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "0.1.31",
+     "img": "dashboard-0.1.31-linux-arm64.img",
+     "arch": "arm64",
+     "src": "https://registry.plybox.sh/ply/dashboard/dashboard-0.1.31-linux-arm64.img",
+     "path": "ply/dashboard/dashboard-0.1.31-linux-arm64.img",
+     "sha256": "e46132797192eca31e7f965cf50891aef3550af1fcc5fd7da10eb48f8e8c587e",
+     "bytes": 3866624,
+     "pushed_at": "2026-08-31T00:38:18.661Z",
+     "volumes": [
+      "/data"
+     ],
+     "links": [
+      "/run/ply:/ply/host/run",
+      "/var/lib/ply/apps:/ply/host/apps",
+      "/var/lib/ply/deployments:/ply/host/deployments",
+      "/sys/fs/cgroup:/ply/host/cgroup",
+      "/proc:/ply/host/proc"
+     ],
+     "dependencies": [
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "0.1.31",
+     "img": "dashboard-0.1.31-linux-x64.img",
+     "arch": "x64",
+     "src": "https://registry.plybox.sh/ply/dashboard/dashboard-0.1.31-linux-x64.img",
+     "path": "ply/dashboard/dashboard-0.1.31-linux-x64.img",
+     "sha256": "e4cb39d31e198fa51ea7d46581afdd68c337cdf429ef78440eaf77cc77e0c8ba",
+     "bytes": 3866624,
+     "pushed_at": "2026-08-31T00:38:23.623Z",
+     "volumes": [
+      "/data"
+     ],
+     "links": [
+      "/run/ply:/ply/host/run",
+      "/var/lib/ply/apps:/ply/host/apps",
+      "/var/lib/ply/deployments:/ply/host/deployments",
+      "/sys/fs/cgroup:/ply/host/cgroup",
+      "/proc:/ply/host/proc"
+     ],
+     "dependencies": [
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "0.1.32",
+     "img": "dashboard-0.1.32-linux-arm64.img",
+     "arch": "arm64",
+     "src": "https://registry.plybox.sh/ply/dashboard/dashboard-0.1.32-linux-arm64.img",
+     "path": "ply/dashboard/dashboard-0.1.32-linux-arm64.img",
+     "sha256": "616bece834f78b14ba00c56f7d68b39c035931a3020b0f94b38b4bd9433140a0",
+     "bytes": 3866624,
+     "pushed_at": "2026-08-31T00:47:20.247Z",
+     "volumes": [
+      "/data"
+     ],
+     "links": [
+      "/run/ply:/ply/host/run",
+      "/var/lib/ply/apps:/ply/host/apps",
+      "/var/lib/ply/deployments:/ply/host/deployments",
+      "/sys/fs/cgroup:/ply/host/cgroup",
+      "/proc:/ply/host/proc"
+     ],
+     "dependencies": [
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "0.1.32",
+     "img": "dashboard-0.1.32-linux-x64.img",
+     "arch": "x64",
+     "src": "https://registry.plybox.sh/ply/dashboard/dashboard-0.1.32-linux-x64.img",
+     "path": "ply/dashboard/dashboard-0.1.32-linux-x64.img",
+     "sha256": "1b97bcef6e60de6a3babfffa4cb4a1f2527780943ab1b519db9921ff954f1b14",
+     "bytes": 3866624,
+     "pushed_at": "2026-08-31T00:47:24.801Z",
+     "volumes": [
+      "/data"
+     ],
+     "links": [
+      "/run/ply:/ply/host/run",
+      "/var/lib/ply/apps:/ply/host/apps",
+      "/var/lib/ply/deployments:/ply/host/deployments",
+      "/sys/fs/cgroup:/ply/host/cgroup",
+      "/proc:/ply/host/proc"
+     ],
+     "dependencies": [
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "0.1.33",
+     "img": "dashboard-0.1.33-linux-arm64.img",
+     "arch": "arm64",
+     "src": "https://registry.plybox.sh/ply/dashboard/dashboard-0.1.33-linux-arm64.img",
+     "path": "ply/dashboard/dashboard-0.1.33-linux-arm64.img",
+     "sha256": "4a5d884a13fa4985999a9280468e481a69355818f72083dc0a5ed3a1ee260eff",
+     "bytes": 3866624,
+     "pushed_at": "2026-08-31T01:24:30.782Z",
+     "volumes": [
+      "/data"
+     ],
+     "links": [
+      "/run/ply:/ply/host/run",
+      "/var/lib/ply/apps:/ply/host/apps",
+      "/var/lib/ply/deployments:/ply/host/deployments",
+      "/sys/fs/cgroup:/ply/host/cgroup",
+      "/proc:/ply/host/proc"
+     ],
+     "dependencies": [
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "0.1.33",
+     "img": "dashboard-0.1.33-linux-x64.img",
+     "arch": "x64",
+     "src": "https://registry.plybox.sh/ply/dashboard/dashboard-0.1.33-linux-x64.img",
+     "path": "ply/dashboard/dashboard-0.1.33-linux-x64.img",
+     "sha256": "ea80b7d95a516a97338d8de01e8576060a2708d989bbe4cb51ce2c672f356666",
+     "bytes": 3866624,
+     "pushed_at": "2026-08-31T01:24:35.084Z",
+     "volumes": [
+      "/data"
+     ],
+     "links": [
+      "/run/ply:/ply/host/run",
+      "/var/lib/ply/apps:/ply/host/apps",
+      "/var/lib/ply/deployments:/ply/host/deployments",
+      "/sys/fs/cgroup:/ply/host/cgroup",
+      "/proc:/ply/host/proc"
+     ],
+     "dependencies": [
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "namespace": "ply",
+   "owner": "ply",
+   "name": "debian",
+   "type": "layer",
+   "description": "",
+   "license": "",
+   "homepage": "",
+   "versions": [
+    {
+     "version": "13.6.0",
+     "img": "debian-13.6.0-linux-arm64.img",
+     "arch": "arm64",
+     "src": "https://registry.plybox.sh/ply/debian/debian-13.6.0-linux-arm64.img",
+     "path": "ply/debian/debian-13.6.0-linux-arm64.img",
+     "sha256": "d32d410e6e5c143922c0000121e9a34f4b534649395e59bfd722f27118770846",
+     "bytes": 27615232,
+     "pushed_at": "2026-08-30T07:33:40.235Z"
+    },
+    {
+     "version": "13.6.0",
+     "img": "debian-13.6.0-linux-x64.img",
+     "arch": "x64",
+     "src": "https://registry.plybox.sh/ply/debian/debian-13.6.0-linux-x64.img",
+     "path": "ply/debian/debian-13.6.0-linux-x64.img",
+     "sha256": "066bba3cbdfa7f0ec35e6b61bf94d05db68b540a75b39f9739d97b59e708f8bc",
+     "bytes": 26898432,
+     "pushed_at": "2026-08-30T07:33:48.989Z"
+    }
+   ]
+  },
+  {
+   "namespace": "ply",
+   "owner": "ply",
+   "name": "git",
+   "type": "layer",
+   "description": "",
+   "license": "",
+   "homepage": "",
+   "versions": [
+    {
+     "version": "2.47.3",
+     "img": "git-2.47.3-linux-arm64.img",
+     "arch": "arm64",
+     "src": "https://registry.plybox.sh/ply/git/git-2.47.3-linux-arm64.img",
+     "path": "ply/git/git-2.47.3-linux-arm64.img",
+     "sha256": "d972816931cff4bcaad7339a8030c0db5d7405bb550a000a481353b80c5aab08",
+     "bytes": 23425024,
+     "pushed_at": "2026-08-30T07:33:55.785Z"
+    },
+    {
+     "version": "2.47.3",
+     "img": "git-2.47.3-linux-x64.img",
+     "arch": "x64",
+     "src": "https://registry.plybox.sh/ply/git/git-2.47.3-linux-x64.img",
+     "path": "ply/git/git-2.47.3-linux-x64.img",
+     "sha256": "1e1d4d2bb9d90405fe8b8c2ae4041096170fcc597c860ebdfa5600cd9e1ed39f",
+     "bytes": 23699456,
+     "pushed_at": "2026-08-30T07:34:03.121Z"
+    }
+   ]
+  },
+  {
+   "namespace": "ply",
+   "owner": "ply",
+   "name": "node",
+   "type": "layer",
+   "description": "",
+   "license": "",
+   "homepage": "",
+   "versions": [
+    {
+     "version": "22.23.2",
+     "img": "node-22.23.2-linux-arm64.img",
+     "arch": "arm64",
+     "src": "https://registry.plybox.sh/ply/node/node-22.23.2-linux-arm64.img",
+     "path": "ply/node/node-22.23.2-linux-arm64.img",
+     "sha256": "90d49cb05af8c6bd0748043b954024082c63a246629f18c44c30cd87b10163b9",
+     "bytes": 52088832,
+     "pushed_at": "2026-08-30T07:34:22.923Z"
+    },
+    {
+     "version": "22.23.2",
+     "img": "node-22.23.2-linux-x64.img",
+     "arch": "x64",
+     "src": "https://registry.plybox.sh/ply/node/node-22.23.2-linux-x64.img",
+     "path": "ply/node/node-22.23.2-linux-x64.img",
+     "sha256": "2b3bcf0a55f670e3e017125e7090e8b784a9141e9e91cc4de3b293b580ca9652",
+     "bytes": 52367360,
+     "pushed_at": "2026-08-30T07:34:37.462Z"
+    },
+    {
+     "version": "24.18.1",
+     "img": "node-24.18.1-linux-arm64.img",
+     "arch": "arm64",
+     "src": "https://registry.plybox.sh/ply/node/node-24.18.1-linux-arm64.img",
+     "path": "ply/node/node-24.18.1-linux-arm64.img",
+     "sha256": "a73216c0f21a809dd54ff8576bb84cd9f90556676d573d2fe0b4f23d56af449d",
+     "bytes": 52125696,
+     "pushed_at": "2026-08-30T07:34:51.079Z"
+    },
+    {
+     "version": "24.18.1",
+     "img": "node-24.18.1-linux-x64.img",
+     "arch": "x64",
+     "src": "https://registry.plybox.sh/ply/node/node-24.18.1-linux-x64.img",
+     "path": "ply/node/node-24.18.1-linux-x64.img",
+     "sha256": "728e301c8a188fbcc5626b7455aeabf684c03c614890aad35f41eebd25a42563",
+     "bytes": 52674560,
+     "pushed_at": "2026-08-30T07:35:04.741Z"
+    }
+   ]
+  },
+  {
+   "namespace": "ply",
+   "owner": "ply",
+   "name": "notify",
+   "type": "app",
+   "description": "",
+   "license": "",
+   "homepage": "",
+   "versions": [
+    {
+     "version": "0.1.0",
+     "img": "notify-0.1.0-linux-arm64.img",
+     "arch": "arm64",
+     "src": "https://registry.plybox.sh/ply/notify/notify-0.1.0-linux-arm64.img",
+     "path": "ply/notify/notify-0.1.0-linux-arm64.img",
+     "sha256": "7cecde0f0b71f8f6d37d6c70e5860238464e8b382dfba72496868d3563b77d98",
+     "bytes": 4247552,
+     "pushed_at": "2026-08-30T20:27:54.715Z",
+     "links": [
+      "/var/lib/ply/apps:/ply/host/apps"
+     ],
+     "dependencies": [
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "0.1.0",
+     "img": "notify-0.1.0-linux-x64.img",
+     "arch": "x64",
+     "src": "https://registry.plybox.sh/ply/notify/notify-0.1.0-linux-x64.img",
+     "path": "ply/notify/notify-0.1.0-linux-x64.img",
+     "sha256": "ebf2734e70f9f1c32ab6e634d40b2dd774b4e62556a7315f17f01cbb9e15257c",
+     "bytes": 4710400,
+     "pushed_at": "2026-08-30T20:27:52.616Z",
+     "links": [
+      "/var/lib/ply/apps:/ply/host/apps"
+     ],
+     "dependencies": [
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "namespace": "ply",
+   "owner": "ply",
+   "name": "pg-backup",
+   "type": "app",
+   "description": "",
+   "license": "",
+   "homepage": "",
+   "versions": [
+    {
+     "version": "0.1.2",
+     "img": "pg-backup-0.1.2-linux-arm64.img",
+     "arch": "arm64",
+     "src": "https://registry.plybox.sh/ply/pg-backup/pg-backup-0.1.2-linux-arm64.img",
+     "path": "ply/pg-backup/pg-backup-0.1.2-linux-arm64.img",
+     "sha256": "e7e55055fae40a0b28be77ae2c39d4e3e06d72d921eb48935223615cc97448df",
+     "bytes": 110592,
+     "pushed_at": "2026-08-30T20:27:57.000Z",
+     "dependencies": [
+      {
+       "name": "rclone",
+       "version": "1.60.1"
+      },
+      {
+       "name": "postgresql-client17",
+       "version": "17.10.0"
+      },
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "0.1.2",
+     "img": "pg-backup-0.1.2-linux-x64.img",
+     "arch": "x64",
+     "src": "https://registry.plybox.sh/ply/pg-backup/pg-backup-0.1.2-linux-x64.img",
+     "path": "ply/pg-backup/pg-backup-0.1.2-linux-x64.img",
+     "sha256": "496bb794bb34e6c78bf6a6ffdb3e636b754821c4d105494aa8bb894a9a3558af",
+     "bytes": 110592,
+     "pushed_at": "2026-08-30T20:27:55.979Z",
+     "dependencies": [
+      {
+       "name": "rclone",
+       "version": "1.60.1"
+      },
+      {
+       "name": "postgresql-client17",
+       "version": "17.10.0"
+      },
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "namespace": "ply",
+   "owner": "ply",
+   "name": "plybox-web",
+   "type": "app",
+   "description": "",
+   "license": "",
+   "homepage": "",
+   "versions": [
+    {
+     "version": "0.4.13",
+     "img": "plybox-web-0.4.13-linux-x64.img",
+     "arch": "x64",
+     "src": "https://registry.plybox.sh/ply/plybox-web/plybox-web-0.4.13-linux-x64.img",
+     "path": "ply/plybox-web/plybox-web-0.4.13-linux-x64.img",
+     "sha256": "38d9be652ea75e68be33a757bdbaa02c106220dad4a7d31e08c086e558690b14",
+     "bytes": 13791232,
+     "pushed_at": "2026-08-29T22:20:14.334Z",
+     "dependencies": [
+      {
+       "name": "node",
+       "version": "24.18.1"
+      },
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "0.4.14",
+     "img": "plybox-web-0.4.14-linux-x64.img",
+     "arch": "x64",
+     "src": "https://registry.plybox.sh/ply/plybox-web/plybox-web-0.4.14-linux-x64.img",
+     "path": "ply/plybox-web/plybox-web-0.4.14-linux-x64.img",
+     "sha256": "829cf955a417a582ddc6e9925336a6cb3286240bb390265c0ba30d8bf60d1b27",
+     "bytes": 13791232,
+     "pushed_at": "2026-08-29T23:13:16.004Z",
+     "dependencies": [
+      {
+       "name": "node",
+       "version": "24.18.1"
+      },
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "0.4.15",
+     "img": "plybox-web-0.4.15-linux-x64.img",
+     "arch": "x64",
+     "src": "https://registry.plybox.sh/ply/plybox-web/plybox-web-0.4.15-linux-x64.img",
+     "path": "ply/plybox-web/plybox-web-0.4.15-linux-x64.img",
+     "sha256": "efed02c88c330e902c5aa77caebffe57f7ca1763fca12a40fc66fbfc8df85a2e",
+     "bytes": 13791232,
+     "pushed_at": "2026-08-30T07:41:34.315Z",
+     "dependencies": [
+      {
+       "name": "node",
+       "version": "24.18.1"
+      },
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "0.4.16",
+     "img": "plybox-web-0.4.16-linux-x64.img",
+     "arch": "x64",
+     "src": "https://registry.plybox.sh/ply/plybox-web/plybox-web-0.4.16-linux-x64.img",
+     "path": "ply/plybox-web/plybox-web-0.4.16-linux-x64.img",
+     "sha256": "6f74ffbf23a40639600213c6a9d8cf76b1cefb363cb234b6552581eb150fc9cc",
+     "bytes": 13791232,
+     "pushed_at": "2026-08-30T20:40:19.041Z",
+     "dependencies": [
+      {
+       "name": "node",
+       "version": "24.18.1"
+      },
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "0.4.17",
+     "img": "plybox-web-0.4.17-linux-x64.img",
+     "arch": "x64",
+     "src": "https://registry.plybox.sh/ply/plybox-web/plybox-web-0.4.17-linux-x64.img",
+     "path": "ply/plybox-web/plybox-web-0.4.17-linux-x64.img",
+     "sha256": "3e849aab802cd79f759c721d05dbb8bc287b96f40f88c3f63f519cb2072f7b36",
+     "bytes": 13791232,
+     "pushed_at": "2026-08-31T02:20:11.057Z",
+     "dependencies": [
+      {
+       "name": "node",
+       "version": "24.18.1"
+      },
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "0.4.18",
+     "img": "plybox-web-0.4.18-linux-x64.img",
+     "arch": "x64",
+     "src": "https://registry.plybox.sh/ply/plybox-web/plybox-web-0.4.18-linux-x64.img",
+     "path": "ply/plybox-web/plybox-web-0.4.18-linux-x64.img",
+     "sha256": "fd631709376ce1dcf6af5d83d24454e232bc281f130f36fe8116463e56f89bba",
+     "bytes": 13934592,
+     "pushed_at": "2026-09-02T23:47:06.185Z",
+     "dependencies": [
+      {
+       "name": "node",
+       "version": "24.18.1"
+      },
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "namespace": "ply",
+   "owner": "ply",
+   "name": "postgres",
+   "type": "app",
+   "description": "",
+   "license": "",
+   "homepage": "",
+   "versions": [
+    {
+     "version": "17.10.6",
+     "img": "postgres-17.10.6-linux-arm64.img",
+     "arch": "arm64",
+     "src": "https://registry.plybox.sh/ply/postgres/postgres-17.10.6-linux-arm64.img",
+     "path": "ply/postgres/postgres-17.10.6-linux-arm64.img",
+     "sha256": "10e21213c6f3f43216aefadfbacbf8b489a1f25cd68598a7bd847fc815fdec54",
+     "bytes": 110592,
+     "pushed_at": "2026-08-30T20:27:46.899Z",
+     "volumes": [
+      "/var/lib/postgresql/data"
+     ],
+     "dependencies": [
+      {
+       "name": "postgresql17",
+       "version": "17.10.0"
+      },
+      {
+       "name": "rclone",
+       "version": "1.60.1"
+      },
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "17.10.6",
+     "img": "postgres-17.10.6-linux-x64.img",
+     "arch": "x64",
+     "src": "https://registry.plybox.sh/ply/postgres/postgres-17.10.6-linux-x64.img",
+     "path": "ply/postgres/postgres-17.10.6-linux-x64.img",
+     "sha256": "b39ccc18d438c0d946f3a2655dff25006ab97647431b3414df06e6ed5b2d3842",
+     "bytes": 110592,
+     "pushed_at": "2026-08-30T20:27:45.845Z",
+     "volumes": [
+      "/var/lib/postgresql/data"
+     ],
+     "dependencies": [
+      {
+       "name": "rclone",
+       "version": "1.60.1"
+      },
+      {
+       "name": "postgresql17",
+       "version": "17.10.0"
+      },
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "17.10.7",
+     "img": "postgres-17.10.7-linux-arm64.img",
+     "arch": "arm64",
+     "src": "https://registry.plybox.sh/ply/postgres/postgres-17.10.7-linux-arm64.img",
+     "path": "ply/postgres/postgres-17.10.7-linux-arm64.img",
+     "sha256": "803b5552f13c611e3071684a98851b7a1ff6862cf606826435e6a928fa16fdfa",
+     "bytes": 110592,
+     "pushed_at": "2026-09-02T15:53:49.634Z",
+     "volumes": [
+      "/var/lib/postgresql/data"
+     ],
+     "dependencies": [
+      {
+       "name": "postgresql17",
+       "version": "17.10.0"
+      },
+      {
+       "name": "rclone",
+       "version": "1.60.1"
+      },
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "17.10.7",
+     "img": "postgres-17.10.7-linux-x64.img",
+     "arch": "x64",
+     "src": "https://registry.plybox.sh/ply/postgres/postgres-17.10.7-linux-x64.img",
+     "path": "ply/postgres/postgres-17.10.7-linux-x64.img",
+     "sha256": "0cf85787eaab128196fc0cc224b4e101141594eff729d473d6ec1b1fe5a7693e",
+     "bytes": 110592,
+     "pushed_at": "2026-09-02T15:51:37.549Z",
+     "volumes": [
+      "/var/lib/postgresql/data"
+     ],
+     "dependencies": [
+      {
+       "name": "rclone",
+       "version": "1.60.1"
+      },
+      {
+       "name": "postgresql17",
+       "version": "17.10.0"
+      },
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "namespace": "ply",
+   "owner": "ply",
+   "name": "postgresql-client17",
+   "type": "layer",
+   "description": "",
+   "license": "",
+   "homepage": "",
+   "versions": [
+    {
+     "version": "17.10.0",
+     "img": "postgresql-client17-17.10.0-linux-arm64.img",
+     "arch": "arm64",
+     "src": "https://registry.plybox.sh/ply/postgresql-client17/postgresql-client17-17.10.0-linux-arm64.img",
+     "path": "ply/postgresql-client17/postgresql-client17-17.10.0-linux-arm64.img",
+     "sha256": "3d69aea9b6bcf3bc7fff59c54017aa9612b18ad45b6523c3348cd032083f1f02",
+     "bytes": 5033984,
+     "pushed_at": "2026-08-30T07:35:47.420Z"
+    },
+    {
+     "version": "17.10.0",
+     "img": "postgresql-client17-17.10.0-linux-x64.img",
+     "arch": "x64",
+     "src": "https://registry.plybox.sh/ply/postgresql-client17/postgresql-client17-17.10.0-linux-x64.img",
+     "path": "ply/postgresql-client17/postgresql-client17-17.10.0-linux-x64.img",
+     "sha256": "7eeaa0dceb1328ab8e02acfbd2d8c55908754d7dfccae37dc8c81442ab2c4c5b",
+     "bytes": 5046272,
+     "pushed_at": "2026-08-30T07:35:50.923Z"
+    }
+   ]
+  },
+  {
+   "namespace": "ply",
+   "owner": "ply",
+   "name": "postgresql17",
+   "type": "layer",
+   "description": "",
+   "license": "",
+   "homepage": "",
+   "versions": [
+    {
+     "version": "17.10.0",
+     "img": "postgresql17-17.10.0-linux-arm64.img",
+     "arch": "arm64",
+     "src": "https://registry.plybox.sh/ply/postgresql17/postgresql17-17.10.0-linux-arm64.img",
+     "path": "ply/postgresql17/postgresql17-17.10.0-linux-arm64.img",
+     "sha256": "02d47ca10e4303e573fdc12e84d8927e43d22994b00cda9629950c22fb8e16fc",
+     "bytes": 42516480,
+     "pushed_at": "2026-08-30T07:35:27.233Z"
+    },
+    {
+     "version": "17.10.0",
+     "img": "postgresql17-17.10.0-linux-x64.img",
+     "arch": "x64",
+     "src": "https://registry.plybox.sh/ply/postgresql17/postgresql17-17.10.0-linux-x64.img",
+     "path": "ply/postgresql17/postgresql17-17.10.0-linux-x64.img",
+     "sha256": "f677cc1ce643bd0182d99437a51431749774082a582c910f9c65ac6ca17ecd05",
+     "bytes": 42856448,
+     "pushed_at": "2026-08-30T07:35:44.719Z"
+    }
+   ]
+  },
+  {
+   "namespace": "ply",
+   "owner": "ply",
+   "name": "rclone",
+   "type": "layer",
+   "description": "",
+   "license": "",
+   "homepage": "",
+   "versions": [
+    {
+     "version": "1.60.1",
+     "img": "rclone-1.60.1-linux-arm64.img",
+     "arch": "arm64",
+     "src": "https://registry.plybox.sh/ply/rclone/rclone-1.60.1-linux-arm64.img",
+     "path": "ply/rclone/rclone-1.60.1-linux-arm64.img",
+     "sha256": "1268e2a1ad7d700fe20bbeff6adca83104939169f08247565178aee23e270c1d",
+     "bytes": 17256448,
+     "pushed_at": "2026-08-30T07:35:57.834Z"
+    },
+    {
+     "version": "1.60.1",
+     "img": "rclone-1.60.1-linux-x64.img",
+     "arch": "x64",
+     "src": "https://registry.plybox.sh/ply/rclone/rclone-1.60.1-linux-x64.img",
+     "path": "ply/rclone/rclone-1.60.1-linux-x64.img",
+     "sha256": "5afac172e512ba5c3b5937bbcb6797d32bafa2293c7df8da16c9b4848e846704",
+     "bytes": 18968576,
+     "pushed_at": "2026-08-30T07:36:03.488Z"
+    }
+   ]
+  },
+  {
+   "namespace": "ply",
+   "owner": "ply",
+   "name": "redis",
+   "type": "app",
+   "description": "",
+   "license": "",
+   "homepage": "",
+   "versions": [
+    {
+     "version": "8.0.2",
+     "img": "redis-8.0.2-linux-arm64.img",
+     "arch": "arm64",
+     "src": "https://registry.plybox.sh/ply/redis/redis-8.0.2-linux-arm64.img",
+     "path": "ply/redis/redis-8.0.2-linux-arm64.img",
+     "sha256": "b77c67b70bd4e5363db40c2321af416b0dda4c793e3d398869a186d4f3a688d7",
+     "bytes": 3076096,
+     "pushed_at": "2026-09-02T15:57:12.194Z",
+     "volumes": [
+      "/data"
+     ],
+     "dependencies": [
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    },
+    {
+     "version": "8.0.2",
+     "img": "redis-8.0.2-linux-x64.img",
+     "arch": "x64",
+     "src": "https://registry.plybox.sh/ply/redis/redis-8.0.2-linux-x64.img",
+     "path": "ply/redis/redis-8.0.2-linux-x64.img",
+     "sha256": "69ae940fed89e1ac7f3fd6fa75c7c69efd09142495bfd9d8f0778713f20ad39a",
+     "bytes": 3207168,
+     "pushed_at": "2026-09-02T15:57:10.184Z",
+     "volumes": [
+      "/data"
+     ],
+     "dependencies": [
+      {
+       "name": "debian",
+       "version": "13.6.0"
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

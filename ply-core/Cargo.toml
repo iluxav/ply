@@ -18,12 +18,28 @@ walkdir.workspace = true
 serde_json.workspace = true
 ureq.workspace = true
 nix.workspace = true
-caps.workspace = true
-seccompiler.workspace = true
 tempfile.workspace = true
 tar.workspace = true
 flate2.workspace = true
 zstd.workspace = true
+ply-vm-proto.workspace = true
+# Portable: the switch is compiled and tested on every platform (see
+# runtime/vm/switch), so this is NOT in the macOS-only block.
+smoltcp.workspace = true
+
+# Linux-only: capability bounding sets and seccomp filters. Everything that
+# uses them lives under runtime/ns/ (and craft.rs), behind the same cfg.
+[target.'cfg(target_os = "linux")'.dependencies]
+caps.workspace = true
+seccompiler.workspace = true
+
+# macOS-only: Hypervisor.framework and the device tree writer. Everything
+# that uses them lives under runtime/vm/ behind the same cfg; the portable
+# half of that module (the spec disk, the switch, the kernel pin) has no
+# macOS dependency and is compiled and tested everywhere.
+[target.'cfg(target_os = "macos")'.dependencies]
+applevisor.workspace = true
+vm-fdt.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

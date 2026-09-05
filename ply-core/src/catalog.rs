@@ -1,5 +1,17 @@
 //! Package catalog: the optional `state.json` a source publishes next to its
 //! packages, read by `ply search` / `ply add` / `ply init`.
+//!
+//! It also holds every door through which ply turns a REFERENCE into image
+//! bytes on this host, and each carries a different guard — which door you
+//! take is a decision, not a detail. `fetch_app_image` fetches the newest
+//! published match and refuses a keg; `fetch_app_image_unless` is that one
+//! with the download skipped when the caller already holds the resolved
+//! image; `fetch_app_image_pinned` takes an exact version and digest from a
+//! lockfile, with no catalog read and nothing to guess; `fetch_keg_image` is
+//! `pub(crate)` and carries NO `is_app` guard, for runtime artifacts the ply
+//! binary fetches for itself (today only `ply/microvm-kernel`).
+//! `fetch_resolved_image` is their shared, guardless body, private on
+//! purpose: it is not a fifth door.
 
 use std::path::PathBuf;
 
@@ -473,36 +485,30 @@ pub fn fetch_stack(reference: &str, default_source: &str) -> Result<crate::stack
     })
 }
 
-/// Resolve a name reference against a source, fetch the newest matching app
-/// image into the store, and return its path.
-///
-/// Interactive semantics, deliberately not MVS: `ply run postgres` means
-/// "the latest published postgres" — locked, repeatable resolution is what
-/// `ply build` + a lockfile are for.
-pub fn fetch_app_image(
-    name: &str,
-    want: Option<&str>,
-    source_spec: &str,
-) -> Result<(PathBuf, crate::image::name::ImageName, String)> {
-    fetch_app_image_unless(name, want, source_spec, |_| None)
+/// Whether the bytes came down the wire in this call, or were already on
+/// this host under the resolved name. The app guard applies only to a fresh
+/// download — `have`'s answer was fetched, verified and named by an earlier
+/// call that already ran the guard, and re-reading its manifest on every
+/// reconcile beat is exactly the work `have` exists to avoid.
+enum Fetched {
+    Downloaded,
+    AlreadyHere,
 }
 
-/// `fetch_app_image`, but the caller may already HAVE the resolved image
-/// somewhere ply trusts — reconcile keeps the last deployed one hardlinked
-/// under `/var/lib/ply/deploys/<name>/<filename>`. `have` is asked once the
-/// version is known and before any bytes move; `Some(path)` short-circuits
-/// the download entirely.
+/// Resolve `name`(`@want`) against a source and put the newest matching
+/// image in the store.
 ///
-/// Without this, every `auto = true` deployment re-downloaded and re-hashed
-/// its full image on every 1-minute beat, only for `store.insert` to find
-/// the digest already present and discard the bytes. Resolution (one catalog
-/// read) is the cheap part and still runs, so a new version is still seen.
-pub fn fetch_app_image_unless(
+/// The shared body of `fetch_app_image_unless` and `fetch_keg_image`:
+/// namespaced ref → source → `list_versions` → newest match → `ImageName` →
+/// `have` or `source.fetch`. It deliberately says NOTHING about what kind of
+/// package came back; that question belongs to the caller, because the two
+/// callers answer it differently.
+fn fetch_resolved_image(
     name: &str,
     want: Option<&str>,
     source_spec: &str,
     have: impl Fn(&crate::image::name::ImageName) -> Option<PathBuf>,
-) -> Result<(PathBuf, crate::image::name::ImageName, String)> {
+) -> Result<(PathBuf, crate::image::name::ImageName, String, Fetched)> {
     use crate::image::name::{Arch, ImageName, Os};
 
     // `<namespace>/<name>` looks in that namespace's catalog; a bare name
@@ -543,15 +549,91 @@ pub fn fetch_app_image_unless(
         // Already on this host under its own name: it was fetched, verified
         // and hardlinked by a previous beat. Its digest is the store's.
         let digest = crate::digest::sha256_file(&path)?;
-        return Ok((path, image, digest));
+        return Ok((path, image, digest, Fetched::AlreadyHere));
     }
     let (digest, path) = source.fetch(&image, None, &store)?;
-    let manifest = crate::image::read::read_manifest(&path)?;
-    if !manifest.is_app() {
-        return Err(Error::Source(format!(
-            "`{image}` is a library package (keg), not a runnable app — add it to a ply.toml [dependencies] instead"
-        )));
+    Ok((path, image, digest, Fetched::Downloaded))
+}
+
+/// Resolve a name reference against a source, fetch the newest matching app
+/// image into the store, and return its path.
+///
+/// Interactive semantics, deliberately not MVS: `ply run postgres` means
+/// "the latest published postgres" — locked, repeatable resolution is what
+/// `ply build` + a lockfile are for.
+pub fn fetch_app_image(
+    name: &str,
+    want: Option<&str>,
+    source_spec: &str,
+) -> Result<(PathBuf, crate::image::name::ImageName, String)> {
+    fetch_app_image_unless(name, want, source_spec, |_| None)
+}
+
+/// `fetch_app_image`, but the caller may already HAVE the resolved image
+/// somewhere ply trusts — reconcile keeps the last deployed one hardlinked
+/// under `/var/lib/ply/deploys/<name>/<filename>`. `have` is asked once the
+/// version is known and before any bytes move; `Some(path)` short-circuits
+/// the download entirely.
+///
+/// Without this, every `auto = true` deployment re-downloaded and re-hashed
+/// its full image on every 1-minute beat, only for `store.insert` to find
+/// the digest already present and discard the bytes. Resolution (one catalog
+/// read) is the cheap part and still runs, so a new version is still seen.
+pub fn fetch_app_image_unless(
+    name: &str,
+    want: Option<&str>,
+    source_spec: &str,
+    have: impl Fn(&crate::image::name::ImageName) -> Option<PathBuf>,
+) -> Result<(PathBuf, crate::image::name::ImageName, String)> {
+    let (path, image, digest, fetched) = fetch_resolved_image(name, want, source_spec, have)?;
+    // The guard that makes `ply run <a keg>` a refusal rather than a
+    // confusing failure much later. It reads the image's manifest, so it
+    // runs only on the download path, exactly as it did before
+    // `fetch_keg_image` gave this function a sibling.
+    if matches!(fetched, Fetched::Downloaded) {
+        let manifest = crate::image::read::read_manifest(&path)?;
+        if !manifest.is_app() {
+            return Err(Error::Source(format!(
+                "`{image}` is a library package (keg), not a runnable app — add it to a ply.toml [dependencies] instead"
+            )));
+        }
     }
+    Ok((path, image, digest))
+}
+
+/// Fetch a published image by ref, without requiring it to be runnable.
+///
+/// The second door, and a deliberately narrow one: it exists for RUNTIME
+/// artifacts that are neither an app nor any app's dependency — things the
+/// ply binary fetches for ITSELF, that no `ply.toml` names and no `ply.lock`
+/// ever mentions. Today `ply/microvm-kernel` is the only such artifact: the
+/// macOS VM backend pins a kernel version in `runtime::vm::kernel` and
+/// fetches it the first time a microVM boots.
+///
+/// Everything a user asks for by name goes through `fetch_app_image`, whose
+/// `is_app` guard is what stops a keg being `ply run`. Do not reach for this
+/// to silence that guard — the guard is the answer, not the obstacle. A keg
+/// that an app needs belongs in `[dependencies]`, where the resolver already
+/// handles it.
+///
+/// `source_spec` is the fallback for a BARE name; a `<ns>/<name>` ref names
+/// its own namespace, as everywhere else. In production there is exactly one
+/// caller and it passes `OFFICIAL_RUN_SOURCE` — a runtime artifact has no
+/// manifest to carry a `[sources]` entry, so there is no user-supplied source
+/// to honour. It is a parameter so that this door can be TESTED over a
+/// `file://` source: without it, repointing this function at
+/// `fetch_app_image_unless` — the exact regression the split exists to
+/// prevent — passed every test in the crate.
+///
+/// `pub(crate)`, not `pub`: its one caller is `runtime::vm::kernel`, in this
+/// crate. Prose is not what should stop the next person reaching for it to
+/// silence an inconvenient `is_app` error.
+pub(crate) fn fetch_keg_image(
+    name: &str,
+    want: Option<&str>,
+    source_spec: &str,
+) -> Result<(PathBuf, crate::image::name::ImageName, String)> {
+    let (path, image, digest, _) = fetch_resolved_image(name, want, source_spec, |_| None)?;
     Ok((path, image, digest))
 }
 
@@ -597,6 +679,78 @@ mod tests {
     }
     use super::*;
     use crate::source::Source;
+
+    /// The two doors, side by side, over a real image each.
+    ///
+    /// A `file://` source is a Dir source: `list_versions` reads the
+    /// directory and `fetch` copies the file, so this exercises the whole
+    /// shared resolution body — namespaced-or-bare ref, version pick,
+    /// `ImageName`, store insert — without a network or a registry.
+    ///
+    /// It calls `fetch_keg_image` ITSELF, not the shared body underneath it:
+    /// that function is the thing the VM backend depends on, and pointing it
+    /// at `fetch_app_image_unless` must fail a test rather than a Mac. What
+    /// this cannot cover is the source constant its caller passes — that is
+    /// `runtime::vm::kernel`'s to get right.
+    #[test]
+    fn a_keg_is_refused_as_an_app_and_accepted_as_a_runtime_artifact() {
+        use crate::image::name::{Arch, ImageName, Os};
+
+        let td = tempfile::tempdir().unwrap();
+        let src_dir = td.path().join("source");
+        let build = td.path().join("build");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::create_dir_all(&build).unwrap();
+
+        let put = |name: &str, manifest: &str| {
+            let img = crate::image::squashfs::test_image_with_manifest(&build, manifest);
+            let version = semver::Version::parse("1.0.0").unwrap();
+            let canonical = ImageName::new(name, version, Os::Linux, Arch::host())
+                .unwrap()
+                .to_string();
+            std::fs::rename(&img, src_dir.join(canonical)).unwrap();
+        };
+        // No entrypoint: `is_app()` is false, which is what makes it a keg.
+        put(
+            "plytestkeg",
+            "[package]\nname = \"plytestkeg\"\nversion = \"1.0.0\"\n",
+        );
+        put(
+            "plytestapp",
+            "[package]\nname = \"plytestapp\"\nversion = \"1.0.0\"\nentrypoint = [\"/bin/true\"]\n",
+        );
+
+        let spec = format!("file://{}", src_dir.display());
+        // The store is process-global state; this is the only test in the
+        // crate that touches it, and it puts it back.
+        let previous = std::env::var_os("PLY_STORE");
+        std::env::set_var("PLY_STORE", td.path().join("store"));
+
+        let keg_as_app = fetch_app_image("plytestkeg", None, &spec);
+        let keg_as_keg = fetch_keg_image("plytestkeg", None, &spec);
+        let app_as_app = fetch_app_image("plytestapp", None, &spec);
+
+        match previous {
+            Some(v) => std::env::set_var("PLY_STORE", v),
+            None => std::env::remove_var("PLY_STORE"),
+        }
+
+        // The guard the VM backend must NOT launder: a keg is still not a
+        // runnable app, and the message still names the way out.
+        let err = keg_as_app.expect_err("a keg is not runnable").to_string();
+        assert!(
+            err.contains("library package (keg), not a runnable app"),
+            "{err}"
+        );
+        // The second door: the same image, fetched as a runtime artifact.
+        let (path, image, digest) = keg_as_keg.expect("a keg fetches as a runtime artifact");
+        assert!(path.exists(), "the bytes are in the store");
+        assert_eq!(image.name, "plytestkeg");
+        assert!(digest.starts_with("sha256:"), "{digest}");
+        // And the app path is untouched by the split.
+        let (_, app, _) = app_as_app.expect("an app still fetches as an app");
+        assert_eq!(app.name, "plytestapp");
+    }
 
     const SAMPLE: &str = include_str!("../tests/fixtures/state.sample.json");
 

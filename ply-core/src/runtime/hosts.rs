@@ -11,10 +11,12 @@ use crate::error::{Error, Result};
 
 const HOSTS: &str = "/etc/hosts";
 
+#[cfg(target_os = "linux")]
 fn tag(app: &str, n: u32) -> String {
     format!("# ply:{app}.{n}")
 }
 
+#[cfg(target_os = "linux")]
 fn rewrite<F>(edit: F) -> Result<()>
 where
     F: FnOnce(Vec<String>) -> Vec<String>,
@@ -38,6 +40,28 @@ where
     })
 }
 
+/// The host's `/etc/hosts` is the namespace backend's mechanism and only
+/// its mechanism: a container resolves `<peer>.ply` through a bind mount of
+/// this file. A microVM has its own `/etc/hosts` INSIDE the guest, written
+/// by the guest init from the spec disk, so there is nothing here to manage
+/// — and trying anyway is not merely useless, it is destructive:
+/// `/etc/hosts` on a Mac is root-owned, the rewrite fails with EACCES, and
+/// `reap_stale`'s `?` propagates that failure before it removes the state
+/// file. The visible symptom is `ply ps` listing an instance as `dead`
+/// forever after its VM is gone.
+#[cfg(not(target_os = "linux"))]
+pub fn add_entry(_app: &str, _n: u32, _ip: Ipv4Addr) -> Result<()> {
+    Ok(())
+}
+
+/// See `add_entry`: nothing to remove, and failing to not-remove it used to
+/// strand every dead instance in `ply ps`.
+#[cfg(not(target_os = "linux"))]
+pub fn remove_entry(_app: &str, _n: u32) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
 pub fn add_entry(app: &str, n: u32, ip: Ipv4Addr) -> Result<()> {
     let line = format!("{ip}\t{app}.ply\t{}", tag(app, n));
     let t = tag(app, n);
@@ -50,6 +74,7 @@ pub fn add_entry(app: &str, n: u32, ip: Ipv4Addr) -> Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
 pub fn remove_entry(app: &str, n: u32) -> Result<()> {
     let t = tag(app, n);
     rewrite(move |mut lines| {
@@ -125,6 +150,7 @@ fn compose_from(host: &str, instance_dir: &Path) -> Result<()> {
 /// Push the current /etc/hosts into every instance's name file. Called after
 /// any managed edit — this is what makes a peer's new address visible to
 /// containers that are already running.
+#[cfg(target_os = "linux")]
 fn refresh_instances() {
     let dir = crate::paths::run_dir().join("instances");
     let Ok(entries) = std::fs::read_dir(&dir) else {

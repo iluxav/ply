@@ -1,0 +1,19 @@
+[package]
+name = "ply-guest-init"
+description = "PID 1 inside a ply microVM: assembles the overlay, reads the spec disk, runs the app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "ply-guest-init"
+path = "src/main.rs"
+
+# libc for the syscalls the kernel expects init to make; ply-vm-proto for the
+# spec disk and the control channel. Nothing else: this binary ships inside an
+# initramfs the VM loads on every single start, and every byte of it is
+# unpacked into guest RAM before the app has run a single instruction.
+[dependencies]
+libc.workspace = true
+ply-vm-proto.workspace = true

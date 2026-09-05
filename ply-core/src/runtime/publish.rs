@@ -11,8 +11,17 @@ use std::collections::BTreeMap;
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use crate::error::{Error, Result};
+
+/// The rootful bridge gateway's address — instances reach the host there,
+/// so it is also where a depending app (or this pool, binding `internal`)
+/// finds it. A plain fact about the bridge's addressing, not a bridge
+/// operation, so it lives here rather than behind the Linux-only seam:
+/// `runtime::ns::network` imports this constant rather than defining its
+/// own, and this portable pool stays able to name it on every platform.
+pub const GATEWAY: Ipv4Addr = Ipv4Addr::new(10, 77, 0, 1);
 
 /// Who can reach a published port.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,7 +43,7 @@ impl BindScope {
         match self {
             BindScope::Public => Ipv4Addr::UNSPECIFIED,
             BindScope::Internal if rootless => Ipv4Addr::LOCALHOST,
-            BindScope::Internal => crate::runtime::network::GATEWAY,
+            BindScope::Internal => GATEWAY,
             BindScope::Addr(a) => *a,
         }
     }
@@ -45,7 +54,7 @@ impl BindScope {
     pub fn connect_addr(&self, rootless: bool) -> Ipv4Addr {
         match self {
             BindScope::Public if rootless => Ipv4Addr::LOCALHOST,
-            BindScope::Public => crate::runtime::network::GATEWAY,
+            BindScope::Public => GATEWAY,
             other => other.bind_addr(rootless),
         }
     }
@@ -119,11 +128,79 @@ pub fn parse_publish(s: &str) -> Result<Publish> {
     }
 }
 
+/// One end of a connection to a backend, as the proxy uses it.
+///
+/// `TcpStream` is not enough on its own. A microVM instance lives on the
+/// parent's userspace switch and has no socket the host can name, so its
+/// connections arrive as one end of a `UnixStream` pair — private by
+/// construction, which a loopback listener standing in for the guest would
+/// not be. Everything the proxy does to a backend connection is here, and
+/// nothing else is: read, write, clone the handle, half-close.
+pub trait Upstream: std::io::Read + std::io::Write + Send {
+    /// A second handle to the same connection, for the other direction of
+    /// the copy.
+    fn dup(&self) -> std::io::Result<Box<dyn Upstream>>;
+    /// End this side of the conversation, so the far end sees EOF rather
+    /// than a connection that merely stops.
+    fn shutdown_write(&self);
+}
+
+impl Upstream for TcpStream {
+    fn dup(&self) -> std::io::Result<Box<dyn Upstream>> {
+        Ok(Box::new(self.try_clone()?))
+    }
+    fn shutdown_write(&self) {
+        let _ = self.shutdown(std::net::Shutdown::Write);
+    }
+}
+
+impl Upstream for std::os::unix::net::UnixStream {
+    fn dup(&self) -> std::io::Result<Box<dyn Upstream>> {
+        Ok(Box::new(self.try_clone()?))
+    }
+    fn shutdown_write(&self) {
+        let _ = self.shutdown(std::net::Shutdown::Write);
+    }
+}
+
+/// How to reach one instance's port.
+///
+/// Namespaces hand back an address the host can dial; a VM hands back a
+/// connector that goes through the switch. `Instance::tcp_open` covered only
+/// the health and `--after` probes — the published pool needs the same
+/// indirection, or every `--publish` on macOS dials an address that means
+/// nothing on the host and the parent resets a connection it accepted.
+pub trait Connector: Send + Sync {
+    fn connect(&self, timeout: Duration) -> std::io::Result<Box<dyn Upstream>>;
+    /// For messages, and for `serve`'s self-connection guard.
+    fn addr(&self) -> SocketAddr;
+}
+
+/// The connector every address-based backend uses: dial the address.
+struct AddrConnector(SocketAddr);
+
+impl Connector for AddrConnector {
+    fn connect(&self, timeout: Duration) -> std::io::Result<Box<dyn Upstream>> {
+        Ok(Box::new(connect_either_family(self.0, timeout)?))
+    }
+
+    fn addr(&self) -> SocketAddr {
+        self.0
+    }
+}
+
+/// "Reach this backend by dialling this address" — what a namespace
+/// instance, and any port ply itself forwarded onto loopback, hands the
+/// pool.
+pub fn connector_for(addr: SocketAddr) -> Arc<dyn Connector> {
+    Arc::new(AddrConnector(addr))
+}
+
 /// The live backend set, shared between the run loop (writer) and the
 /// accept loop (reader). Keyed by slot so removal is exact.
 #[derive(Clone, Default)]
 pub struct Pool {
-    backends: Arc<Mutex<BTreeMap<u32, SocketAddr>>>,
+    backends: Arc<Mutex<BTreeMap<u32, Arc<dyn Connector>>>>,
     counter: Arc<AtomicUsize>,
 }
 
@@ -132,8 +209,8 @@ impl Pool {
         Self::default()
     }
 
-    pub fn insert(&self, slot: u32, addr: SocketAddr) {
-        self.backends.lock().unwrap().insert(slot, addr);
+    pub fn insert(&self, slot: u32, backend: Arc<dyn Connector>) {
+        self.backends.lock().unwrap().insert(slot, backend);
     }
 
     pub fn remove(&self, slot: u32) {
@@ -142,8 +219,9 @@ impl Pool {
 
     /// Backends in round-robin order: each call starts one position later.
     /// The whole list is returned so the caller can fail over down it.
-    pub fn rotated(&self) -> Vec<SocketAddr> {
-        let backends: Vec<SocketAddr> = self.backends.lock().unwrap().values().copied().collect();
+    pub fn rotated(&self) -> Vec<Arc<dyn Connector>> {
+        let backends: Vec<Arc<dyn Connector>> =
+            self.backends.lock().unwrap().values().cloned().collect();
         if backends.is_empty() {
             return backends;
         }
@@ -233,14 +311,28 @@ pub fn bind(spec: Publish, rootless: bool) -> Result<TcpListener> {
     // `internal` binds the bridge gateway, and on a freshly prepared host
     // the bridge does not exist until the first instance would create it —
     // the listener claim comes first, so create it here (idempotent).
-    if !rootless && addr == crate::runtime::network::GATEWAY {
-        crate::runtime::network::ensure_bridge()?;
+    if !rootless && addr == GATEWAY {
+        ensure_bridge_for_publish()?;
     }
     TcpListener::bind((addr, port)).map_err(|e| {
         Error::Runtime(format!(
             "--publish {port}: cannot bind {addr}:{port}: {e} — published ports are real host ports (one owner per port)"
         ))
     })
+}
+
+/// The bridge itself only exists on Linux (`runtime::ns::network`); `rootless`
+/// is always true elsewhere (there is no rootful backend yet), so `bind`
+/// never reaches here off Linux — this stub exists only so the crate
+/// compiles for a platform that hasn't got a bridge to create.
+#[cfg(target_os = "linux")]
+fn ensure_bridge_for_publish() -> Result<()> {
+    crate::runtime::ns::network::ensure_bridge()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn ensure_bridge_for_publish() -> Result<()> {
+    Ok(())
 }
 
 /// Accept loop — runs on its own thread for the parent's lifetime. Each
@@ -258,7 +350,8 @@ pub fn serve(listener: TcpListener, pool: Pool, same_network: bool) {
         let pool = pool.clone();
         std::thread::spawn(move || {
             let _ = client.set_nodelay(true);
-            for addr in pool.rotated() {
+            for backend in pool.rotated() {
+                let addr = backend.addr();
                 if Some(addr) == own {
                     eprintln!(
                         "ply: refusing to proxy {addr} to itself — the instance is not \
@@ -266,9 +359,8 @@ pub fn serve(listener: TcpListener, pool: Pool, same_network: bool) {
                     );
                     continue;
                 }
-                match connect_either_family(addr, std::time::Duration::from_millis(500)) {
+                match backend.connect(std::time::Duration::from_millis(500)) {
                     Ok(upstream) => {
-                        let _ = upstream.set_nodelay(true);
                         relay(client, upstream);
                         return;
                     }
@@ -282,14 +374,14 @@ pub fn serve(listener: TcpListener, pool: Pool, same_network: bool) {
 
 /// Bidirectional byte copy; each direction's EOF shuts down the paired
 /// write side so the counterpart copy terminates.
-fn relay(client: TcpStream, upstream: TcpStream) {
-    let (Ok(mut c_read), Ok(mut u_read)) = (client.try_clone(), upstream.try_clone()) else {
+fn relay(client: TcpStream, upstream: Box<dyn Upstream>) {
+    let (Ok(mut c_read), Ok(mut u_read)) = (client.try_clone(), upstream.dup()) else {
         return;
     };
     let (mut c_write, mut u_write) = (client, upstream);
     let up = std::thread::spawn(move || {
         let _ = std::io::copy(&mut c_read, &mut u_write);
-        let _ = u_write.shutdown(std::net::Shutdown::Write);
+        u_write.shutdown_write();
     });
     let _ = std::io::copy(&mut u_read, &mut c_write);
     let _ = c_write.shutdown(std::net::Shutdown::Write);
@@ -350,7 +442,7 @@ mod tests {
         let front = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = front.local_addr().unwrap();
         let pool = Pool::new();
-        pool.insert(0, addr); // the exact shape a bad address derivation makes
+        pool.insert(0, connector_for(addr)); // the shape a bad address derivation makes
         std::thread::spawn(move || serve(front, pool, true));
 
         // the connection is refused service rather than looping: it closes
@@ -366,8 +458,13 @@ mod tests {
     /// is also inside it — which is what the run parent arranges by joining
     /// before it spawns anything. From outside, the same address is dead.
     #[test]
+    // The asymmetry it asserts — one address, alive from inside and dead
+    // from outside — is a property of network namespaces themselves, so
+    // there has to be one to enter. Linux-only by nature, like its subject:
+    // `runtime::ns` is not compiled anywhere else.
+    #[cfg(target_os = "linux")]
     fn a_namespace_backend_is_reachable_only_from_inside() {
-        use crate::runtime::netns::NetNs;
+        use crate::runtime::ns::netns::NetNs;
 
         let ns = match NetNs::create() {
             Ok(ns) => ns,
@@ -383,7 +480,7 @@ mod tests {
         let fd = ns.open().expect("ns fd");
         let (port_tx, port_rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            crate::runtime::netns::enter(&fd).expect("enter");
+            crate::runtime::ns::netns::enter(&fd).expect("enter");
             let l = TcpListener::bind("127.0.0.1:0").expect("bind inside");
             port_tx.send(l.local_addr().unwrap().port()).unwrap();
             for c in l.incoming().flatten() {
@@ -403,7 +500,7 @@ mod tests {
         // …and alive from a thread that joined the namespace
         let fd = ns.open().expect("ns fd");
         let got = std::thread::spawn(move || {
-            crate::runtime::netns::enter(&fd).expect("enter");
+            crate::runtime::ns::netns::enter(&fd).expect("enter");
             let mut conn = connect_either_family(addr, std::time::Duration::from_millis(500))
                 .expect("reaches the backend from inside");
             let mut got = String::new();
@@ -478,13 +575,76 @@ mod tests {
         let pool = Pool::new();
         let a: SocketAddr = "10.0.0.1:1".parse().unwrap();
         let b: SocketAddr = "10.0.0.2:1".parse().unwrap();
-        pool.insert(1, a);
-        pool.insert(2, b);
-        assert_eq!(pool.rotated()[0], a);
-        assert_eq!(pool.rotated()[0], b);
-        assert_eq!(pool.rotated()[0], a);
+        pool.insert(1, connector_for(a));
+        pool.insert(2, connector_for(b));
+        let first = |pool: &Pool| pool.rotated()[0].addr();
+        assert_eq!(first(&pool), a);
+        assert_eq!(first(&pool), b);
+        assert_eq!(first(&pool), a);
         pool.remove(1);
-        assert_eq!(pool.rotated(), vec![b]);
+        assert_eq!(
+            pool.rotated().iter().map(|c| c.addr()).collect::<Vec<_>>(),
+            vec![b]
+        );
+    }
+
+    /// **The property that makes `--publish` work on a backend with no host
+    /// address.** `serve` must never assume it can dial a backend itself:
+    /// a microVM's port exists only on the parent's userspace switch, and
+    /// the pool reaches it through a connector or not at all.
+    #[test]
+    fn a_pool_backed_by_a_connector_reaches_a_backend_with_no_host_address() {
+        use std::os::unix::net::UnixStream;
+
+        /// Hands back one end of a socketpair whose other end echoes — the
+        /// shape of the switch's connector, with no address anywhere.
+        struct Pair;
+        impl Connector for Pair {
+            fn connect(&self, _t: std::time::Duration) -> std::io::Result<Box<dyn Upstream>> {
+                let (theirs, ours) = UnixStream::pair()?;
+                std::thread::spawn(move || {
+                    let mut ours = ours;
+                    let mut got = Vec::new();
+                    let _ = ours.read_to_end(&mut got);
+                    let _ = ours.write_all(&got);
+                    let _ = ours.shutdown(std::net::Shutdown::Write);
+                });
+                Ok(Box::new(theirs))
+            }
+            fn addr(&self) -> SocketAddr {
+                // Deliberately an address nothing on this host can dial: if
+                // `serve` ever fell back to dialling it, this test would
+                // fail rather than pass by accident.
+                SocketAddr::from(([10, 77, 0, 2], 5432))
+            }
+        }
+
+        let pool = Pool::new();
+        pool.insert(0, Arc::new(Pair));
+        let front = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let front_addr = front.local_addr().unwrap();
+        let serve_pool = pool.clone();
+        std::thread::spawn(move || serve(front, serve_pool, true));
+        assert_eq!(roundtrip(front_addr, b"select 1"), b"select 1");
+    }
+
+    /// The loop guard in `serve` — a backend equal to the listener's own
+    /// address — must survive the indirection. It is what stops the proxy
+    /// spawning a thread per hop until the process dies.
+    #[test]
+    fn the_self_connection_guard_still_fires_for_address_backends() {
+        let front = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = front.local_addr().unwrap();
+        let pool = Pool::new();
+        pool.insert(0, connector_for(addr));
+        std::thread::spawn(move || serve(front, pool, true));
+
+        let mut c = TcpStream::connect(addr).expect("connect");
+        c.set_read_timeout(Some(std::time::Duration::from_secs(2)))
+            .ok();
+        let mut got = Vec::new();
+        let _ = c.read_to_end(&mut got);
+        assert!(got.is_empty(), "no backend served it");
     }
 
     /// One echo backend: accepts connections forever, echoes one read back.
@@ -575,17 +735,11 @@ mod tests {
         // rootless shares the host netns; rootful instances reach the host
         // at the bridge gateway. Binding the wrong one silently isolates.
         assert_eq!(BindScope::Internal.bind_addr(true), Ipv4Addr::LOCALHOST);
-        assert_eq!(
-            BindScope::Internal.bind_addr(false),
-            crate::runtime::network::GATEWAY
-        );
+        assert_eq!(BindScope::Internal.bind_addr(false), GATEWAY);
         // Public binds the wildcard but is *reached* at a concrete address
         assert_eq!(BindScope::Public.bind_addr(true), Ipv4Addr::UNSPECIFIED);
         assert_eq!(BindScope::Public.connect_addr(true), Ipv4Addr::LOCALHOST);
-        assert_eq!(
-            BindScope::Public.connect_addr(false),
-            crate::runtime::network::GATEWAY
-        );
+        assert_eq!(BindScope::Public.connect_addr(false), GATEWAY);
     }
 
     #[test]
@@ -630,8 +784,8 @@ mod tests {
         let (backend_a, hits_a) = echo_backend();
         let (backend_b, hits_b) = echo_backend();
         let pool = Pool::new();
-        pool.insert(1, backend_a);
-        pool.insert(2, backend_b);
+        pool.insert(1, connector_for(backend_a));
+        pool.insert(2, connector_for(backend_b));
 
         let front = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let front_addr = front.local_addr().unwrap();
@@ -647,7 +801,7 @@ mod tests {
         // Kill backend A (simulate a dead instance still in the pool for a
         // moment): connections must fail over to B.
         pool.remove(1);
-        pool.insert(1, "127.0.0.1:1".parse().unwrap()); // nothing listens here
+        pool.insert(1, connector_for("127.0.0.1:1".parse().unwrap())); // nothing listens
         for _ in 0..4 {
             assert_eq!(roundtrip(front_addr, b"pong"), b"pong");
         }
