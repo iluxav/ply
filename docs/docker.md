@@ -21,7 +21,8 @@ You lose ply's shared-dependency model for that image (it's a snapshot,
 not a composition), but you gain the entire Docker library instantly.
 
 `ply run docker://image:tag` does the import on demand and caches it, so
-one command works too.
+one command works too — and a [stack](/docs/stacks/) member can say
+`run = "docker://image:tag"`, imported the same way at `ply up`.
 
 Check [Databases & services](/docs/services/) first, though: the registry
 publishes native runnable images for the common services (`ply run

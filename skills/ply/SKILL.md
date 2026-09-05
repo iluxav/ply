@@ -184,7 +184,9 @@ nothing starts at boot.
 flattens it, and translates its config (entrypoint, env, ports, workdir,
 user, stop signal) into a ply manifest. Mainstream images run unmodified.
 
-Reach for it when the registry lacks something — check `ply run <name>`
+`ply run docker://redis:7-alpine` imports on demand and caches (pinned to
+the first pull; `--pull` refreshes); a stack member can be
+`run = "docker://…"` the same way. Reach for it when the registry lacks something — check `ply run <name>`
 (prebuilt services: postgres, redis, …) first. Prefer the native package
 when it exists — `redis` imports at ~14 MiB fat versus ~3 MiB as a package
 that shares its base with every other app on the box. Check first with

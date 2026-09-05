@@ -39,6 +39,10 @@ ply egress APP [--follow] [--blocked] [--json]          # the outbound audit log
 | `public:80` | `0.0.0.0`, said explicitly |
 | `127.0.0.1:8080:3000` | exactly that address |
 
+`IMAGE` may be a file, a directory with a `ply.toml`, a registry reference
+(`postgres@17`), a URL, or `docker://image:tag` (imported on demand, cached
+by reference; `--pull` refreshes).
+
 Repeating it gives each spec its own listener and pool. The **first** spec is
 the app's canonical address — what `--after` hands to dependants and what
 `ply proxy` emits — so adding a metrics port second cannot repoint callers.

@@ -80,6 +80,8 @@ fn image_fact(source: &MemberSource, target: &str) -> Option<String> {
             .map(|s| s.to_string_lossy().into_owned())
             .or_else(|| Some(target.to_string())),
         MemberSource::Url(_) => Some(target.to_string()),
+        // Imported at `up` time: the target is the cached .img file.
+        MemberSource::Docker(_) => Some(target.to_string()),
     }
 }
 
@@ -103,7 +105,7 @@ fn resolve_members(
         // no params".
         let manifest = match &p.source {
             MemberSource::Url(_) => None,
-            MemberSource::Path(_) => Some(
+            MemberSource::Path(_) | MemberSource::Docker(_) => Some(
                 stack::member_manifest(&p.target, Some(Path::new(p.target.as_str())))
                     .with_context(|| format!("member `{}`: reading its manifest", p.member))?,
             ),
@@ -238,7 +240,7 @@ fn member_policies(prepared: &[Prepared]) -> Result<BTreeMap<String, ply_core::e
     for p in prepared {
         let manifest = match &p.source {
             MemberSource::Url(_) => None,
-            MemberSource::Path(_) => Some(
+            MemberSource::Path(_) | MemberSource::Docker(_) => Some(
                 stack::member_manifest(&p.target, Some(Path::new(p.target.as_str())))
                     .with_context(|| format!("member `{}`: reading its manifest", p.member))?,
             ),
@@ -350,7 +352,21 @@ pub fn exec(args: UpArgs) -> Result<()> {
             // publish and domain carry holes too: a stack published for
             // other people cannot know their hostname or which ports are
             // already taken on their box.
-            publish: stack::expand_member_list(&member.publish, &member.name, "publish", &lookup)?,
+            publish: {
+                let list =
+                    stack::expand_member_list(&member.publish, &member.name, "publish", &lookup)?;
+                // An imported image binds its EXPOSEd port and ignores `PORT`:
+                // say so in the spec, or the rootless pool aims at a loopback
+                // port nobody opens.
+                if matches!(member.source, MemberSource::Docker(_)) {
+                    list.iter()
+                        .map(|s| explicit_publish(s))
+                        .collect::<Result<Vec<_>>>()
+                        .with_context(|| format!("member `{}`: publish", member.name))?
+                } else {
+                    list
+                }
+            },
             volume: member.volume.clone(),
             domain: stack::expand_member_list(&member.domain, &member.name, "domain", &lookup)?,
             scale: member.scale,
@@ -703,6 +719,24 @@ fn resolve_stack_source(first: &str, source: &str) -> Result<stack::Stack> {
     Ok(ply_core::catalog::fetch_stack(first, source)?)
 }
 
+/// A `--publish` spec with its instance port stated: `internal:11211` →
+/// `internal:11211:11211`, `8080` → `public:8080:8080`; an explicit spec
+/// comes back as written. Docker members get this, because an imported
+/// image binds the port its Dockerfile exposed whatever `PORT` says.
+fn explicit_publish(spec: &str) -> Result<String> {
+    use ply_core::runtime::publish::{parse_publish, BindScope};
+    let p = parse_publish(spec)?;
+    if p.instance_port_explicit {
+        return Ok(spec.to_string());
+    }
+    let scope = match p.scope {
+        BindScope::Public => "public".to_string(),
+        BindScope::Internal => "internal".to_string(),
+        BindScope::Addr(a) => a.to_string(),
+    };
+    Ok(format!("{scope}:{}:{}", p.host_port, p.host_port))
+}
+
 /// The member's `run =` spec exactly as written in the stack — `postgres@17`,
 /// `./server`, `https://…` — for `Prepared.run_spec`/`--plan`'s header.
 /// Never what `prepare_target` resolves it to (a store path, a built dir).
@@ -714,6 +748,7 @@ fn describe_run_spec(source: &MemberSource) -> String {
         },
         MemberSource::Path(p) => p.display().to_string(),
         MemberSource::Url(u) => u.clone(),
+        MemberSource::Docker(r) => r.clone(),
     }
 }
 
@@ -787,6 +822,26 @@ fn prepare_target(member: &Member, args: &UpArgs, lock: &mut StackLock) -> Resul
             Ok(dir.display().to_string())
         }
         MemberSource::Url(url) => Ok(url.clone()),
+        // Import now — the same cache `ply run docker://` keeps, pinned to
+        // the first pull — so the member has a readable manifest (its
+        // egress claim, its `{image}` fact) like any `.img` member.
+        // `--refresh` pulls again, as it re-resolves registry members.
+        MemberSource::Docker(reference) => {
+            let path = ply_core::oci::ensure_local(reference, args.refresh).with_context(|| {
+                format!("stack member `{}`: importing {reference}", member.name)
+            })?;
+            eprintln!(
+                "ply up: {} -> {} ({})",
+                member.name,
+                path.display(),
+                if args.refresh {
+                    "pulled"
+                } else {
+                    "imported, cached"
+                }
+            );
+            Ok(path.display().to_string())
+        }
     }
 }
 
@@ -821,6 +876,43 @@ fn teardown(children: &mut Vec<(String, Child)>, code: i32) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An imported Docker image binds the port its Dockerfile EXPOSEd and
+    /// ignores `PORT`, so a non-explicit publish (`internal:11211`) would aim
+    /// the rootless pool at a loopback port nobody opens. For docker://
+    /// members every publish is made explicit: instance port = host port.
+    #[test]
+    fn docker_member_publishes_are_made_explicit() {
+        assert_eq!(
+            explicit_publish("internal:11211").unwrap(),
+            "internal:11211:11211"
+        );
+        assert_eq!(explicit_publish("8080").unwrap(), "public:8080:8080");
+        assert_eq!(explicit_publish("public:80").unwrap(), "public:80:80");
+        assert_eq!(
+            explicit_publish("192.168.1.5:9000").unwrap(),
+            "192.168.1.5:9000:9000"
+        );
+        // already explicit: untouched
+        assert_eq!(explicit_publish("80:3000").unwrap(), "80:3000");
+        assert_eq!(
+            explicit_publish("127.0.0.1:8080:3000").unwrap(),
+            "127.0.0.1:8080:3000"
+        );
+        assert!(explicit_publish("nonsense:x").is_err());
+    }
+
+    /// A docker member is described by its reference and, once imported,
+    /// its `{image}` fact is the cached file it became.
+    #[test]
+    fn a_docker_member_is_described_by_its_reference_and_imaged_by_its_cache_file() {
+        let source = MemberSource::Docker("docker://redis:7-alpine".into());
+        assert_eq!(describe_run_spec(&source), "docker://redis:7-alpine");
+        assert_eq!(
+            image_fact(&source, "/var/lib/ply/imports/redis-7-alpine.img"),
+            Some("/var/lib/ply/imports/redis-7-alpine.img".to_string())
+        );
+    }
     use ply_core::params::Resolved;
     use ply_core::stack::{EnvSource, ResolvedEnv};
     use std::collections::BTreeSet;

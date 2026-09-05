@@ -36,6 +36,10 @@ pub enum MemberSource {
     Path(PathBuf),
     /// `run = "https://…/app.img"` — a URL image, fetched like `ply run <url>`.
     Url(String),
+    /// `run = "docker://image:tag"` — an OCI image, imported at `up` time
+    /// through the same cache `ply run docker://` uses (pinned to the first
+    /// pull; `--refresh` pulls again), then run like an `.img` member.
+    Docker(String),
 }
 
 #[derive(Debug, Clone)]
@@ -662,7 +666,22 @@ fn parse_member(index: usize, entry: &toml::Value, path: &Path) -> Result<Member
 }
 
 /// Classify a `run =` value into a source, returning the default member name.
+/// The member name a `docker://` reference implies: the image's last path
+/// segment without tag or digest — `docker://ghcr.io/org/app:1.2` → `app`.
+pub fn docker_member_name(reference: &str) -> Option<String> {
+    let rest = reference.strip_prefix("docker://")?;
+    let last = rest.rsplit('/').next()?;
+    let name = last.split('@').next()?.split(':').next()?;
+    (!name.is_empty()).then(|| name.to_string())
+}
+
 fn classify_run(run: &str, path: &Path, index: usize) -> Result<(MemberSource, Option<String>)> {
+    if run.starts_with("docker://") {
+        return Ok((
+            MemberSource::Docker(run.to_string()),
+            docker_member_name(run),
+        ));
+    }
     if run.starts_with("http://") || run.starts_with("https://") {
         let stem = run
             .rsplit('/')
@@ -700,7 +719,7 @@ fn classify_run(run: &str, path: &Path, index: usize) -> Result<(MemberSource, O
             ))
         }
         None => Err(Error::Manifest(format!(
-            "{}: [[app]] #{}: `run = \"{run}\"` is not a package reference, path, or URL",
+            "{}: [[app]] #{}: `run = \"{run}\"` is not a package reference, path, URL, or docker:// image",
             path.display(),
             index + 1
         ))),
@@ -1740,6 +1759,41 @@ fn resolve_impl(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `run = "docker://…"` is the fourth member kind: imported at `up` time
+    /// through the same cache `ply run docker://` uses, then treated like an
+    /// `.img` member. Its default name is the image's, without registry,
+    /// path, tag or digest.
+    #[test]
+    fn a_docker_member_classifies_and_names_itself_after_the_image() {
+        let path = Path::new("ply.toml");
+        let (source, name) = classify_run("docker://redis:7-alpine", path, 0).unwrap();
+        assert_eq!(
+            source,
+            MemberSource::Docker("docker://redis:7-alpine".into())
+        );
+        assert_eq!(name.as_deref(), Some("redis"));
+        assert_eq!(
+            docker_member_name("docker://ghcr.io/org/app:1.2").as_deref(),
+            Some("app")
+        );
+        assert_eq!(
+            docker_member_name("docker://library/nginx").as_deref(),
+            Some("nginx")
+        );
+        assert_eq!(
+            docker_member_name("docker://redis@sha256:abc123").as_deref(),
+            Some("redis")
+        );
+        assert_eq!(docker_member_name("docker://"), None);
+        let err = classify_run("dockr://redis", path, 2)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("docker://"),
+            "the error names every accepted form: {err}"
+        );
+    }
 
     fn stack_of(text: &str) -> Stack {
         parse(text, Path::new("ply.toml")).unwrap().unwrap()

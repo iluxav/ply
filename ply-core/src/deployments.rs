@@ -285,6 +285,12 @@ impl Spec {
                     p.display()
                 )))
             }
+            MemberSource::Docker(r) => {
+                return Err(Error::Manifest(format!(
+                    "stack member `{}`: `run = \"{r}\"` is a docker:// image — a deployment file has no OCI source yet; `ply import` it and publish the image, or use a registry ref",
+                    member.name
+                )))
+            }
         };
         let env = crate::stack::expand_member_env(member, lookup)?
             .into_iter()

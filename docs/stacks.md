@@ -64,6 +64,7 @@ source:
 | `"postgres@17"` | `ply run postgres@17` | fetch the prebuilt [service](/docs/services/) from the registry, cached and lock-pinned |
 | `"./server"` | `ply run ./server` | build that directory's own `ply.toml` — skipped when nothing changed — and run it |
 | `"https://…/app.img"` | `ply run <url>` | fetch the image at that URL |
+| `"docker://redis:7"` | `ply run docker://redis:7` | import the OCI image once (cached, pinned to the first pull — `--refresh` pulls again) and run it as a fat image; the member is named after the image (`redis`) |
 
 A directory member keeps its own manifest — the same one `ply build` and
 `ply deploy` use for production. The stack file adds only wiring: there is no
