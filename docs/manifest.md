@@ -43,6 +43,9 @@ data   = "/var/lib/myapp"                                 # per-instance
 shared = { path = "/srv/uploads", scope = "shared" }      # opt-in shared
 cache  = { path = "/var/cache/myapp", ephemeral = true }  # GC-able
 
+[network]                         # optional: the egress contract — see below
+egress = ["api.stripe.com", "*.amazonaws.com", "1.1.1.1"]
+
 [resources]
 mem  = "512M"                     # memory.max (+ memory.high)
 cpu  = "1.5"                      # cores
@@ -144,6 +147,16 @@ a manifest one.
 
 **`[volumes]`** — see [Volumes & data](/docs/volumes/). Per-instance by
 default; `scope = "shared"` and `ephemeral = true` are the two modifiers.
+
+**`[network]`** — `egress` is the claim: the outbound destinations this
+package needs, as a list of hostnames, `*.suffix` wildcards, IPv4
+addresses, CIDR ranges, or `*` for unrestricted. Omitting `[network]`
+declares nothing (`ply inspect` shows `egress: not declared`); an empty
+list (`egress = []`) is itself a claim — "this talks to nobody" — the
+right shape for a database. The claim alone changes nothing at run time:
+it takes a stack member's `egress = { mode, allow }` or `ply run
+--egress`/`--egress-allow` to turn it into audit or enforcement. See
+[Security & rootless](/docs/security/#egress-the-contract).
 
 **`[resources]`** — cgroup v2 limits. `pids` is set even if you omit it.
 

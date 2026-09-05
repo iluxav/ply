@@ -53,6 +53,10 @@ pub struct Manifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub health: Option<Health>,
 
+    /// `[network]` — the egress contract: destinations this package needs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network: Option<Network>,
+
     /// Env contributions this package exposes to dependents; embedded into
     /// the built image as `/.layer.toml`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -120,6 +124,16 @@ pub struct Health {
 
 fn default_grace() -> String {
     "10s".into()
+}
+
+/// `[network]` — the egress contract. `egress`: the destinations this
+/// package needs, as written (see `egress::entry::EgressEntry` for the
+/// grammar and `Manifest::egress_entries` for the parsed form).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Network {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub egress: Option<Vec<String>>,
 }
 
 /// "500ms" | "2s" | "1m" → Duration.
@@ -670,6 +684,14 @@ impl Manifest {
             .collect()
     }
 
+    /// The declared list, parsed; `None` when `[network] egress` is absent.
+    pub fn egress_entries(&self) -> Result<Option<Vec<crate::egress::EgressEntry>>> {
+        match self.network.as_ref().and_then(|n| n.egress.as_ref()) {
+            Some(raw) => crate::egress::entry::parse_list(raw).map(Some),
+            None => Ok(None),
+        }
+    }
+
     /// The manifest's `[params]` table, converted to typed [`ParamDecl`]s and
     /// validated per-entry (secret/default shape — see [`params::ParamDecl::from_toml`]).
     /// Empty when `[params]` is absent. Kept separate from the raw
@@ -796,6 +818,11 @@ impl Manifest {
         }
         // Resolve now so a typo fails at `ply build`, not at 3am on the box.
         validate_capabilities(self.package.capabilities.as_ref())?;
+        if let Some(network) = &self.network {
+            if let Some(raw) = &network.egress {
+                crate::egress::entry::parse_list(raw)?;
+            }
+        }
         if let Some(sig) = &self.package.stop_signal {
             parse_stop_signal(sig)?;
         }
@@ -1475,5 +1502,47 @@ homepage = "https://www.postgresql.org"
         let m = manifest_with("[params]\nuser = \"x\"", "S = \"{state}\"");
         let e = Manifest::parse(&m).unwrap_err().to_string();
         assert!(e.contains("live"), "{e}");
+    }
+
+    #[test]
+    fn a_network_egress_list_parses_and_validates() {
+        let m: Manifest = toml::from_str(
+            "[package]\nname = \"web\"\nversion = \"1.0.0\"\nentrypoint = [\"/bin/true\"]\n[network]\negress = [\"api.stripe.com\", \"*.amazonaws.com\", \"140.82.112.0/20\"]\n",
+        ).unwrap();
+        m.validate().unwrap();
+        let entries = m.egress_entries().unwrap().unwrap();
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[1].to_string(), "*.amazonaws.com");
+    }
+
+    #[test]
+    fn an_empty_egress_list_is_a_claim_and_absence_is_not() {
+        let empty: Manifest = toml::from_str(
+            "[package]\nname = \"db\"\nversion = \"1.0.0\"\nentrypoint = [\"/bin/true\"]\n[network]\negress = []\n",
+        ).unwrap();
+        assert_eq!(empty.egress_entries().unwrap(), Some(vec![]));
+        let none: Manifest = toml::from_str(
+            "[package]\nname = \"db\"\nversion = \"1.0.0\"\nentrypoint = [\"/bin/true\"]\n",
+        )
+        .unwrap();
+        assert_eq!(none.egress_entries().unwrap(), None);
+    }
+
+    #[test]
+    fn a_bad_egress_entry_fails_validation_with_the_entry_named() {
+        let m: Manifest = toml::from_str(
+            "[package]\nname = \"web\"\nversion = \"1.0.0\"\nentrypoint = [\"/bin/true\"]\n[network]\negress = [\"https://api.stripe.com\"]\n",
+        ).unwrap();
+        let err = m.validate().unwrap_err().to_string();
+        assert!(err.contains("`https://api.stripe.com`"), "{err}");
+        assert!(err.contains("host.example"), "{err}");
+    }
+
+    #[test]
+    fn an_unknown_network_key_is_rejected() {
+        let err = toml::from_str::<Manifest>(
+            "[package]\nname = \"web\"\nversion = \"1.0.0\"\nentrypoint = [\"/bin/true\"]\n[network]\ningress = []\n",
+        ).unwrap_err().to_string();
+        assert!(err.contains("ingress"), "{err}");
     }
 }

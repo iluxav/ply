@@ -83,6 +83,14 @@ pub fn render(record: &ply_core::record::Record) -> String {
         label_line("volumes", &list(&volumes_of(&record.manifest))),
         label_line("links", &list(&links_of(&record.manifest))),
         label_line("dependencies", &list(&dependencies_of(&record.manifest))),
+        label_line(
+            "egress",
+            &match ply_core::record::egress_entries(&record.manifest) {
+                Some(list) if list.is_empty() => "none (declared)".to_string(),
+                Some(list) => list.join(", "),
+                None => "not declared".to_string(),
+            },
+        ),
     ];
 
     let rows = ply_core::record::params_rows(&record.manifest);
@@ -267,6 +275,16 @@ url = "postgres://{user}:{password}@{host}:{port}/{database}"
             out.starts_with("postgres 17.10.7  app  owner: ply\n"),
             "{out}"
         );
+    }
+
+    #[test]
+    fn render_shows_the_declared_egress_or_not_declared() {
+        let with = "[package]\nname = \"web\"\nversion = \"1.0.0\"\nentrypoint = [\"/bin/true\"]\n[network]\negress = [\"api.stripe.com\", \"*\"]\n";
+        let record = ply_core::record::record_for_toml(with, Path::new("ply.toml")).unwrap();
+        let out = render(&record);
+        assert!(out.contains("egress:       api.stripe.com, *"), "{out}");
+        let record = ply_core::record::record_for_toml(PG, Path::new("ply.toml")).unwrap();
+        assert!(render(&record).contains("egress:       not declared"));
     }
 
     #[test]

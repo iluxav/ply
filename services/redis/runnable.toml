@@ -34,6 +34,11 @@ data = { path = "/data" }
 [ports]
 db = 6379
 
+# A database talks to nobody: an empty list is a claim, and a stack that
+# runs this keg logs anything it reaches as undeclared.
+[network]
+egress = []
+
 [health]
 port = 6379
 grace = "15s"

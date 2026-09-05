@@ -48,10 +48,35 @@ fn parse_cli_env(pairs: &[String]) -> Result<Vec<(String, String)>> {
     Ok(out)
 }
 
+/// `--egress` / `--egress-allow` → the operator's override. Any occurrence
+/// of `--egress-allow` replaces the manifest's list; `""` contributes no
+/// entry, so `--egress-allow ""` is "allow nothing".
+fn egress_override(
+    mode: Option<&str>,
+    allow: &[String],
+) -> Result<Option<ply_core::egress::EgressOverride>> {
+    if mode.is_none() && allow.is_empty() {
+        return Ok(None);
+    }
+    let mode = mode
+        .map(|m| m.parse::<ply_core::egress::Mode>())
+        .transpose()?;
+    let allow = if allow.is_empty() {
+        None
+    } else {
+        let raw: Vec<String> = allow.iter().filter(|s| !s.is_empty()).cloned().collect();
+        Some(ply_core::egress::entry::parse_list(&raw)?)
+    };
+    Ok(Some(ply_core::egress::EgressOverride { mode, allow }))
+}
+
 pub fn exec(args: RunArgs) -> Result<()> {
     for domain in &args.domain {
         validate_domain(domain)?;
     }
+    // Up front, beside the other flag grammars: a typo'd mode or entry must
+    // fail before an image is fetched or a directory is built, not after.
+    let egress = egress_override(args.egress.as_deref(), &args.egress_allow)?;
     let mut links: Vec<(std::path::PathBuf, String)> = Vec::new();
     for link in &args.link {
         let Some((host, container)) = link.split_once(':') else {
@@ -231,13 +256,14 @@ pub fn exec(args: RunArgs) -> Result<()> {
         entrypoint: dev_entrypoint,
         domains: args.domain.clone(),
         volumes: args.volume.clone(),
+        egress,
     })?;
     std::process::exit(code);
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_cli_env, validate_domain};
+    use super::{egress_override, parse_cli_env, validate_domain};
 
     // --- env parsing --------------------------------------------------------
 
@@ -295,5 +321,24 @@ mod tests {
         ] {
             assert!(validate_domain(bad).is_err(), "{bad}");
         }
+    }
+
+    // --- egress flags -------------------------------------------------------
+
+    #[test]
+    fn egress_flags_become_an_override() {
+        assert_eq!(egress_override(None, &[]).unwrap(), None);
+        let o = egress_override(Some("enforce"), &[]).unwrap().unwrap();
+        assert_eq!(o.mode, Some(ply_core::egress::Mode::Enforce));
+        assert_eq!(o.allow, None);
+        let o = egress_override(None, &["a.example".to_string(), "1.1.1.1".to_string()])
+            .unwrap()
+            .unwrap();
+        assert_eq!(o.allow.unwrap().len(), 2);
+        let o = egress_override(Some("audit"), &["".to_string()])
+            .unwrap()
+            .unwrap();
+        assert_eq!(o.allow, Some(vec![]));
+        assert!(egress_override(Some("strict"), &[]).is_err());
     }
 }

@@ -11,6 +11,7 @@ pub mod craft;
 pub mod deployments;
 pub mod dev;
 pub mod digest;
+pub mod egress;
 pub mod env;
 pub mod error;
 pub mod github;

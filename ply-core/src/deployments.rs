@@ -139,6 +139,12 @@ pub struct Spec {
     /// when the FILE is touched — an edit, or the dashboard's deploy-now.
     #[serde(default = "default_true")]
     pub auto: bool,
+    /// The egress override a stack member carried, on its way to the unit's
+    /// `ply run` line as `--egress`/`--egress-allow`. Synthesized by
+    /// [`Spec::from_stack_member`], never read from a deployment file —
+    /// a stack file's `[[app]]` table is where a host writes it.
+    #[serde(skip)]
+    pub egress: Option<crate::egress::EgressOverride>,
 }
 
 fn default_true() -> bool {
@@ -238,6 +244,22 @@ impl Spec {
         for app in &self.after {
             flags.extend(["--after".into(), app.clone()]);
         }
+        if let Some(over) = &self.egress {
+            if let Some(mode) = over.mode {
+                flags.extend(["--egress".into(), mode.to_string()]);
+            }
+            if let Some(allow) = &over.allow {
+                // An empty list is a real answer ("allow nothing"), and the
+                // unit's `ply run` reads it as one: an occurrence with no
+                // entry.
+                if allow.is_empty() {
+                    flags.extend(["--egress-allow".into(), String::new()]);
+                }
+                for entry in allow {
+                    flags.extend(["--egress-allow".into(), entry.to_string()]);
+                }
+            }
+        }
         flags
     }
 
@@ -287,6 +309,7 @@ impl Spec {
             volumes: member.volume.clone(),
             after: member.after.clone(),
             scale: member.scale,
+            egress: member.egress.clone(),
             stack: stack_name.map(str::to_string),
             auto: true,
             ..Default::default()
@@ -497,7 +520,7 @@ REDIS_PASSWORD = "s3cret"
     #[test]
     fn stack_member_expands_to_spec() {
         let stack = stack_of(
-            "[[app]]\nrun=\"postgres@17\"\nname=\"db\"\ne=[\"POSTGRES_PASSWORD=$PW\"]\nvolume=[\"/data\"]\n\n[[app]]\nrun=\"umami@3\"\nafter=[\"db\"]\npublish=[\"internal:3000\"]\n",
+            "[[app]]\nrun=\"postgres@17\"\nname=\"db\"\ne=[\"POSTGRES_PASSWORD=$PW\"]\nvolume=[\"/data\"]\negress={ mode = \"enforce\", allow = [\"a.example\"] }\n\n[[app]]\nrun=\"umami@3\"\nafter=[\"db\"]\npublish=[\"internal:3000\"]\negress={ mode = \"audit\", allow = [] }\n",
         );
         let env = BTreeMap::from([("PW".to_string(), "s3cret".to_string())]);
         let lookup = |k: &str| env.get(k).cloned();
@@ -513,6 +536,12 @@ REDIS_PASSWORD = "s3cret"
             .windows(2)
             .any(|w| w == ["-e", "POSTGRES_PASSWORD=s3cret"]));
         assert!(flags.windows(2).any(|w| w == ["--volume", "/data"]));
+        // The member's egress override reaches the unit's `ply run` line
+        // the same way --publish and --after do.
+        assert!(flags.windows(2).any(|w| w == ["--egress", "enforce"]));
+        assert!(flags
+            .windows(2)
+            .any(|w| w == ["--egress-allow", "a.example"]));
 
         let app = Spec::from_stack_member(&stack.members[1], Some("umami"), &lookup).unwrap();
         let flags = app.flags();
@@ -520,6 +549,11 @@ REDIS_PASSWORD = "s3cret"
         assert!(flags
             .windows(2)
             .any(|w| w == ["--publish", "internal:3000"]));
+        // An empty list is a real answer ("allow nothing"), and it has to
+        // survive the round trip as one — an occurrence with an empty
+        // entry, not a missing flag, which would fall back to the claim.
+        assert!(flags.windows(2).any(|w| w == ["--egress", "audit"]));
+        assert!(flags.windows(2).any(|w| w == ["--egress-allow", ""]));
     }
 
     #[test]

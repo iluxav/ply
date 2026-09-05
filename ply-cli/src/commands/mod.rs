@@ -5,6 +5,7 @@ mod add;
 mod build;
 mod control;
 mod craft;
+mod egress;
 mod exec;
 mod images;
 mod init;
@@ -32,10 +33,11 @@ pub fn dispatch(command: Command) -> Result<()> {
         Command::Build(args) => build::run(args),
         Command::Search(args) => search::exec(args),
         Command::Add(args) => add::exec(args),
-        Command::Run(args) => run::exec(args),
+        Command::Run(args) => run::exec(*args),
         Command::Up(args) => up::exec(args),
         Command::Exec(args) => exec::exec(args),
         Command::Logs(args) => logs::exec(args),
+        Command::Egress(args) => egress::exec(args),
         Command::Scale(args) => control::scale(args),
         Command::Restart(args) => control::restart(args),
         Command::Reconcile(args) => reconcile::exec(args),

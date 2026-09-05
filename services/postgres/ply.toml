@@ -39,6 +39,24 @@ rclone = "1.60"
 [volumes]
 data = { path = "/var/lib/postgresql/data" }
 
+# A database talks to nobody: an empty list is a claim, and a stack that
+# runs this keg logs anything it reaches as undeclared.
+#
+# The claim is about the DATABASE, not about backups. BACKUP_DEST and
+# BACKUP_RESTORE push and pull through rclone, which is outbound traffic
+# this list does not cover — an operator using them has to say so, in the
+# stack file, next to where the destination itself is configured:
+#
+#   egress = { mode = "audit", allow = ["s3.eu-central-1.amazonaws.com"] }
+#
+# (`mode = "enforce"` once the endpoint is confirmed; the bucket endpoint
+# is whatever `BACKUP_DEST` resolves through, wildcards allowed.) Left
+# undeclared, a backup run shows up in `ply egress` as undeclared traffic
+# in audit, and fails in enforce — which is the contract working, not a
+# bug in the keg.
+[network]
+egress = []
+
 [ports]
 db = 5432
 

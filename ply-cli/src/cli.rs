@@ -42,7 +42,12 @@ pub enum Command {
     Add(AddArgs),
 
     /// Run an image (foreground; SIGTERM works; exit code propagates)
-    Run(RunArgs),
+    ///
+    /// Boxed: `run` is the flag-richest verb by a wide margin, and an
+    /// inline `RunArgs` makes every other variant of this enum as big as
+    /// it (clippy::large_enum_variant). Boxing it costs one allocation per
+    /// process and clap's own `Args for Box<T>` handles the rest.
+    Run(Box<RunArgs>),
 
     /// Start a stack — several `ply run`s from one file ([[app]] blocks), in
     /// dependency order. `ply up` runs the stack in `-C dir`; `ply up
@@ -79,6 +84,9 @@ pub enum Command {
     /// <run-dir>/logs/<app>.<n>.log (512 KiB x2 per instance). This reads
     /// those files — works identically foreground, under systemd, rootless.
     Logs(LogsArgs),
+
+    /// What an app's instances reached: the egress audit log as a table
+    Egress(EgressArgs),
 
     /// List running instances
     Ps(PsArgs),
@@ -348,6 +356,18 @@ pub struct RunArgs {
     #[arg(long, value_name = "[ADDR:]PORT[:INSTANCE_PORT]")]
     pub publish: Vec<String>,
 
+    /// Outbound policy: `off`, `audit` (log everything, mark what the
+    /// manifest did not declare) or `enforce` (block it). Defaults to
+    /// `audit` when the manifest declares `[network] egress`, else `off`.
+    #[arg(long, value_name = "MODE")]
+    pub egress: Option<String>,
+
+    /// Replace the manifest's declared egress list with these entries
+    /// (repeatable: a hostname, `*.suffix`, an IPv4 address or CIDR, or
+    /// `*`). Pass `--egress-allow ""` for an empty list.
+    #[arg(long = "egress-allow", value_name = "ENTRY")]
+    pub egress_allow: Vec<String>,
+
     /// Start only once a condition holds (repeatable). Three forms:
     ///
     /// `APP` — an instance of APP is alive and, when its manifest declares
@@ -467,6 +487,22 @@ pub struct LogsArgs {
     /// Lines of history to show first
     #[arg(short = 'n', long, value_name = "N", default_value_t = 100)]
     pub lines: usize,
+}
+
+#[derive(Args)]
+pub struct EgressArgs {
+    /// App whose instances to show
+    #[arg(value_name = "APP")]
+    pub app: String,
+    /// Keep printing new records as they arrive
+    #[arg(short = 'f', long)]
+    pub follow: bool,
+    /// Only blocked connections and refused names
+    #[arg(long)]
+    pub blocked: bool,
+    /// Raw JSON records instead of the table
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Args)]

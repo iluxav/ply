@@ -97,6 +97,12 @@ fn has(program: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Is `nft` on this host? The egress thread needs it to install a table;
+/// without it there is no enforcement and nothing to observe.
+pub fn has_nft() -> bool {
+    has("nft")
+}
+
 fn succeeds(program: &str, args: &[&str]) -> bool {
     Command::new(program)
         .args(args)

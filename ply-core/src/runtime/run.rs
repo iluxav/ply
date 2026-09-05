@@ -73,6 +73,10 @@ pub struct RunOptions {
     /// whose image doesn't declare a VOLUME but still writes a data dir as a
     /// non-root user (n8n's ~/.n8n).
     pub volumes: Vec<String>,
+    /// `--egress` / `--egress-allow`, or a stack member's `egress = …`: the
+    /// operator's word over whatever the image's manifest declares. `None`
+    /// leaves the manifest's claim (or its absence) to decide.
+    pub egress: Option<crate::egress::EgressOverride>,
 }
 
 /// Live wiring for a published pool, threaded through instance launches.
@@ -82,6 +86,39 @@ struct PublishWiring {
     /// the port instances serve on (rootful: on their bridge IPs; rootless:
     /// an allocated loopback port per instance instead).
     spec: crate::runtime::publish::Publish,
+}
+
+/// The egress contract: the author's claim, the operator's word.
+///
+/// Order: off → unsupported (one line, nothing else) → unrestricted warning +
+/// start line → start line. `None` means there is nothing for the backend to
+/// install — either the effective mode is `off`, or this backend cannot keep
+/// a contract on this host, which the operator has just been told in the
+/// backend's own words.
+///
+/// Called once per manifest: at start, and again for the new manifest a
+/// deploy brings in (with the same override, which is the operator's word
+/// for this run and does not change under it).
+fn effective_egress(
+    manifest: &Manifest,
+    over: Option<&crate::egress::EgressOverride>,
+    identity: &str,
+    backend: &dyn Backend,
+) -> Result<Option<crate::egress::Policy>> {
+    let declared = manifest.egress_entries()?;
+    let policy = crate::egress::effective(declared.as_deref(), over);
+    if policy.mode == crate::egress::Mode::Off {
+        return Ok(None);
+    }
+    if let Some(reason) = backend.egress_support() {
+        eprintln!("ply: {reason}");
+        return Ok(None);
+    }
+    if policy.unrestricted() {
+        eprintln!("ply: {identity} declares unrestricted egress");
+    }
+    eprintln!("ply: egress {}", policy.describe());
+    Ok(Some(policy))
 }
 
 pub fn run(opts: &RunOptions) -> Result<i32> {
@@ -118,6 +155,15 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
     // What this platform refuses or warns about for this app, before any
     // host port is claimed.
     backend.admit(&ctx.manifest, opts)?;
+
+    // The egress contract: the author's claim, the operator's word. Decided
+    // once the manifest is in hand, before anything is launched.
+    ctx.egress = effective_egress(
+        &ctx.manifest,
+        opts.egress.as_ref(),
+        &identity,
+        backend.as_ref(),
+    )?;
 
     // --publish: claim the host port BEFORE anything starts (fail fast on a
     // taken port), then serve the pool from a dedicated accept thread. The
@@ -502,12 +548,26 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                             scale: opts.scale,
                         },
                     ) {
-                        Ok(new_ctx) => {
-                            let mut queue: Vec<u32> = instances.iter().map(|i| i.n).collect();
-                            queue.sort_unstable();
-                            roll_queue = queue;
-                            old_ctx = Some(std::mem::replace(&mut ctx, new_ctx));
-                        }
+                        // The new version's manifest may declare a different
+                        // list; the operator's override is this run's word
+                        // and does not change under it.
+                        Ok(mut new_ctx) => match effective_egress(
+                            &new_ctx.manifest,
+                            opts.egress.as_ref(),
+                            &identity,
+                            backend.as_ref(),
+                        ) {
+                            Ok(policy) => {
+                                new_ctx.egress = policy;
+                                let mut queue: Vec<u32> = instances.iter().map(|i| i.n).collect();
+                                queue.sort_unstable();
+                                roll_queue = queue;
+                                old_ctx = Some(std::mem::replace(&mut ctx, new_ctx));
+                            }
+                            Err(e) => {
+                                eprintln!("ply: deploy aborted — new image unusable: {e}")
+                            }
+                        },
                         Err(e) => {
                             eprintln!("ply: deploy aborted — new image unusable: {e}");
                         }
@@ -903,6 +963,13 @@ pub struct AppContext {
     pub env: Vec<(String, String)>,
     pub image: PathBuf,
     pub dep_images: Vec<PathBuf>,
+    /// The effective egress contract for this version of the app, decided by
+    /// the supervisor right after the manifest is read (see
+    /// [`effective_egress`]) and handed to every instance it launches. Rides
+    /// here rather than as another `launch_instance` argument because it
+    /// changes with the manifest: a deploy re-reads it with the same
+    /// override.
+    pub egress: Option<crate::egress::Policy>,
 }
 
 /// Resolve a standalone app's own manifest `[env]` holes — the one thing
@@ -1119,6 +1186,9 @@ fn prepare_app(
         image: std::fs::canonicalize(image).unwrap_or_else(|_| image.to_path_buf()),
         dep_images,
         manifest,
+        // Decided by the caller, which knows the override and the host's
+        // facts; `prepare_app` only reads the image.
+        egress: None,
     })
 }
 
@@ -1630,6 +1700,7 @@ fn launch_instance(
         resources: manifest.resources.clone(),
         dns: opts.network_dns.clone(),
         local_aliases: opts.network_peers.clone(),
+        egress: ctx.egress.clone(),
     };
 
     // Live params tree: publish before spawn. The child's own mount
@@ -2015,6 +2086,7 @@ mod discovery_tests {
             entrypoint: None,
             domains: vec![],
             volumes: vec![],
+            egress: None,
         };
         // rootful: alone at any scale
         assert!(alone_in_its_network(false, &opts(1, None)));
