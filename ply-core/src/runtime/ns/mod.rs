@@ -8,6 +8,7 @@ pub mod cgroup;
 pub mod container;
 pub mod egress;
 pub mod exec;
+pub mod kpublish;
 pub mod loopdev;
 pub mod mount;
 pub mod netns;
@@ -68,6 +69,26 @@ impl Backend for NsBackend {
     /// Rootful is the only shape that can keep a contract: the policy is a
     /// table in the instance's OWN network namespace, and a rootless run
     /// shares one network with everything else on the box.
+    fn kernel_publish(
+        &self,
+        spec: &crate::runtime::publish::Publish,
+    ) -> Option<std::sync::Arc<dyn crate::runtime::publish::PoolMirror>> {
+        if !kpublish::eligible(self.rootless, network::has_nft(), spec.scope) {
+            return None;
+        }
+        // A crashed predecessor's chains for this port would DNAT to dead
+        // addresses; our bind succeeded, so the port is ours to reclaim.
+        kpublish::gc_stale(spec.host_port);
+        Some(std::sync::Arc::new(kpublish::KernelMirror::new(
+            kpublish::KernelPublish::new(
+                spec.host_port,
+                spec.instance_port,
+                spec.scope,
+                std::process::id(),
+            ),
+        )))
+    }
+
     fn egress_support(&self) -> Option<&'static str> {
         if self.rootless {
             Some("egress policy needs a network per instance — rootless runs unenforced and unobserved (use a rootful host to audit or enforce)")

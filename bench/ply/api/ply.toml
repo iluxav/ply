@@ -1,0 +1,16 @@
+[package]
+name = "benchapi"
+version = "0.1.0"
+entrypoint = ["./server"]
+include = ["server"]
+base = "debian@13"
+
+[ports]
+api = 8080
+
+[health]
+port = 8080
+grace = "90s"
+
+[sources]
+default = "https://registry.plybox.sh/ply/{package}"

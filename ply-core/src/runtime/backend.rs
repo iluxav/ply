@@ -176,6 +176,18 @@ pub trait Backend {
     fn egress_support(&self) -> Option<&'static str> {
         Some("egress policy is not enforced on this platform yet — running unobserved")
     }
+    /// The kernel's share of `--publish` for `spec`, when this platform has
+    /// one: a mirror the pool keeps in sync so new connections are DNATed by
+    /// the kernel instead of relayed by the parent. `None` — the default,
+    /// rootless, the VM switch, a loopback address — means the relay does
+    /// all the work, as before. Called once per published port, before any
+    /// instance launches.
+    fn kernel_publish(
+        &self,
+        _spec: &crate::runtime::publish::Publish,
+    ) -> Option<Arc<dyn crate::runtime::publish::PoolMirror>> {
+        None
+    }
     fn launch(&self, spec: &InstanceSpec, record: Record<'_>) -> Result<Launched>;
     /// The `exec` control command: serve a terminal into `app.slot` at
     /// `term-<nonce>.sock`. Backends without one return `Err`.

@@ -57,6 +57,21 @@ default when an app is scaled: a name maps to instance IPs, while the
 publishing parent owns one stable address and balances across the pool
 behind it.
 
+**How a published port reaches instances.** Rootful, the kernel does it:
+the run parent writes the pool into an nftables DNAT rule (one pair of
+chains per port in ply's `ip ply` table, `pub_<port>_p<pid>_*`) that
+round-robins new connections across the instances, and rewrites it
+atomically on every launch, death and roll — connections already open keep
+their instance through conntrack. The parent still binds the port (so a
+taken port fails fast, and an empty pool still answers with a clean close)
+but moves no bytes; `ply run` says `(kernel dnat)` on its publishing line.
+Three cases stay on the parent's own TCP relay, the same split Docker
+makes with `docker-proxy`: rootless (no netfilter), macOS (instances are
+behind the userspace switch), and connections to `127.0.0.1` on the host
+itself. One difference from the relay: it retried the next instance when one
+refused a connection; the kernel cannot, so in the moment between an
+instance dying and the parent's rewrite a new connection may be refused.
+
 Instances reach the internet through the host: each rootful run enables
 IPv4 forwarding and a source-NAT rule for `10.77.0.0/16` (nft, or iptables
 where that is all the host has) and gives the instance the host's real

@@ -1,0 +1,36 @@
+[package]
+name = "benchpg"
+version = "17.10.0"
+user = "postgres:70:70"
+entrypoint = ["/bin/sh", "-c", """
+set -e
+PGBIN="$(echo /opt/postgresql17-*)/usr/lib/postgresql/17/bin"
+PGDATA=/var/lib/postgresql/data
+if [ ! -s "$PGDATA/PG_VERSION" ]; then
+  echo "pgdb: initializing fresh database"
+  $PGBIN/initdb -D "$PGDATA" --auth=trust --username=postgres --locale=C.UTF-8
+  echo "listen_addresses='*'" >> "$PGDATA/postgresql.conf"
+  echo "host all all 0.0.0.0/0 trust" >> "$PGDATA/pg_hba.conf"
+fi
+exec $PGBIN/postgres -D "$PGDATA" -c unix_socket_directories=/tmp
+"""]
+base = "debian@13"
+
+[dependencies]
+postgresql17 = "17"
+
+[volumes]
+data = { path = "/var/lib/postgresql/data" }
+
+[ports]
+db = 5432
+
+[health]
+port = 5432
+grace = "30s"
+
+[restart]
+policy = "on-failure"
+
+[sources]
+default = "https://registry.plybox.sh/ply/{package}"

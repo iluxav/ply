@@ -258,6 +258,14 @@ The operator's word wins, the author's claim fills in. Shipping a claim
 never changes what an app can do on its own — the default is `audit`,
 which only makes what it does visible.
 
+The host's own `ip ply` table also carries ply's NAT: the masquerade for
+the bridge, a `pub_hairpin` chain (bridge-to-bridge flows that were DNATed
+get the host as their visible source, so replies come back through
+conntrack), and one `pub_<port>_p<pid>_pre`/`_out` pair per published port
+of each running parent — the kernel path for `--publish`. A parent removes
+its pair on exit, and the next parent to publish a port removes any left by
+a crashed predecessor. `nft list table ip ply` shows all of it.
+
 ### Always allowed, in every mode
 
 - loopback, where the forwarder listens;

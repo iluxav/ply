@@ -193,11 +193,20 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
         std::thread::spawn(move || {
             crate::runtime::publish::serve(listener, serve_pool, same_network)
         });
+        // Rootful Linux hands the byte-moving to the kernel (DNAT that follows
+        // the pool); the listener above then only sees traffic the kernel did
+        // not claim — loopback, and an empty pool. Everywhere else it relays.
+        let kernel = same_network
+            .then(|| backend.kernel_publish(spec))
+            .flatten()
+            .map(|mirror| pool.mirror(mirror))
+            .is_some();
         eprintln!(
-            "ply: publishing {}:{} → {} pool",
+            "ply: publishing {}:{} → {} pool{}",
             spec.scope.bind_addr(facts.loopback),
             spec.host_port,
             ctx.manifest.package.name,
+            if kernel { " (kernel dnat)" } else { "" },
         );
         publishing.push(PublishWiring { pool, spec: *spec });
     }
@@ -771,8 +780,11 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                     restarts,
                     &publishing,
                 )
-                .and_then(|instance| {
+                .and_then(|mut instance| {
                     if wait_healthy(&ctx, &instance) {
+                        // Healthy means accepting: seat it now rather than a
+                        // loop turn later, so the roll never runs one short.
+                        instance.membership.join(instance.n);
                         Ok(instance)
                     } else {
                         let app = instance.app.clone();
@@ -844,12 +856,27 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
             }
         }
 
+        // Seat every instance that has started accepting connections since
+        // the last turn; until then it takes no traffic.
+        for instance in instances.iter_mut() {
+            if !instance.membership.joined()
+                && instance
+                    .membership
+                    .ready(std::time::Duration::from_millis(100))
+            {
+                instance.membership.join(instance.n);
+            }
+        }
+
         if instances.is_empty() && pending.is_empty() {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(150));
     }
     drop(instances); // unmount, remove state + hosts entries
+    for wiring in &publishing {
+        wiring.pool.teardown_mirror(); // the kernel's DNAT chains go with the parent
+    }
 
     // The app's final stop: this parent's last instance is gone (the loop
     // above only ever exits once `instances` is empty and staying empty).
@@ -868,16 +895,33 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
 
 /// Deliberate stop: the declared signal, up to 10s to comply, then KILL.
 /// Reaps the instance so its death never reaches the policy loop.
+/// How long a retiring instance keeps serving the connections it already
+/// has before it is told to stop — new ones stopped arriving at the start of
+/// the window.
+const DRAIN: std::time::Duration = std::time::Duration::from_secs(1);
+
 fn stop_instance(mut instance: Running, stop_signal: Signal) {
-    // The in-container init forwards whatever it receives, so an image that
-    // wants SIGQUIT (nginx) or SIGWINCH (httpd) gets to drain instead of
-    // being SIGKILLed when the 10s patience below runs out.
-    crate::runtime::supervise::stop_with_patience(
-        instance.inner.as_mut(),
-        stop_signal,
-        std::time::Duration::from_secs(10),
-        std::time::Duration::from_millis(100),
-    );
+    let Running {
+        membership,
+        n,
+        inner,
+        ..
+    } = &mut instance;
+    // Out of every pool first — relay and kernel alike stop feeding it —
+    // then a moment for in-flight requests, then the signal. Without this
+    // order a roll drops the requests that land between signal and Drop.
+    let pools = membership.pools();
+    crate::runtime::publish::drain_then(&pools, *n, DRAIN, || {
+        // The in-container init forwards whatever it receives, so an image
+        // that wants SIGQUIT (nginx) or SIGWINCH (httpd) gets to drain
+        // instead of being SIGKILLed when the 10s patience runs out.
+        crate::runtime::supervise::stop_with_patience(
+            inner.as_mut(),
+            stop_signal,
+            std::time::Duration::from_secs(10),
+            std::time::Duration::from_millis(100),
+        );
+    });
     drop(instance); // pools, state, params tree, then the backend's teardown
 }
 
@@ -1405,9 +1449,10 @@ struct Running {
     app: String,
     n: u32,
     inner: Box<dyn crate::runtime::backend::Instance>,
-    /// Published pools this instance is registered in (removed on Drop, so
-    /// every stop path — death, roll, shutdown — also stops traffic).
-    pools: Vec<crate::runtime::publish::Pool>,
+    /// This instance's seat in the published pools: taken by the run loop
+    /// once the instance accepts connections, given back on Drop, so every
+    /// stop path — death, roll, shutdown — also stops traffic.
+    membership: crate::runtime::publish::Membership,
 }
 
 /// How many instances of `app` are alive right now, straight from the state
@@ -1424,9 +1469,7 @@ fn live_instance_count(app: &str) -> usize {
 
 impl Drop for Running {
     fn drop(&mut self) {
-        for pool in &self.pools {
-            pool.remove(self.n);
-        }
+        self.membership.leave(self.n);
         InstanceState::remove(&self.app, self.n);
         // Live params tree: state=stopped once nothing of this app is left
         // running. InstanceState::remove just above already dropped this
@@ -1845,32 +1888,35 @@ fn launch_instance(
         });
     }
 
-    // Join the published pool: rootful backends live on the bridge at the
-    // shared instance port; rootless ones on their injected loopback port;
-    // a microVM has no host-dialable address at all and hands over a
-    // connector that goes through the switch (`Instance::connector`).
-    let pools: Vec<crate::runtime::publish::Pool> = publish
-        .iter()
-        .enumerate()
-        .map(|(i, wiring)| {
-            let backend = match injected_port {
-                // only the first spec gets the injected loopback port, and
-                // that one really is a host address: ply forwarded it there.
-                Some(port) if i == 0 => crate::runtime::publish::connector_for(
-                    std::net::SocketAddr::from(([127, 0, 0, 1], port)),
-                ),
-                _ => instance.connector(wiring.spec.instance_port),
-            };
-            wiring.pool.insert(n, backend);
-            wiring.pool.clone()
-        })
-        .collect();
+    // Where the published pools will reach this instance: rootful backends
+    // live on the bridge at the shared instance port; rootless ones on their
+    // injected loopback port; a microVM has no host-dialable address at all
+    // and hands over a connector that goes through the switch
+    // (`Instance::connector`). It JOINS the pools later, once that address
+    // accepts a connection — the run loop checks each turn.
+    let membership = crate::runtime::publish::Membership::new(
+        publish
+            .iter()
+            .enumerate()
+            .map(|(i, wiring)| {
+                let backend = match injected_port {
+                    // only the first spec gets the injected loopback port, and
+                    // that one really is a host address: ply forwarded it there.
+                    Some(port) if i == 0 => crate::runtime::publish::connector_for(
+                        std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+                    ),
+                    _ => instance.connector(wiring.spec.instance_port),
+                };
+                (wiring.pool.clone(), backend)
+            })
+            .collect(),
+    );
 
     Ok(Running {
         app,
         n,
         inner: instance,
-        pools,
+        membership,
     })
 }
 

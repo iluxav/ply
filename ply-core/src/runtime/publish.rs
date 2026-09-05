@@ -196,12 +196,22 @@ pub fn connector_for(addr: SocketAddr) -> Arc<dyn Connector> {
     Arc::new(AddrConnector(addr))
 }
 
+/// Something that follows the pool: on Linux rootful, the kernel's DNAT rule
+/// for this port (`ns::kpublish`). Told the full backend list after every
+/// change, in slot order, so it never has to diff.
+pub trait PoolMirror: Send + Sync {
+    fn sync(&self, backends: &[SocketAddr]);
+    /// Undo whatever `sync` installed. Called once, when the parent exits.
+    fn teardown(&self) {}
+}
+
 /// The live backend set, shared between the run loop (writer) and the
 /// accept loop (reader). Keyed by slot so removal is exact.
 #[derive(Clone, Default)]
 pub struct Pool {
     backends: Arc<Mutex<BTreeMap<u32, Arc<dyn Connector>>>>,
     counter: Arc<AtomicUsize>,
+    mirror: Arc<Mutex<Option<Arc<dyn PoolMirror>>>>,
 }
 
 impl Pool {
@@ -211,10 +221,38 @@ impl Pool {
 
     pub fn insert(&self, slot: u32, backend: Arc<dyn Connector>) {
         self.backends.lock().unwrap().insert(slot, backend);
+        self.sync_mirror();
     }
 
     pub fn remove(&self, slot: u32) {
         self.backends.lock().unwrap().remove(&slot);
+        self.sync_mirror();
+    }
+
+    /// Attach a mirror and bring it up to date at once.
+    pub fn mirror(&self, mirror: Arc<dyn PoolMirror>) {
+        *self.mirror.lock().unwrap() = Some(mirror);
+        self.sync_mirror();
+    }
+
+    pub fn teardown_mirror(&self) {
+        if let Some(m) = self.mirror.lock().unwrap().take() {
+            m.teardown();
+        }
+    }
+
+    fn sync_mirror(&self) {
+        let mirror = self.mirror.lock().unwrap().clone();
+        if let Some(m) = mirror {
+            let addrs: Vec<SocketAddr> = self
+                .backends
+                .lock()
+                .unwrap()
+                .values()
+                .map(|c| c.addr())
+                .collect();
+            m.sync(&addrs);
+        }
     }
 
     /// Backends in round-robin order: each call starts one position later.
@@ -231,6 +269,67 @@ impl Pool {
         out.extend_from_slice(&backends[..start]);
         out
     }
+}
+
+/// One instance's seat in the published pools — taken only once the instance
+/// is READY (its first published port accepts a connection), given back on
+/// stop. Before, a slot was routable from the moment it was spawned and the
+/// relay's retry-the-next-backend hid the refusals; the kernel has no retry.
+pub struct Membership {
+    pools: Vec<(Pool, Arc<dyn Connector>)>,
+    joined: bool,
+}
+
+impl Membership {
+    pub fn new(pools: Vec<(Pool, Arc<dyn Connector>)>) -> Self {
+        Membership {
+            pools,
+            joined: false,
+        }
+    }
+    /// Does the instance accept connections yet? The first published port
+    /// is the probe; with nothing published there is nothing to wait for.
+    pub fn ready(&self, timeout: Duration) -> bool {
+        match self.pools.first() {
+            None => true,
+            Some((_, backend)) => backend.connect(timeout).is_ok(),
+        }
+    }
+    pub fn joined(&self) -> bool {
+        self.joined
+    }
+    pub fn join(&mut self, slot: u32) {
+        if self.joined {
+            return;
+        }
+        for (pool, backend) in &self.pools {
+            pool.insert(slot, backend.clone());
+        }
+        self.joined = true;
+    }
+    pub fn leave(&mut self, slot: u32) {
+        for (pool, _) in &self.pools {
+            pool.remove(slot);
+        }
+        self.joined = false;
+    }
+    pub fn pools(&self) -> Vec<Pool> {
+        self.pools.iter().map(|(p, _)| p.clone()).collect()
+    }
+}
+
+/// Take slot `n` out of every pool — no new connection is routed to it from
+/// here on, in the relay or in the kernel — let the ones in flight finish for
+/// `drain`, then `stop`. The instance still owes a graceful shutdown for the
+/// connections it holds; this only stops feeding it new ones first.
+pub fn drain_then(pools: &[Pool], n: u32, drain: Duration, stop: impl FnOnce()) {
+    for pool in pools {
+        pool.remove(n);
+    }
+    if !pools.is_empty() && !drain.is_zero() {
+        std::thread::sleep(drain);
+    }
+    stop();
 }
 
 /// Connect to `addr`, falling back to the other loopback family.
@@ -392,6 +491,111 @@ fn relay(client: TcpStream, upstream: Box<dyn Upstream>) {
 mod tests {
     use super::*;
     use std::io::{Read, Write};
+
+    #[derive(Default)]
+    struct Recording(Mutex<Vec<Vec<SocketAddr>>>);
+    impl PoolMirror for Recording {
+        fn sync(&self, backends: &[SocketAddr]) {
+            self.0.lock().unwrap().push(backends.to_vec());
+        }
+    }
+
+    /// The kernel path only works if it sees the pool exactly as the relay
+    /// does: attach → immediate sync of the current state, then one sync
+    /// per change, backends in slot order.
+    #[test]
+    fn a_mirror_sees_the_pool_now_and_after_every_change_in_slot_order() {
+        let b2: SocketAddr = "10.77.0.3:8080".parse().unwrap();
+        let b1: SocketAddr = "10.77.0.2:8080".parse().unwrap();
+        let pool = Pool::new();
+        pool.insert(2, connector_for(b2));
+        let rec = Arc::new(Recording::default());
+        pool.mirror(rec.clone());
+        pool.insert(1, connector_for(b1));
+        pool.remove(2);
+        pool.remove(2); // idempotent: gone already, still reported
+        assert_eq!(
+            *rec.0.lock().unwrap(),
+            vec![vec![b2], vec![b1, b2], vec![b1], vec![b1]]
+        );
+    }
+
+    /// A slot must not be routable before its port accepts: the relay used
+    /// to retry the next backend on a refused connect, the kernel cannot,
+    /// and 57 requests in the 2026-09-05 roll hit an instance still
+    /// starting.
+    #[test]
+    fn an_instance_joins_its_pools_only_once_its_port_accepts() {
+        let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = probe.local_addr().unwrap();
+        drop(probe); // the port is known but nobody listens yet
+        let pool = Pool::new();
+        let rec = Arc::new(Recording::default());
+        pool.mirror(rec.clone());
+        let mut m = Membership::new(vec![(pool.clone(), connector_for(addr))]);
+        assert!(!m.ready(Duration::from_millis(100)));
+        assert!(!m.joined());
+        assert_eq!(
+            rec.0.lock().unwrap().last().unwrap(),
+            &Vec::<SocketAddr>::new()
+        );
+        let _listening = TcpListener::bind(addr).unwrap();
+        assert!(m.ready(Duration::from_millis(500)));
+        m.join(7);
+        assert!(m.joined());
+        assert_eq!(rec.0.lock().unwrap().last().unwrap(), &vec![addr]);
+        m.join(7); // idempotent
+        assert_eq!(
+            rec.0.lock().unwrap().len(),
+            2,
+            "a second join is not a second sync"
+        );
+        m.leave(7);
+        assert_eq!(
+            rec.0.lock().unwrap().last().unwrap(),
+            &Vec::<SocketAddr>::new()
+        );
+        assert!(!m.joined());
+    }
+
+    /// Nothing published: there is nothing to wait for.
+    #[test]
+    fn with_no_pools_an_instance_is_always_ready() {
+        let m = Membership::new(vec![]);
+        assert!(m.ready(Duration::from_millis(1)));
+    }
+
+    /// A retiring instance must be out of every pool BEFORE it is told to
+    /// stop, or new connections keep landing on a process that is shutting
+    /// down (131 dropped requests in the 2026-09-05 bench roll).
+    #[test]
+    fn drain_then_removes_the_slot_from_every_pool_before_stopping() {
+        let b1: SocketAddr = "10.77.0.2:8080".parse().unwrap();
+        let b2: SocketAddr = "10.77.0.3:8080".parse().unwrap();
+        let pools = vec![Pool::new(), Pool::new()];
+        let recs: Vec<Arc<Recording>> = pools
+            .iter()
+            .map(|p| {
+                p.insert(1, connector_for(b1));
+                p.insert(2, connector_for(b2));
+                let r = Arc::new(Recording::default());
+                p.mirror(r.clone());
+                r
+            })
+            .collect();
+        let stopped = std::sync::atomic::AtomicBool::new(false);
+        drain_then(&pools, 1, Duration::from_millis(0), || {
+            for r in &recs {
+                assert_eq!(
+                    r.0.lock().unwrap().last().unwrap(),
+                    &vec![b2],
+                    "slot 1 still routed at stop time"
+                );
+            }
+            stopped.store(true, Ordering::SeqCst);
+        });
+        assert!(stopped.load(Ordering::SeqCst));
+    }
 
     /// The allocator must skip a port an app could not bind.
     ///

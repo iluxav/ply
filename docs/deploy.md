@@ -33,14 +33,35 @@ What happens:
 
 1. ply writes a deploy pointer file and sends the app's run parent `SIGHUP`
 2. The parent preps the new version while the old instances keep serving
-3. Instances roll **one at a time**: stop old → start new → wait for the
-   health gate
+3. Instances roll **one at a time**: the old instance leaves the published
+   pool (no new connection reaches it from this moment, in the kernel's
+   DNAT or the relay), gets one second for what is in flight, then its stop
+   signal; the new one starts and **joins the pool only once it passes the
+   health gate** — before that, nothing is routed to it
 4. A failed gate **aborts the roll and reverts that slot** — untouched
    instances never left the old version
 
 Zero downtime with `--scale ≥ 2`, and the failure mode is "some instances
 still on the old version," never "everything down." `--timeout <s>` bounds
 how long to watch before reporting partial progress.
+
+The same readiness rule holds for every launch, not only rolls: an instance
+takes traffic once its first published port accepts a connection, so a
+scale-up or a crash-restart never routes a request to a process that is
+still starting.
+
+**What the app owes.** ply can stop feeding an instance new connections; it
+cannot end the keep-alive connections clients already hold on it. On the
+stop signal, a well-behaved server marks every further response
+`Connection: close` — the client hangs up after reading it and reconnects,
+to the other instances — waits until its open connections have drained,
+and only then shuts down. What it must **not** do is close idle connections
+itself: under load "idle" is the instant a client's next request is already
+on the wire, and that request is lost. Go's `SetKeepAlivesEnabled(false)`
+and `Shutdown` both close idle connections, so call `Shutdown` only after
+the drain; `bench/api/main.go` has the pattern. Measured on the bench: a
+rolling restart at scale 2 under 655k requests/s, 39 million requests,
+zero lost — with the idle-close variant, one request per connection was.
 
 There's no magic: you can watch the pointer file and per-instance state
 files change under `/run/ply/` while it happens.

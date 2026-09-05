@@ -88,7 +88,9 @@ ply run docker://mongo:7           # OCI import, converted once and cached
 ```
 
 **`--publish`** — `ADDR` is `internal`, `public` (the default) or an IPv4
-address:
+address. Rootful, new connections are DNATed to instances by the kernel
+(`(kernel dnat)` on the publishing line); rootless, on macOS, and for
+`127.0.0.1` the parent relays them itself — see [Running](/docs/running/):
 
 ```sh
 ply run api.img --scale 4 --publish 8080          # 0.0.0.0:8080
