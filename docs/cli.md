@@ -72,6 +72,7 @@ ply run WHAT [--scale N] [-e K=V]… [--env-file F] [--link HOST:CONTAINER]
             [--publish [ADDR:]PORT[:INSTANCE_PORT]]  # parent binds it, L4-balances the pool
             [--after APP]… [--after-timeout 60s]     # wait for APP, and learn its address
             [--source SPEC]                          # registry for name references
+            [--egress MODE] [--egress-allow ENTRY]…  # outbound policy — see below
             [--privileged]                           # keep everything; debugging only
 ```
 Foreground, signals work, exit code propagates. `WHAT` is any of four
@@ -117,6 +118,15 @@ ply computes the address, so it is right rootless (loopback) and rootful
 (bridge gateway) without the author guessing. An explicit `[env]` or `-e`
 wins; an unpublished dependency injects nothing.
 
+**`--egress`/`--egress-allow`** — the operator's word on outbound policy,
+over whatever the image's `[network] egress` claims: `--egress` sets the
+mode (`off`, `audit`, `enforce`; defaults to `audit` when the manifest
+declares `[network] egress`, else `off`), `--egress-allow` (repeatable)
+replaces the manifest's list — pass `--egress-allow ""` for an empty one.
+`ply run` prints the effective policy at start, e.g.
+`ply: egress enforce, 1 entry (override)`; see
+[Security & rootless](/docs/security/#egress-the-contract).
+
 **`--privileged`** — skips rights stripping entirely: capabilities kept,
 `no_new_privs` off, seccomp off. For debugging and triaging imports. Use
 `[package] capabilities` for anything you intend to keep running.
@@ -135,12 +145,20 @@ ply ps [--json]
 ply stats [APP|APP.N] [--json] [--sample-ms MS]
 ply exec APP[.N] CMD…
 ply logs [APP[.N]] [-f] [-n LINES]
+ply egress APP [--follow] [--blocked] [--json]
 ```
 
 **`ply logs`** reads the bounded per-instance ring the run parent tees
 (512 KiB ×2 per instance, in the run dir) — identical foreground, under
 systemd, rootless. journald remains the unbounded archive on systemd hosts.
 No APP lists what has logs; `-f` follows.
+
+**`ply egress`** reads the audit log every instance of `APP` has been
+writing since it started (`off` writes none): a table of destination,
+name, port, protocol, connection count, first/last seen, and verdict.
+`--blocked` narrows to blocked connections and refused names; `--follow`
+tails new records; `--json` prints the raw log lines. See
+[Security & rootless](/docs/security/#egress-the-contract).
 
 ## Lifecycle
 

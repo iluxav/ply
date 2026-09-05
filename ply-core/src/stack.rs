@@ -60,6 +60,10 @@ pub struct Member {
     pub domain: Vec<String>,
     /// `--scale`.
     pub scale: Option<u32>,
+    /// `egress = "audit"` or `egress = { mode = …, allow = [...] }` — the
+    /// operator's word on what this member may reach, over whatever its
+    /// image's manifest declares. `allow` REPLACES the manifest's list.
+    pub egress: Option<crate::egress::EgressOverride>,
 }
 
 #[derive(Debug)]
@@ -510,7 +514,7 @@ pub fn parse(text: &str, path: &Path) -> Result<Option<Stack>> {
 }
 
 const MEMBER_KEYS: &[&str] = &[
-    "run", "name", "env", "e", "after", "publish", "volume", "domain", "scale", "params",
+    "run", "name", "env", "e", "after", "publish", "volume", "domain", "scale", "params", "egress",
 ];
 
 /// A member's environment: `env` is the spelling, `e` the original alias.
@@ -595,6 +599,54 @@ fn parse_member(index: usize, entry: &toml::Value, path: &Path) -> Result<Member
         }
     };
 
+    let egress = match table.get("egress") {
+        None => None,
+        Some(toml::Value::String(mode)) => Some(crate::egress::EgressOverride {
+            mode: Some(mode.parse().map_err(|e| {
+                Error::Manifest(format!("{}: member `{name}`: {e}", path.display()))
+            })?),
+            allow: None,
+        }),
+        Some(toml::Value::Table(t)) => {
+            for key in t.keys() {
+                if key != "mode" && key != "allow" {
+                    return Err(Error::Manifest(format!(
+                        "{}: member `{name}`: `egress` accepts `mode` and `allow`, not `{key}`",
+                        path.display()
+                    )));
+                }
+            }
+            let mode = match t.get("mode") {
+                None => None,
+                Some(toml::Value::String(m)) => Some(m.parse().map_err(|e| {
+                    Error::Manifest(format!("{}: member `{name}`: {e}", path.display()))
+                })?),
+                Some(_) => {
+                    return Err(Error::Manifest(format!(
+                        "{}: member `{name}`: `egress.mode` must be a string",
+                        path.display()
+                    )))
+                }
+            };
+            let allow = match t.get("allow") {
+                None => None,
+                Some(v) => {
+                    let raw = string_list(Some(v), "egress.allow", &name, path)?;
+                    Some(crate::egress::entry::parse_list(&raw).map_err(|e| {
+                        Error::Manifest(format!("{}: member `{name}`: {e}", path.display()))
+                    })?)
+                }
+            };
+            Some(crate::egress::EgressOverride { mode, allow })
+        }
+        Some(_) => {
+            return Err(Error::Manifest(format!(
+                "{}: member `{name}`: `egress` must be a mode string (\"off\" | \"audit\" | \"enforce\") or a table {{ mode = …, allow = [...] }}",
+                path.display()
+            )))
+        }
+    };
+
     Ok(Member {
         name,
         source,
@@ -605,6 +657,7 @@ fn parse_member(index: usize, entry: &toml::Value, path: &Path) -> Result<Member
         volume,
         domain,
         scale,
+        egress,
     })
 }
 
@@ -1823,6 +1876,55 @@ scale = 2
     }
 
     #[test]
+    fn a_member_egress_override_parses_its_three_spellings() {
+        let text = "[[app]]\nrun = \"postgres@17\"\nname = \"db\"\negress = { mode = \"enforce\" }\n\n[[app]]\nrun = \"redis@8\"\nname = \"cache\"\negress = { mode = \"audit\", allow = [\"*.stripe.com\", \"1.1.1.1\"] }\n\n[[app]]\nrun = \"nginx@1\"\nname = \"edge\"\negress = \"off\"\n";
+        let stack = parse(text, Path::new("stack.toml")).unwrap().unwrap();
+        let by_name = |n: &str| {
+            stack
+                .members
+                .iter()
+                .find(|m| m.name == n)
+                .unwrap()
+                .egress
+                .clone()
+                .unwrap()
+        };
+        assert_eq!(
+            by_name("db"),
+            crate::egress::EgressOverride {
+                mode: Some(crate::egress::Mode::Enforce),
+                allow: None
+            }
+        );
+        let cache = by_name("cache");
+        assert_eq!(cache.mode, Some(crate::egress::Mode::Audit));
+        assert_eq!(cache.allow.unwrap().len(), 2);
+        assert_eq!(
+            by_name("edge"),
+            crate::egress::EgressOverride {
+                mode: Some(crate::egress::Mode::Off),
+                allow: None
+            }
+        );
+    }
+
+    #[test]
+    fn a_bad_member_egress_names_the_member() {
+        let text =
+            "[[app]]\nrun = \"postgres@17\"\nname = \"db\"\negress = { mode = \"strict\" }\n";
+        let err = parse(text, Path::new("stack.toml"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("member `db`"), "{err}");
+        assert!(err.contains("expected off, audit or enforce"), "{err}");
+        let text = "[[app]]\nrun = \"postgres@17\"\nname = \"db\"\negress = 5\n";
+        let err = parse(text, Path::new("stack.toml"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("`egress`"), "{err}");
+    }
+
+    #[test]
     fn rejects_cycles() {
         let err = parse(
             "[[app]]\nrun = \"x\"\nname=\"a\"\nafter = \"b\"\n[[app]]\nrun = \"y\"\nname=\"b\"\nafter = \"a\"\n",
@@ -2066,6 +2168,7 @@ scale = 2
             volume: vec![],
             domain: vec![],
             scale: None,
+            egress: None,
         };
         let e = env(&[("X", "1")]);
         let out = expand_member_env(&m, &e).unwrap();
@@ -2411,6 +2514,7 @@ mod member_hole_tests {
             volume: vec![],
             domain: domain.iter().map(|s| s.to_string()).collect(),
             scale: None,
+            egress: None,
         }
     }
 

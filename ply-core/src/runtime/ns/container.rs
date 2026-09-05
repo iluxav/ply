@@ -56,7 +56,24 @@ pub struct ContainerSpec {
     /// so the parent can copy the stream to its own stdout AND the bounded
     /// log ring. None = inherit (craft shells stay interactive).
     pub log_fd: Option<std::os::fd::OwnedFd>,
+    /// An egress contract is being kept for this instance: its resolver is
+    /// the forwarder the parent started on 127.0.0.53 inside this netns,
+    /// not the host's file, because that is where the policy is applied.
+    /// The parent confirms with its release byte that the forwarder really
+    /// came up — see `RELEASE_UNOBSERVED`.
+    pub egress: bool,
 }
+
+/// The parent's release byte: the cgroup, the network and (when there is a
+/// contract) the egress forwarder are all up — proceed.
+pub const RELEASE: u8 = 1;
+/// Proceed, but the egress forwarder did NOT come up. Only an `audit`
+/// contract gets this far (`enforce` kills the child instead), and it means
+/// exactly one thing to the child: resolve through the host's nameservers as
+/// if no contract had been asked for. Without it the app would be handed a
+/// resolver address nothing listens on and lose DNS entirely — which is not
+/// what "running unobserved" promises.
+pub const RELEASE_UNOBSERVED: u8 = 2;
 
 /// Child entry point. Never returns on success (execve).
 pub fn child_main(spec: &ContainerSpec) -> isize {
@@ -67,14 +84,14 @@ pub fn child_main(spec: &ContainerSpec) -> isize {
         let _ = nix::unistd::dup2_stderr(fd);
     }
     let mut byte = [0u8; 1];
-    match nix::unistd::read(&spec.sync_rx, &mut byte) {
-        Ok(1) => {}
+    let egress = match nix::unistd::read(&spec.sync_rx, &mut byte) {
+        Ok(1) => spec.egress && byte[0] != RELEASE_UNOBSERVED,
         _ => {
             // parent died or failed before releasing us
             return 125;
         }
-    }
-    match setup_and_exec(spec) {
+    };
+    match setup_and_exec(spec, egress) {
         Ok(never) => never,
         Err(e) => {
             eprintln!("ply: container setup failed: {e}");
@@ -119,7 +136,9 @@ fn bind_ro(source: &Path, target: &Path) -> std::result::Result<(), nix::errno::
     Ok(())
 }
 
-fn setup_and_exec(spec: &ContainerSpec) -> Result<isize> {
+/// `egress`: `spec.egress` as the parent's release byte confirmed it — the
+/// forwarder is listening, so it is this instance's only resolver.
+fn setup_and_exec(spec: &ContainerSpec, egress: bool) -> Result<isize> {
     mount::make_all_private()?;
 
     let root = spec.instance_dir.join("root");
@@ -138,9 +157,15 @@ fn setup_and_exec(spec: &ContainerSpec) -> Result<isize> {
 
     let host_resolv = std::fs::read_to_string("/etc/resolv.conf").unwrap_or_default();
     let upstream = std::fs::read_to_string("/run/systemd/resolve/resolv.conf").ok();
-    let (resolv, warning) = match &spec.dns {
-        Some(server) => (resolv_conf_via(&host_resolv, server), None),
-        None => resolv_conf_for_instance(&host_resolv, upstream.as_deref(), spec.rootless),
+    let (resolv, warning) = if egress {
+        // The forwarder IS the policy: every name the app looks up has to
+        // pass through it, so it is the only resolver this file may name.
+        (resolv_conf_via(&host_resolv, EGRESS_FORWARDER), None)
+    } else {
+        match &spec.dns {
+            Some(server) => (resolv_conf_via(&host_resolv, server), None),
+            None => resolv_conf_for_instance(&host_resolv, upstream.as_deref(), spec.rootless),
+        }
     };
     if let Some(w) = warning {
         eprintln!("ply: warning: {w}");
@@ -669,6 +694,35 @@ pub fn resolv_conf_for_instance(
     (out, None)
 }
 
+/// The address the per-instance egress forwarder listens on, and the sole
+/// nameserver an instance under a contract is given. Loopback inside the
+/// instance's own netns: nothing outside it can reach or spoof it.
+pub const EGRESS_FORWARDER: &str = "127.0.0.53";
+
+/// The nameservers a resolv.conf names, IPv4 only and never loopback — a
+/// loopback address in there is a stub the instance cannot reach, which is
+/// exactly the case `resolv_conf_for_instance` warns about.
+fn upstreams_in(text: &str) -> Vec<std::net::Ipv4Addr> {
+    text.lines()
+        .filter_map(|l| l.trim().strip_prefix("nameserver"))
+        .filter_map(|r| r.trim().parse::<std::net::Ipv4Addr>().ok())
+        .filter(|a| !a.is_loopback())
+        .collect()
+}
+
+/// Where the egress forwarder sends what it is willing to resolve: the
+/// nameservers this instance would have been given had it been left to
+/// talk to them itself. Empty when there are none to hand it — which is
+/// the same condition `resolv_conf_for_instance` warns about, and which
+/// the forwarder reports as SERVFAIL rather than guessing a public
+/// resolver the operator never chose.
+pub fn upstream_resolvers(rootless: bool) -> Vec<std::net::Ipv4Addr> {
+    let host = std::fs::read_to_string("/etc/resolv.conf").unwrap_or_default();
+    let upstream = std::fs::read_to_string("/run/systemd/resolve/resolv.conf").ok();
+    let (text, _) = resolv_conf_for_instance(&host, upstream.as_deref(), rootless);
+    upstreams_in(&text)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -706,6 +760,27 @@ mod tests {
             text.matches("nameserver").count(),
             1,
             "duplicates collapsed: {text}"
+        );
+    }
+
+    #[test]
+    fn upstream_resolvers_are_the_nameservers_the_instance_would_get() {
+        let (text, _) = resolv_conf_for_instance(
+            "nameserver 127.0.0.53\n",
+            Some("nameserver 8.8.8.8\nnameserver 1.0.0.1\n"),
+            false,
+        );
+        assert_eq!(
+            upstreams_in(&text),
+            vec![
+                "8.8.8.8".parse::<std::net::Ipv4Addr>().unwrap(),
+                "1.0.0.1".parse().unwrap()
+            ]
+        );
+        let (text, _) = resolv_conf_for_instance("nameserver 9.9.9.9\nsearch lan\n", None, false);
+        assert_eq!(
+            upstreams_in(&text),
+            vec!["9.9.9.9".parse::<std::net::Ipv4Addr>().unwrap()]
         );
     }
 

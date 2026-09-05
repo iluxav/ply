@@ -50,7 +50,8 @@ Every field is a `ply run` flag: `run`→the image, `name`→`--name`, `env`→`
 (spelled `e` in older files; both work, but not both on one member),
 `params`→per-param overrides for the member's own declared `[params]`,
 `after`→`--after`, `publish`→`--publish`, `volume`→`--volume`,
-`domain`→`--domain`, `scale`→`--scale`. There is no stack concept beyond
+`domain`→`--domain`, `scale`→`--scale`, `egress`→`--egress`/
+`--egress-allow`. There is no stack concept beyond
 "these runs, in dependency order." See the full [model](/docs/model/).
 
 ## Members
@@ -73,6 +74,28 @@ the image name). That identity is what `after`, the `<member>.ply` bridge
 name, `ply ps`, and `ply exec` all key on — so two members may even run the
 *same* image under different names. `after` names other members; cycles are a
 build error, not a hang.
+
+### `egress` — the operator's word on outbound policy
+
+A member's `run =` image may declare a `[network] egress` claim (see
+[Security & rootless](/docs/security/#egress-the-contract)); `egress` on
+the member is the stack's word over it:
+
+```toml
+[[app]]
+run    = "postgres@17"
+name   = "db"
+egress = { mode = "enforce" }                     # enforce the keg's declared list
+egress = { mode = "enforce", allow = [] }         # override: nothing at all
+egress = { mode = "audit",   allow = ["*.stripe.com"] }
+egress = "off"                                    # shorthand for { mode = "off" }
+```
+
+`allow`, when present, replaces the manifest's list for that member alone;
+`mode` is `off`, `audit`, or `enforce`. Omitting `egress` on a member
+leaves the effective policy to fall out of the claim alone — `audit` when
+the manifest declares `[network] egress`, `off` otherwise. `ply up --plan`
+prints each member's effective policy on its own `egress:` line.
 
 ## `{app.param}` — reading a neighbor's params
 

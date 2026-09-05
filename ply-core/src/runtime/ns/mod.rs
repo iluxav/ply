@@ -6,6 +6,7 @@
 
 pub mod cgroup;
 pub mod container;
+pub mod egress;
 pub mod exec;
 pub mod loopdev;
 pub mod mount;
@@ -62,6 +63,17 @@ impl NsBackend {
 impl Backend for NsBackend {
     fn capability(&self) -> std::result::Result<(), String> {
         Ok(()) // namespaces are a kernel feature every supported Linux has
+    }
+
+    /// Rootful is the only shape that can keep a contract: the policy is a
+    /// table in the instance's OWN network namespace, and a rootless run
+    /// shares one network with everything else on the box.
+    fn egress_support(&self) -> Option<&'static str> {
+        if self.rootless {
+            Some("egress policy needs a network per instance — rootless runs unenforced and unobserved (use a rootful host to audit or enforce)")
+        } else {
+            None
+        }
     }
 
     fn preflight(&self, opts: RunOptions) -> Result<RunOptions> {
@@ -273,6 +285,7 @@ impl Backend for NsBackend {
             local_aliases: spec.local_aliases.clone(),
             run_user: spec.run_user.clone(),
             log_fd: Some(log_tx),
+            egress: spec.egress.is_some(),
         };
 
         let mut stack = vec![0u8; 1024 * 1024];
@@ -328,6 +341,56 @@ impl Backend for NsBackend {
             }
         };
 
+        // The egress contract, once the network exists and before the child
+        // is released: the table has to be in place before the app can send
+        // its first packet, and the thread needs nothing but the pid. In
+        // `enforce` a failure here is the launch's failure — an app that
+        // would run without its contract is not the app that was asked for;
+        // in `audit` it is a warning, because audit promises observation and
+        // never containment.
+        let egress = match &spec.egress {
+            None => None,
+            Some(policy) => {
+                // An app that keeps CAP_NET_RAW can build its own packets
+                // and speak straight to the wire, and one with
+                // CAP_NET_ADMIN or CAP_SYS_ADMIN can edit or flush the
+                // table itself: with any of them the contract is theatre.
+                // `capabilities = "oci"` — every imported Docker image —
+                // keeps CAP_NET_RAW, so this is the common case, not a
+                // corner one.
+                if let Some(cap) = egress_blocking_caps(&container.keep_caps, spec.privileged) {
+                    let how = if spec.privileged {
+                        format!("{app} runs --privileged")
+                    } else {
+                        format!("{app} keeps {cap} (capabilities = \"oci\" keeps CAP_NET_RAW)")
+                    };
+                    if policy.mode == crate::egress::Mode::Enforce {
+                        drop(sync_tx); // EOF → the parked child aborts
+                        let _ = signal::kill(child, Signal::SIGKILL);
+                        let _ = waitpid(child, None);
+                        return Err(Error::Runtime(format!(
+                            "egress policy: enforce needs an app without CAP_NET_RAW/CAP_NET_ADMIN — {how}; list capabilities without it, or run with --egress audit"
+                        )));
+                    }
+                    eprintln!("ply: warning: egress: {app} keeps {cap} — an app with it can bypass observation");
+                }
+                let upstreams = container::upstream_resolvers(rootless);
+                match egress::spawn(app, n, child.as_raw(), policy, upstreams) {
+                    Ok(handle) => Some(handle),
+                    Err(e) if policy.mode == crate::egress::Mode::Enforce => {
+                        drop(sync_tx); // EOF → the parked child aborts
+                        let _ = signal::kill(child, Signal::SIGKILL);
+                        let _ = waitpid(child, None);
+                        return Err(e);
+                    }
+                    Err(e) => {
+                        eprintln!("ply: warning: {e} — running unobserved");
+                        None
+                    }
+                }
+            }
+        };
+
         // Record the state file while the net lock is still held and the child
         // is still parked on the sync pipe, so the address is visible to
         // concurrent runs before anything can race it.
@@ -350,8 +413,15 @@ impl Backend for NsBackend {
         // the copier would never see EOF when the instance dies.
         drop(container.log_fd);
 
-        // Release the child.
-        let _ = nix::unistd::write(&sync_tx, &[1u8]);
+        // Release the child — telling it whether the forwarder it was going
+        // to resolve through is actually there. Only an `audit` contract can
+        // reach the release with no thread; `enforce` returned above.
+        let release = if spec.egress.is_some() && egress.is_none() {
+            container::RELEASE_UNOBSERVED
+        } else {
+            container::RELEASE
+        };
+        let _ = nix::unistd::write(&sync_tx, &[release]);
         drop(sync_tx);
 
         Ok(Launched {
@@ -362,6 +432,7 @@ impl Backend for NsBackend {
                 ip,
                 ended: None,
                 hosts_entry,
+                _egress: egress,
                 _cgroup: cgroup,
                 _guard: guard,
             }),
@@ -393,6 +464,10 @@ pub(crate) struct NsInstance {
     ip: Ipv4Addr,
     ended: Option<i32>,
     hosts_entry: bool,
+    /// The egress thread, declared FIRST so it stops before the cgroup goes:
+    /// drop order is declaration order, and a thread still talking to nft in
+    /// a namespace whose cgroup has been removed has nothing useful to say.
+    _egress: Option<egress::EgressHandle>,
     _cgroup: Option<Cgroup>,
     _guard: InstanceGuard,
 }
@@ -526,9 +601,64 @@ fn rootless_scale_guard(rootless: bool, scale: u32, has_ports: bool, publish: bo
     }
 }
 
+/// The capability, if any, that makes an egress contract unenforceable.
+///
+/// `CAP_NET_RAW` lets the app build its own packets (a raw socket is not
+/// subject to the connect() path the contract is written against, and the
+/// app can spoof the forwarder's source port); `CAP_NET_ADMIN` and
+/// `CAP_SYS_ADMIN` let it read, edit or flush the very table that holds
+/// the policy. `--privileged` keeps everything, so it fails on the first
+/// of them.
+///
+/// Names the FIRST offender it finds, in the order above — the message
+/// tells an operator which one to take out of the list.
+fn egress_blocking_caps(keep: &[caps::Capability], privileged: bool) -> Option<String> {
+    use caps::Capability::{CAP_NET_ADMIN, CAP_NET_RAW, CAP_SYS_ADMIN};
+    let blocking = [CAP_NET_RAW, CAP_NET_ADMIN, CAP_SYS_ADMIN];
+    if privileged {
+        return Some(CAP_NET_RAW.to_string());
+    }
+    blocking
+        .iter()
+        .find(|c| keep.contains(c))
+        .map(|c| c.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Enforce is void when the app can make its own packets or edit the
+    /// table. `capabilities = "oci"` keeps CAP_NET_RAW, so every imported
+    /// Docker image lands here.
+    #[test]
+    fn the_caps_that_make_an_egress_contract_theatre_are_named() {
+        use caps::Capability::*;
+        assert_eq!(egress_blocking_caps(&[], false), None);
+        assert_eq!(
+            egress_blocking_caps(&[CAP_CHOWN, CAP_SETUID, CAP_NET_BIND_SERVICE], false),
+            None,
+            "the capabilities a service user actually needs are fine"
+        );
+        assert_eq!(
+            egress_blocking_caps(&security::OCI_DEFAULT_CAPABILITIES, false).as_deref(),
+            Some("CAP_NET_RAW"),
+            "the oci preset is Docker's set, and Docker's set has NET_RAW"
+        );
+        assert_eq!(
+            egress_blocking_caps(&[CAP_NET_ADMIN], false).as_deref(),
+            Some("CAP_NET_ADMIN")
+        );
+        assert_eq!(
+            egress_blocking_caps(&[CAP_SYS_ADMIN], false).as_deref(),
+            Some("CAP_SYS_ADMIN")
+        );
+        // --privileged keeps the lot, whatever the list says
+        assert_eq!(
+            egress_blocking_caps(&[], true).as_deref(),
+            Some("CAP_NET_RAW")
+        );
+    }
 
     #[test]
     fn rootful_and_single_instance_pass() {

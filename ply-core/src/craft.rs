@@ -17,7 +17,7 @@ use crate::image::squashfs::{write_image, ExtraFile, TreeSource};
 use crate::lockfile::{LockedPackage, Lockfile};
 use crate::manifest::{Base, Manifest, Package};
 use crate::resolve::Resolver;
-use crate::runtime::ns::container::{child_main, ContainerSpec};
+use crate::runtime::ns::container::{self, child_main, ContainerSpec};
 use crate::runtime::ns::{loopdev, mount};
 use crate::source::Source;
 use crate::store::Store;
@@ -268,6 +268,8 @@ pub fn shell(name: &str, cmd: &[String]) -> Result<i32> {
         local_aliases: vec![],
         run_user: None,
         log_fd: None,
+        // Authoring sessions run on the host's network with no contract.
+        egress: false,
     };
 
     // Host network (no CLONE_NEWNET): package managers need the internet,
@@ -286,7 +288,7 @@ pub fn shell(name: &str, cmd: &[String]) -> Result<i32> {
         )
     }
     .map_err(|e| Error::Runtime(format!("clone: {e}")))?;
-    let _ = nix::unistd::write(&sync_tx, &[1u8]);
+    let _ = nix::unistd::write(&sync_tx, &[container::RELEASE]);
     drop(sync_tx);
 
     let code = loop {
@@ -420,6 +422,7 @@ pub fn commit(name: &str, version: &Version, output: Option<&Path>) -> Result<Co
         resources: None,
         requires: None,
         health: None,
+        network: None,
         restart: None,
         layer: None,
         sources: Default::default(),

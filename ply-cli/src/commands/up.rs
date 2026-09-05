@@ -61,6 +61,10 @@ struct Prepared {
     volume: Vec<String>,
     domain: Vec<String>,
     scale: Option<u32>,
+    /// The member's `egress = …` — the operator's word over what the
+    /// member's own manifest declares, passed to its child as
+    /// `--egress`/`--egress-allow` and shown by `--plan`.
+    egress: Option<ply_core::egress::EgressOverride>,
 }
 
 /// The `{image}` built-in fact: the store digest for an already-fetched
@@ -220,15 +224,60 @@ fn render_header(p: &Prepared, resolution: &Resolution) -> String {
     parts.join("  ")
 }
 
+/// The effective egress policy of every member, for `--plan`: the member's
+/// own manifest's claim (read exactly the way [`resolve_members`] reads it —
+/// out of the fetched image, or a local dir's `ply.toml`) under the stack's
+/// `egress = …` override.
+///
+/// A `run = "https://…"` member has no readable manifest before its child
+/// fetches it, so only an override decides — and with neither, its effective
+/// mode is `off` and it prints nothing, exactly like a member that declares
+/// nothing.
+fn member_policies(prepared: &[Prepared]) -> Result<BTreeMap<String, ply_core::egress::Policy>> {
+    let mut out = BTreeMap::new();
+    for p in prepared {
+        let manifest = match &p.source {
+            MemberSource::Url(_) => None,
+            MemberSource::Path(_) => Some(
+                stack::member_manifest(&p.target, Some(Path::new(p.target.as_str())))
+                    .with_context(|| format!("member `{}`: reading its manifest", p.member))?,
+            ),
+            MemberSource::Run { .. } => Some(
+                stack::member_manifest(&p.target, None)
+                    .with_context(|| format!("member `{}`: reading its manifest", p.member))?,
+            ),
+        };
+        let declared = match &manifest {
+            Some(m) => m
+                .egress_entries()
+                .with_context(|| format!("member `{}`: its `[network] egress`", p.member))?,
+            None => None,
+        };
+        out.insert(
+            p.member.clone(),
+            ply_core::egress::effective(declared.as_deref(), p.egress.as_ref()),
+        );
+    }
+    Ok(out)
+}
+
 /// Render the composed plan `ply up --plan` prints: per member, in launch
 /// order, a header line followed by one `  KEY = VALUE  source` line per
 /// resolved env entry (keys left-aligned, values padded to a common column,
-/// within that member); a member with no env entries gets just the header.
+/// within that member) and, for a member `policies` has an entry for, a
+/// closing `  egress: …` line; a member with no env entries gets just the
+/// header (and its egress line). Returns the plan and the warnings that
+/// belong on stderr beside it — one per member whose effective list is `*`.
 /// Pure — no I/O, no minting: everything here was already decided by
-/// `resolve_members(plan_only: true)`.
-fn render_plan(resolution: &Resolution, prepared: &[Prepared]) -> String {
+/// `resolve_members(plan_only: true)` and [`member_policies`].
+fn render_plan(
+    resolution: &Resolution,
+    prepared: &[Prepared],
+    policies: &BTreeMap<String, ply_core::egress::Policy>,
+) -> (String, Vec<String>) {
     let secrets = ordered_secrets(resolution);
     let mut out = String::new();
+    let mut warnings = Vec::new();
     for p in prepared {
         out.push_str(&render_header(p, resolution));
         out.push('\n');
@@ -238,9 +287,6 @@ fn render_plan(resolution: &Resolution, prepared: &[Prepared]) -> String {
             .get(&p.member)
             .map(Vec::as_slice)
             .unwrap_or(&[]);
-        if entries.is_empty() {
-            continue;
-        }
         let masked: Vec<String> = entries
             .iter()
             .map(|e| mask_value(&e.value, e.secret, &secrets))
@@ -252,8 +298,18 @@ fn render_plan(resolution: &Resolution, prepared: &[Prepared]) -> String {
             let source = &e.source;
             out.push_str(&format!("  {key:key_w$} = {val:val_w$}  {source}\n"));
         }
+
+        // A member with no computed policy prints no line at all: a stack
+        // with nothing to say about egress reads exactly as it did before
+        // the contract existed.
+        if let Some(policy) = policies.get(&p.member) {
+            out.push_str(&format!("  egress: {}\n", policy.describe()));
+            if policy.unrestricted() {
+                warnings.push(format!("ply: {} declares unrestricted egress", p.member));
+            }
+        }
     }
-    out
+    (out, warnings)
 }
 
 pub fn exec(args: UpArgs) -> Result<()> {
@@ -298,6 +354,7 @@ pub fn exec(args: UpArgs) -> Result<()> {
             volume: member.volume.clone(),
             domain: stack::expand_member_list(&member.domain, &member.name, "domain", &lookup)?,
             scale: member.scale,
+            egress: member.egress.clone(),
         });
     }
 
@@ -320,7 +377,14 @@ pub fn exec(args: UpArgs) -> Result<()> {
         // Plan is the validator: resolution above already ran everything
         // (and any error already propagated via `?`) — print the composed
         // result and stop, before any minting, spawn, or netns setup below.
-        print!("{}", render_plan(&resolution, &prepared));
+        let policies = member_policies(&prepared)?;
+        let (plan, warnings) = render_plan(&resolution, &prepared, &policies);
+        // Warnings first, and on stderr: the plan itself stays a plan,
+        // pipeable and diffable.
+        for warning in &warnings {
+            eprintln!("{warning}");
+        }
+        print!("{plan}");
         return Ok(());
     }
 
@@ -374,6 +438,21 @@ pub fn exec(args: UpArgs) -> Result<()> {
         }
         for domain in &p.domain {
             cmd.arg("--domain").arg(domain);
+        }
+        if let Some(over) = &p.egress {
+            if let Some(mode) = over.mode {
+                cmd.arg("--egress").arg(mode.to_string());
+            }
+            if let Some(allow) = &over.allow {
+                // An empty list is a real answer ("allow nothing"), and the
+                // child reads it as one: an occurrence with no entry.
+                if allow.is_empty() {
+                    cmd.arg("--egress-allow").arg("");
+                }
+                for entry in allow {
+                    cmd.arg("--egress-allow").arg(entry.to_string());
+                }
+            }
         }
         if let Some(scale) = p.scale {
             cmd.arg("--scale").arg(scale.to_string());
@@ -791,6 +870,7 @@ mod tests {
             volume: Vec::new(),
             domain: Vec::new(),
             scale: None,
+            egress: None,
         };
         let server = Prepared {
             member: "server".to_string(),
@@ -804,6 +884,7 @@ mod tests {
             volume: Vec::new(),
             domain: Vec::new(),
             scale: None,
+            egress: None,
         };
         let prepared = vec![db, server];
 
@@ -889,7 +970,7 @@ mod tests {
             secret_values,
         };
 
-        let plan = render_plan(&resolution, &prepared);
+        let (plan, _) = render_plan(&resolution, &prepared, &BTreeMap::new());
 
         // masked url line: the secret substring is gone, the composed shape
         // (scheme, user, host, port, database) still reads.
@@ -947,6 +1028,7 @@ mod tests {
                 volume: Vec::new(),
                 domain,
                 scale: None,
+                egress: None,
             }
         }
 
@@ -991,6 +1073,7 @@ mod tests {
             volume: Vec::new(),
             domain: Vec::new(),
             scale: None,
+            egress: None,
         };
         let server = Prepared {
             member: "server".to_string(),
@@ -1004,6 +1087,7 @@ mod tests {
             volume: Vec::new(),
             domain: Vec::new(),
             scale: None,
+            egress: None,
         };
         let web = Prepared {
             member: "web".to_string(),
@@ -1017,6 +1101,7 @@ mod tests {
             volume: Vec::new(),
             domain: Vec::new(),
             scale: None,
+            egress: None,
         };
         let prepared = vec![db, server, web];
 
@@ -1126,14 +1211,71 @@ web (./web)  3000  after: server (via {server.base_url})
     #[test]
     fn render_plan_renders_the_full_composed_todos_plan_exactly() {
         let (prepared, resolution) = todos_fixture(&[]);
-        let plan = render_plan(&resolution, &prepared);
+        let (plan, _) = render_plan(&resolution, &prepared, &BTreeMap::new());
         assert_eq!(plan, EXPECTED_TODOS_PLAN);
+    }
+
+    /// The effective policy is a member's, and the plan is where an operator
+    /// reads it before anything starts: one `  egress:` line under each
+    /// member that has one, and an out-of-band warning for a member whose
+    /// list is `*` (the plan text stays a plan; the warning goes to stderr).
+    #[test]
+    fn render_plan_shows_each_members_egress_and_warns_on_unrestricted() {
+        use ply_core::egress::{effective, EgressOverride, Mode};
+
+        let (prepared, resolution) = todos_fixture(&[]);
+        let stripe = vec!["api.stripe.com".parse().unwrap()];
+        let policies = BTreeMap::from([
+            (
+                "db".to_string(),
+                effective(
+                    Some(&stripe),
+                    Some(&EgressOverride {
+                        mode: Some(Mode::Enforce),
+                        allow: None,
+                    }),
+                ),
+            ),
+            ("server".to_string(), effective(None, None)),
+            (
+                "web".to_string(),
+                effective(Some(&["*".parse().unwrap()]), None),
+            ),
+        ]);
+
+        let (plan, warnings) = render_plan(&resolution, &prepared, &policies);
+        let lines: Vec<&str> = plan.lines().collect();
+
+        // right under the member's LAST env line, not before them
+        let db_last = lines
+            .iter()
+            .position(|l| l.contains("POSTGRES_PASSWORD"))
+            .unwrap();
+        assert_eq!(lines[db_last + 1], "  egress: enforce, 1 entry (manifest)");
+        let server_last = lines
+            .iter()
+            .position(|l| l.contains("DATABASE_URL"))
+            .unwrap();
+        assert_eq!(lines[server_last + 1], "  egress: off");
+
+        assert_eq!(warnings, vec!["ply: web declares unrestricted egress"]);
+    }
+
+    /// A member with no computed policy prints no egress line at all — the
+    /// plan a stack without any `[network]` or override renders is exactly
+    /// the plan it rendered before the egress contract existed.
+    #[test]
+    fn render_plan_without_policies_is_the_plan_it_always_was() {
+        let (prepared, resolution) = todos_fixture(&[]);
+        let (plan, warnings) = render_plan(&resolution, &prepared, &BTreeMap::new());
+        assert_eq!(plan, EXPECTED_TODOS_PLAN);
+        assert!(warnings.is_empty());
     }
 
     #[test]
     fn an_empty_leaf_secret_in_resolution_never_shreds_any_line() {
         let (prepared, resolution) = todos_fixture(&[""]);
-        let plan = render_plan(&resolution, &prepared);
+        let (plan, _) = render_plan(&resolution, &prepared, &BTreeMap::new());
         assert_eq!(
             plan, EXPECTED_TODOS_PLAN,
             "an empty leaf secret in `secret_values` must be a no-op"

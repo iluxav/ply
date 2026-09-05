@@ -228,6 +228,15 @@ pub fn params_rows(manifest: &serde_json::Value) -> Vec<(String, &'static str, O
     rows
 }
 
+/// The `[network] egress` list as written, from a record's manifest JSON.
+pub fn egress_entries(manifest: &serde_json::Value) -> Option<Vec<String>> {
+    manifest.get("network")?.get("egress")?.as_array().map(|a| {
+        a.iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect()
+    })
+}
+
 /// Built-in facts and live names, for `inspect`'s footer.
 pub const FACTS: &[&str] = &[
     "name", "version", "host", "port", "addr", "base_url", "scale", "arch", "image",

@@ -1315,6 +1315,10 @@ fn build_from_repo(name: &str, spec: &Spec) -> Result<(PathBuf, String, bool)> {
             entrypoint: None,
             domains: vec![],
             volumes: vec![],
+            // The BUILD container, not a deployed member: a build fetches
+            // whatever its lockfile and package manager need, and no
+            // deployment file describes it.
+            egress: None,
         })
         .context("running the build container")?;
         if code != 0 {
@@ -1752,6 +1756,7 @@ mod secret_env_tests {
             volume: Vec::new(),
             domain: vec!["{cdn.hostname}".to_string()],
             scale: None,
+            egress: None,
         };
         assert_eq!(
             member_edges(&web),

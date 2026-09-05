@@ -59,6 +59,11 @@ pub struct InstanceSpec {
     pub dns: Option<String>,
     /// Names that resolve to the instance's own loopback (`--netns-peer`).
     pub local_aliases: Vec<String>,
+    /// The effective egress contract for this instance, when there is one to
+    /// keep: `None` means "nothing to do" — the mode is `off`, or the host
+    /// cannot give an instance a network of its own (rootless), and the
+    /// supervisor already said so.
+    pub egress: Option<crate::egress::Policy>,
 }
 
 /// What the backend knows before any network is joined.
@@ -161,6 +166,15 @@ pub trait Backend {
     /// Called once, after `attach`.
     fn reach_via(&self) -> Option<PathBuf> {
         None
+    }
+    /// Why this backend cannot keep an egress contract, or `None` when it
+    /// can. Enforcement capability is the backend's word, not a fact the
+    /// supervisor infers: whether a policy can be installed depends on how
+    /// the platform gives an instance a network, which only the platform
+    /// knows. The reason is printed once, verbatim, and the run continues
+    /// with no policy.
+    fn egress_support(&self) -> Option<&'static str> {
+        Some("egress policy is not enforced on this platform yet — running unobserved")
     }
     fn launch(&self, spec: &InstanceSpec, record: Record<'_>) -> Result<Launched>;
     /// The `exec` control command: serve a terminal into `app.slot` at

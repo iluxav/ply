@@ -312,6 +312,7 @@ mod tests {
             resources: None,
             dns: None,
             local_aliases: Vec::new(),
+            egress: None,
         }
     }
 
