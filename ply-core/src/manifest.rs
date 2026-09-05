@@ -52,6 +52,10 @@ pub struct Manifest {
     /// Health gate used by rolling deploys (`ply deploy`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub health: Option<Health>,
+    /// `[scale]` — the run parent grows and shrinks the instance count
+    /// between `min` and `max` on `signal` against `target`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale: Option<Scale>,
 
     /// `[network]` — the egress contract: destinations this package needs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -596,13 +600,54 @@ fn default_scope() -> String {
     "instance".into()
 }
 
+/// `[scale]`: horizontal autoscaling, evaluated by the run parent.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Scale {
+    pub min: u32,
+    pub max: u32,
+    /// `cpu`, `memory`, `net`, or `metric:<name>`.
+    pub signal: String,
+    /// Per-instance target in the signal's unit: `"70%"`, `"40MB/s"`, `"100"`.
+    pub target: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cooldown: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metrics_path: Option<String>,
+}
+
+/// A resource limit: a fixed value (`"512M"`), or a range the run parent
+/// resizes live between (`{ min = "256M", max = "2G" }`), starting at `min`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum Limit {
+    Fixed(String),
+    Range { min: String, max: String },
+}
+
+impl Limit {
+    /// What the cgroup starts with.
+    pub fn initial(&self) -> &str {
+        match self {
+            Limit::Fixed(v) => v,
+            Limit::Range { min, .. } => min,
+        }
+    }
+    pub fn bounds(&self) -> Option<(&str, &str)> {
+        match self {
+            Limit::Fixed(_) => None,
+            Limit::Range { min, max } => Some((min, max)),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Resources {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mem: Option<String>,
+    pub mem: Option<Limit>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cpu: Option<String>,
+    pub cpu: Option<Limit>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pids: Option<u32>,
     /// memory.swap.max — cap the swap OVERFLOW separately from RAM
@@ -825,6 +870,12 @@ impl Manifest {
         }
         if let Some(sig) = &self.package.stop_signal {
             parse_stop_signal(sig)?;
+        }
+        if let Some(scale) = &self.scale {
+            // The published port is a run-time fact (`--publish`); the parent
+            // checks it. Everything else is knowable here.
+            let has_mem = self.resources.as_ref().is_some_and(|r| r.mem.is_some());
+            crate::autoscale::Policy::parse(scale, has_mem, true)?;
         }
         if let Some(user) = &self.package.user {
             parse_user(user)?;
@@ -1104,6 +1155,56 @@ mod volume_shorthand_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const BASE: &str = "[package]\nname = \"web\"\nversion = \"1.0.0\"\nentrypoint = [\"./x\"]\nbase = \"debian@13\"\n";
+
+    /// A limit is either the fixed string it always was or a live range.
+    #[test]
+    fn resources_take_a_fixed_limit_or_a_live_range() {
+        let m = Manifest::parse(&format!(
+            "{BASE}\n[resources]\nmem = \"512M\"\ncpu = {{ min = \"0.5\", max = \"4\" }}\n"
+        ))
+        .unwrap();
+        let r = m.resources.unwrap();
+        assert_eq!(r.mem, Some(Limit::Fixed("512M".into())));
+        assert_eq!(r.mem.as_ref().unwrap().initial(), "512M");
+        assert_eq!(r.mem.as_ref().unwrap().bounds(), None);
+        assert_eq!(
+            r.cpu,
+            Some(Limit::Range {
+                min: "0.5".into(),
+                max: "4".into()
+            })
+        );
+        assert_eq!(r.cpu.as_ref().unwrap().initial(), "0.5");
+        assert_eq!(r.cpu.as_ref().unwrap().bounds(), Some(("0.5", "4")));
+    }
+
+    /// `[scale]` is checked at parse time, so a typo fails at `ply build`.
+    #[test]
+    fn a_scale_section_is_validated_when_the_manifest_is_read() {
+        let ok = Manifest::parse(&format!(
+            "{BASE}\n[scale]\nmin = 2\nmax = 8\nsignal = \"cpu\"\ntarget = \"70%\"\n"
+        ))
+        .unwrap();
+        assert_eq!(ok.scale.as_ref().unwrap().max, 8);
+        let bad = Manifest::parse(&format!(
+            "{BASE}\n[scale]\nmin = 2\nmax = 8\nsignal = \"disk\"\ntarget = \"70%\"\n"
+        ))
+        .unwrap_err()
+        .to_string();
+        assert!(bad.contains("scale.signal"), "{bad}");
+        let no_mem = Manifest::parse(&format!(
+            "{BASE}\n[scale]\nmin = 1\nmax = 4\nsignal = \"memory\"\ntarget = \"80%\"\n"
+        ))
+        .unwrap_err()
+        .to_string();
+        assert!(no_mem.contains("resources.mem"), "{no_mem}");
+        let with_mem = Manifest::parse(&format!(
+            "{BASE}\n[resources]\nmem = \"512M\"\n\n[scale]\nmin = 1\nmax = 4\nsignal = \"memory\"\ntarget = \"80%\"\n"
+        ));
+        assert!(with_mem.is_ok());
+    }
 
     #[test]
     fn requests_links_parse_and_validate() {

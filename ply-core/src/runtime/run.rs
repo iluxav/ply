@@ -343,12 +343,6 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
         .transpose()?
         .unwrap_or(std::time::Duration::from_secs(30));
 
-    struct SlotInfo {
-        backoff: std::time::Duration,
-        restarts: u32,
-        started: std::time::Instant,
-        sig_idx: usize,
-    }
     let mut slots: std::collections::BTreeMap<u32, SlotInfo> = Default::default();
     let mut pending: Vec<(u32, std::time::Instant)> = Vec::new(); // (slot, due)
 
@@ -356,8 +350,40 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
     let mut shutdown_began: Option<std::time::Instant> = None;
     let mut escalated = false;
 
+    // `[scale]`: the policy the parent evaluates every AUTOSCALE_TICK; the
+    // starting count is clamped into its range. `[resources]` ranges: the
+    // vertical side, with or without a `[scale]` section.
+    let mut autoscaler = match &ctx.manifest.scale {
+        Some(scale) => {
+            let has_mem = ctx
+                .manifest
+                .resources
+                .as_ref()
+                .is_some_and(|r| r.mem.is_some());
+            let policy = crate::autoscale::Policy::parse(scale, has_mem, !opts.publish.is_empty())?;
+            eprintln!(
+                "ply: autoscale {}..{} instances on {} (target {}, cooldown {}s)",
+                policy.min,
+                policy.max,
+                policy.signal,
+                scale.target,
+                policy.cooldown.as_secs()
+            );
+            Some(crate::autoscale::Horizontal::new(policy))
+        }
+        None => None,
+    };
+    let mut vertical = VerticalCtl::from_manifest(&ctx.manifest)?;
+    let initial_scale = match &autoscaler {
+        Some(h) => opts.scale.max(1).clamp(h.policy().min, h.policy().max),
+        None => opts.scale.max(1),
+    };
+    let mut last_autoscale = std::time::Instant::now();
+    let mut prev_raw: std::collections::BTreeMap<u32, (std::time::Instant, crate::autoscale::Raw)> =
+        Default::default();
+
     let mut instances: Vec<Running> = Vec::new();
-    for _ in 0..opts.scale.max(1) {
+    for _ in 0..initial_scale {
         let instance = launch_instance(
             backend.as_ref(),
             &ctx,
@@ -608,46 +634,38 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                     crate::runtime::control::Command::Scale(target) => {
                         let target = target as usize;
                         let current = slots.len();
-                        if target > current {
-                            let mut grown = 0;
-                            for _ in current..target {
-                                match launch_instance(
-                                    backend.as_ref(),
-                                    &ctx,
-                                    opts,
-                                    &net,
-                                    None,
-                                    0,
-                                    &publishing,
-                                ) {
-                                    Ok(instance) => {
-                                        let sig_idx =
-                                            register_child(instance.inner.child_pid().unwrap_or(0));
-                                        slots.insert(
-                                            instance.n,
-                                            SlotInfo {
-                                                backoff: initial_backoff,
-                                                restarts: 0,
-                                                started: std::time::Instant::now(),
-                                                sig_idx,
-                                            },
-                                        );
-                                        instances.push(instance);
-                                        grown += 1;
-                                    }
-                                    Err(e) => {
-                                        eprintln!("ply: scale up failed: {e}");
-                                        crate::runtime::control::write_result(
-                                            &app_name,
-                                            "scale",
-                                            false,
-                                            &format!("{e}"),
-                                        );
-                                        break;
-                                    }
-                                }
+                        if let Some(h) = autoscaler.as_mut() {
+                            h.pin(target as u32);
+                            eprintln!(
+                                "ply: scale pinned at {target} by operator (autoscale paused; `ply scale {app_name} auto` resumes)"
+                            );
+                        }
+                        let sc = ScaleCtx {
+                            backend: backend.as_ref(),
+                            ctx: &ctx,
+                            opts,
+                            net: &net,
+                            publishing: &publishing,
+                            stop_signal,
+                            initial_backoff,
+                        };
+                        match apply_scale(
+                            &sc,
+                            target,
+                            &mut slots,
+                            &mut instances,
+                            &mut pending,
+                            &mut roll_queue,
+                        ) {
+                            Ok(()) if target == current => {
+                                crate::runtime::control::write_result(
+                                    &app_name,
+                                    "scale",
+                                    true,
+                                    &format!("already at {target}"),
+                                );
                             }
-                            if grown == target - current {
+                            Ok(()) => {
                                 eprintln!("ply: scaled {app_name} to {target}");
                                 crate::runtime::control::write_result(
                                     &app_name,
@@ -661,43 +679,32 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                                     &format!("{current} -> {target}"),
                                 );
                             }
-                        } else if target < current {
-                            // stop the highest slots; forget them so nothing respawns
-                            let mut extras: Vec<u32> = slots.keys().copied().collect();
-                            extras.sort_unstable();
-                            for slot in extras.into_iter().rev().take(current - target) {
-                                if let Some(pos) = instances.iter().position(|i| i.n == slot) {
-                                    let instance = instances.remove(pos);
-                                    if let Some(info) = slots.get(&slot) {
-                                        update_child(info.sig_idx, 0);
-                                    }
-                                    stop_instance(instance, stop_signal);
-                                }
-                                slots.remove(&slot);
-                                pending.retain(|(n, _)| *n != slot);
-                                roll_queue.retain(|n| *n != slot);
+                            Err(e) => {
+                                eprintln!("ply: scale up failed: {e}");
+                                crate::runtime::control::write_result(
+                                    &app_name, "scale", false, &e,
+                                );
                             }
-                            eprintln!("ply: scaled {app_name} to {target}");
-                            crate::runtime::control::write_result(
-                                &app_name,
-                                "scale",
-                                true,
-                                &format!("{current} -> {target}"),
-                            );
-                            crate::runtime::events::emit(
-                                &app_name,
-                                "scale",
-                                &format!("{current} -> {target}"),
-                            );
-                        } else {
-                            crate::runtime::control::write_result(
-                                &app_name,
-                                "scale",
-                                true,
-                                &format!("already at {target}"),
-                            );
                         }
                     }
+                    crate::runtime::control::Command::ScaleAuto => match autoscaler.as_mut() {
+                        Some(h) => {
+                            h.unpin();
+                            eprintln!("ply: autoscale resumed for {app_name}");
+                            crate::runtime::control::write_result(
+                                &app_name,
+                                "scale",
+                                true,
+                                "autoscale resumed",
+                            );
+                        }
+                        None => crate::runtime::control::write_result(
+                            &app_name,
+                            "scale",
+                            false,
+                            "no [scale] section in this app's manifest",
+                        ),
+                    },
                     crate::runtime::control::Command::Restart => {
                         if roll_queue.is_empty() {
                             let mut queue: Vec<u32> = instances.iter().map(|i| i.n).collect();
@@ -856,6 +863,99 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
             }
         }
 
+        // Autoscale: sample every instance, let the policy speak, act.
+        if (autoscaler.is_some() || vertical.is_some())
+            && !shutting_down
+            && last_autoscale.elapsed() >= AUTOSCALE_TICK
+        {
+            last_autoscale = std::time::Instant::now();
+            let now = last_autoscale;
+            let cooldown = autoscaler
+                .as_ref()
+                .map(|h| h.policy().cooldown)
+                .unwrap_or(std::time::Duration::from_secs(60));
+            for instance in &instances {
+                let n = instance.n;
+                let raw = platform::sample(&identity, n, instance.inner.ip());
+                let started = slots.get(&n).map(|s| s.started).unwrap_or(now);
+                if let Some((then, prev)) = prev_raw.insert(n, (now, raw.clone())) {
+                    let reading = crate::autoscale::Reading::between(&prev, &raw, now - then);
+                    if let Some(h) = autoscaler.as_mut() {
+                        let value = match &h.policy().signal {
+                            crate::autoscale::Signal::Cpu => {
+                                reading.cpu_pct_of_quota.or(reading.cpu_pct_of_core)
+                            }
+                            crate::autoscale::Signal::Memory => reading.mem_pct,
+                            crate::autoscale::Signal::Net => reading.net_bps,
+                            crate::autoscale::Signal::Metric(name) => {
+                                instance.membership.first_addr().and_then(|addr| {
+                                    platform::fetch_metric(addr, &h.policy().metrics_path, name)
+                                })
+                            }
+                        };
+                        if let Some(v) = value {
+                            h.observe(n, started, now, v);
+                        }
+                    }
+                    if let Some(v) = vertical.as_mut() {
+                        v.tick(&identity, n, &raw, &reading, now, cooldown);
+                    }
+                }
+            }
+            // Slots that are gone take their history with them.
+            prev_raw.retain(|n, _| slots.contains_key(n));
+            if let Some(h) = autoscaler.as_mut() {
+                let live: Vec<u32> = slots.keys().copied().collect();
+                for n in prev_raw.keys().copied().collect::<Vec<_>>() {
+                    if !live.contains(&n) {
+                        h.forget(n);
+                    }
+                }
+                if let Some(v) = vertical.as_mut() {
+                    for n in v.state.keys().copied().collect::<Vec<_>>() {
+                        if !live.contains(&n) {
+                            v.forget(n);
+                        }
+                    }
+                }
+                if let crate::autoscale::Step::ScaleTo { n, reason } =
+                    h.decide(slots.len() as u32, now)
+                {
+                    let current = slots.len();
+                    let target = n as usize;
+                    let sc = ScaleCtx {
+                        backend: backend.as_ref(),
+                        ctx: &ctx,
+                        opts,
+                        net: &net,
+                        publishing: &publishing,
+                        stop_signal,
+                        initial_backoff,
+                    };
+                    let kind = if target > current {
+                        "scale-up"
+                    } else {
+                        "scale-down"
+                    };
+                    match apply_scale(
+                        &sc,
+                        target,
+                        &mut slots,
+                        &mut instances,
+                        &mut pending,
+                        &mut roll_queue,
+                    ) {
+                        Ok(()) => {
+                            let line = format!("{current} -> {target}: {reason}");
+                            eprintln!("ply: {kind} {identity} {line}");
+                            crate::runtime::events::emit(&identity, kind, &line);
+                        }
+                        Err(e) => eprintln!("ply: autoscale: {kind} to {target} failed: {e}"),
+                    }
+                }
+            }
+        }
+
         // Seat every instance that has started accepting connections since
         // the last turn; until then it takes no traffic.
         for instance in instances.iter_mut() {
@@ -895,6 +995,290 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
 
 /// Deliberate stop: the declared signal, up to 10s to comply, then KILL.
 /// Reaps the instance so its death never reaches the policy loop.
+/// Per-slot supervisor bookkeeping.
+struct SlotInfo {
+    backoff: std::time::Duration,
+    restarts: u32,
+    started: std::time::Instant,
+    sig_idx: usize,
+}
+
+/// Everything `apply_scale` needs from the run loop that does not change.
+struct ScaleCtx<'a> {
+    backend: &'a dyn Backend,
+    ctx: &'a AppContext,
+    opts: &'a RunOptions,
+    net: &'a NetworkFacts,
+    publishing: &'a [PublishWiring],
+    stop_signal: Signal,
+    initial_backoff: std::time::Duration,
+}
+
+/// Bring the instance count to `target`: launch the missing slots, or stop
+/// the highest ones. Shared by `ply scale` and the autoscaler; the caller
+/// reports the outcome. `Err` names the launch that failed (some may have
+/// started).
+fn apply_scale(
+    sc: &ScaleCtx<'_>,
+    target: usize,
+    slots: &mut std::collections::BTreeMap<u32, SlotInfo>,
+    instances: &mut Vec<Running>,
+    pending: &mut Vec<(u32, std::time::Instant)>,
+    roll_queue: &mut Vec<u32>,
+) -> std::result::Result<(), String> {
+    let current = slots.len();
+    if target > current {
+        for _ in current..target {
+            let instance =
+                launch_instance(sc.backend, sc.ctx, sc.opts, sc.net, None, 0, sc.publishing)
+                    .map_err(|e| e.to_string())?;
+            let sig_idx = register_child(instance.inner.child_pid().unwrap_or(0));
+            slots.insert(
+                instance.n,
+                SlotInfo {
+                    backoff: sc.initial_backoff,
+                    restarts: 0,
+                    started: std::time::Instant::now(),
+                    sig_idx,
+                },
+            );
+            instances.push(instance);
+        }
+    } else if target < current {
+        // stop the highest slots; forget them so nothing respawns
+        let mut extras: Vec<u32> = slots.keys().copied().collect();
+        extras.sort_unstable();
+        for slot in extras.into_iter().rev().take(current - target) {
+            if let Some(pos) = instances.iter().position(|i| i.n == slot) {
+                let instance = instances.remove(pos);
+                if let Some(info) = slots.get(&slot) {
+                    update_child(info.sig_idx, 0);
+                }
+                stop_instance(instance, sc.stop_signal);
+            }
+            slots.remove(&slot);
+            pending.retain(|(n, _)| *n != slot);
+            roll_queue.retain(|n| *n != slot);
+        }
+    }
+    Ok(())
+}
+
+/// How often the autoscaler samples and decides.
+const AUTOSCALE_TICK: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The vertical side: ranges from `[resources]`, per-slot state, and the
+/// limits the parent has set (re-applied after a restart recreates the
+/// cgroup at `min`).
+struct VerticalCtl {
+    mem: Option<crate::autoscale::Range>,
+    cpu: Option<crate::autoscale::Range>,
+    state: std::collections::BTreeMap<u32, crate::autoscale::Vertical>,
+    want_mem: std::collections::BTreeMap<u32, u64>,
+    want_cpu: std::collections::BTreeMap<u32, u64>,
+    warned: bool,
+}
+
+impl VerticalCtl {
+    fn from_manifest(m: &Manifest) -> Result<Option<VerticalCtl>> {
+        let res = m.resources.as_ref();
+        let mem = match res.and_then(|r| r.mem.as_ref()).and_then(|l| l.bounds()) {
+            Some((a, b)) => Some(crate::autoscale::Range {
+                min: crate::autoscale::parse_size(a)?,
+                max: crate::autoscale::parse_size(b)?,
+            }),
+            None => None,
+        };
+        let cpu = match res.and_then(|r| r.cpu.as_ref()).and_then(|l| l.bounds()) {
+            Some((a, b)) => Some(crate::autoscale::Range {
+                min: crate::autoscale::parse_millicores(a)?,
+                max: crate::autoscale::parse_millicores(b)?,
+            }),
+            None => None,
+        };
+        for (name, r) in [("mem", &mem), ("cpu", &cpu)] {
+            if let Some(r) = r {
+                if r.max < r.min {
+                    return Err(Error::Manifest(format!(
+                        "resources.{name}: max is below min"
+                    )));
+                }
+            }
+        }
+        Ok((mem.is_some() || cpu.is_some()).then(|| VerticalCtl {
+            mem,
+            cpu,
+            state: Default::default(),
+            want_mem: Default::default(),
+            want_cpu: Default::default(),
+            warned: false,
+        }))
+    }
+
+    fn set(&mut self, app: &str, n: u32, what: &str, r: Result<()>) {
+        if let Err(e) = r {
+            if !self.warned {
+                self.warned = true;
+                eprintln!("ply: warning: cannot resize {what} of {app}.{n} ({e}) — vertical scaling off on this host");
+            }
+        }
+    }
+
+    /// One instance, one tick.
+    fn tick(
+        &mut self,
+        app: &str,
+        n: u32,
+        raw: &crate::autoscale::Raw,
+        reading: &crate::autoscale::Reading,
+        now: std::time::Instant,
+        cooldown: std::time::Duration,
+    ) {
+        let mut v = self.state.remove(&n).unwrap_or_default();
+        self.tick_with(&mut v, app, n, raw, reading, now, cooldown);
+        self.state.insert(n, v);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn tick_with(
+        &mut self,
+        v: &mut crate::autoscale::Vertical,
+        app: &str,
+        n: u32,
+        raw: &crate::autoscale::Raw,
+        reading: &crate::autoscale::Reading,
+        now: std::time::Instant,
+        cooldown: std::time::Duration,
+    ) {
+        if let (Some(range), Some(limit), Some(usage)) = (self.mem, raw.mem_max, raw.mem_current) {
+            // A restart recreated the cgroup at `min`: put the raised limit back.
+            if let Some(&want) = self.want_mem.get(&n) {
+                if limit != want {
+                    let r = platform::set_memory(app, n, want);
+                    self.set(app, n, "memory", r);
+                    return;
+                }
+            }
+            if let Some(next) = v.memory(&range, limit, usage, reading.oom_grew, now, cooldown) {
+                let pct = usage as f64 / limit as f64 * 100.0;
+                let why = if reading.oom_grew {
+                    "OOM-killed".to_string()
+                } else {
+                    format!("{pct:.0}% used")
+                };
+                let r = platform::set_memory(app, n, next);
+                let ok = r.is_ok();
+                self.set(app, n, "memory", r);
+                if ok {
+                    self.want_mem.insert(n, next);
+                    let line = format!(
+                        "{app}.{n} memory {} -> {}: {why}",
+                        show_bytes(limit),
+                        show_bytes(next)
+                    );
+                    eprintln!("ply: resize {line}");
+                    crate::runtime::events::emit(app, "resize", &line);
+                }
+            }
+        }
+        if let (Some(range), Some(quota), Some(pct)) =
+            (self.cpu, raw.cpu_quota_m, reading.cpu_pct_of_core)
+        {
+            if let Some(&want) = self.want_cpu.get(&n) {
+                if quota != want {
+                    let r = platform::set_cpu(app, n, want);
+                    self.set(app, n, "cpu", r);
+                    return;
+                }
+            }
+            let usage_m = (pct * 10.0) as u64;
+            if let Some(next) = v.cpu(
+                &range,
+                quota,
+                usage_m,
+                reading.throttled_grew,
+                now,
+                cooldown,
+            ) {
+                let r = platform::set_cpu(app, n, next);
+                let ok = r.is_ok();
+                self.set(app, n, "cpu", r);
+                if ok {
+                    self.want_cpu.insert(n, next);
+                    let line = format!(
+                        "{app}.{n} cpu {:.2} -> {:.2} cores: {} throttled",
+                        quota as f64 / 1000.0,
+                        next as f64 / 1000.0,
+                        if reading.throttled_grew { "was" } else { "not" }
+                    );
+                    eprintln!("ply: resize {line}");
+                    crate::runtime::events::emit(app, "resize", &line);
+                }
+            }
+        }
+    }
+
+    fn forget(&mut self, n: u32) {
+        self.state.remove(&n);
+        self.want_mem.remove(&n);
+        self.want_cpu.remove(&n);
+    }
+}
+
+fn show_bytes(b: u64) -> String {
+    if b >= 1 << 30 && b.is_multiple_of(1 << 30) {
+        format!("{}G", b >> 30)
+    } else {
+        format!("{}M", b >> 20)
+    }
+}
+
+/// The platform's share of autoscaling: reading an instance and resizing
+/// it. Namespaces on Linux have cgroups and a veth; nothing else does yet.
+#[cfg(target_os = "linux")]
+mod platform {
+    use crate::autoscale::Raw;
+    use crate::error::Result;
+    pub fn sample(app: &str, n: u32, ip: std::net::Ipv4Addr) -> Raw {
+        crate::runtime::ns::probe::read(app, n, ip)
+    }
+    pub fn set_memory(app: &str, n: u32, bytes: u64) -> Result<()> {
+        crate::runtime::ns::cgroup::set_memory(app, n, bytes)
+    }
+    pub fn set_cpu(app: &str, n: u32, millicores: u64) -> Result<()> {
+        crate::runtime::ns::cgroup::set_cpu(app, n, millicores)
+    }
+    pub fn fetch_metric(addr: std::net::SocketAddr, path: &str, name: &str) -> Option<f64> {
+        match addr {
+            std::net::SocketAddr::V4(a) => crate::runtime::ns::probe::fetch_metric(
+                *a.ip(),
+                a.port(),
+                path,
+                name,
+                std::time::Duration::from_millis(500),
+            ),
+            _ => None,
+        }
+    }
+}
+#[cfg(not(target_os = "linux"))]
+mod platform {
+    use crate::autoscale::Raw;
+    use crate::error::{Error, Result};
+    pub fn sample(_app: &str, _n: u32, _ip: std::net::Ipv4Addr) -> Raw {
+        Raw::default()
+    }
+    pub fn set_memory(_app: &str, _n: u32, _bytes: u64) -> Result<()> {
+        Err(Error::Runtime("not supported on this platform".into()))
+    }
+    pub fn set_cpu(_app: &str, _n: u32, _millicores: u64) -> Result<()> {
+        Err(Error::Runtime("not supported on this platform".into()))
+    }
+    pub fn fetch_metric(_addr: std::net::SocketAddr, _path: &str, _name: &str) -> Option<f64> {
+        None
+    }
+}
+
 /// How long a retiring instance keeps serving the connections it already
 /// has before it is told to stop — new ones stopped arriving at the start of
 /// the window.

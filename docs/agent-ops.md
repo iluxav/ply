@@ -26,7 +26,9 @@ legible text at stable paths — not rows inside a daemon.
 | check how it went | read `deployments/.status/<name>.status` |
 | see what happened | read `<apps>/events.log` (JSON lines) |
 | read logs — dead builders included | read `<run>/logs/<app>.<n>.log` |
-| scale to 3 | write `3` into `<apps>/<app>/control/scale` |
+| scale to 3 | write `3` into `<apps>/<app>/control/scale` (pins an autoscaled app) |
+| hand scaling back to `[scale]` | write `auto` into the same file |
+| see what an app reached outbound | `ply egress <app>`; the log is `<data>/egress/<app>.<n>.log` (JSON lines) |
 | trigger an update | `touch` the spec file |
 | roll back | pin `version =` / `ref =` in the spec |
 | shell into an instance | `ply exec <app> sh` |

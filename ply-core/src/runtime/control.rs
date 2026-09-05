@@ -26,6 +26,8 @@ pub fn dir(app: &str) -> PathBuf {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     Scale(u32),
+    /// `ply scale APP auto`: hand the count back to the `[scale]` policy.
+    ScaleAuto,
     Restart,
     /// Open a terminal into a slot: the parent answers with a PTY served
     /// on `control/term-<nonce>.sock`.
@@ -46,6 +48,7 @@ pub fn poll(app: &str) -> Vec<Command> {
     if let Ok(text) = std::fs::read_to_string(&scale) {
         let _ = std::fs::remove_file(&scale);
         match text.trim().parse::<u32>() {
+            _ if text.trim() == "auto" => out.push(Command::ScaleAuto),
             Ok(n) if (1..=100).contains(&n) => out.push(Command::Scale(n)),
             _ => write_result(
                 app,

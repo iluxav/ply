@@ -15,6 +15,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -45,10 +46,54 @@ func dbAddr(env map[string]string) string {
 	return env["DB_ADDR"]
 }
 
+// Load knobs for the autoscale demo, plus a Prometheus-text /metrics that
+// exposes them as a custom signal.
+var (
+	inflight atomic.Int64
+	burned   atomic.Int64
+	held     []byte
+	heldMu   sync.Mutex
+)
+
 func newMux(store Store) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /ping", func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprintln(w, "pong")
+	})
+	// GET /spin?ms=N — busy-loop one core for N ms (CPU pressure).
+	mux.HandleFunc("GET /spin", func(w http.ResponseWriter, r *http.Request) {
+		ms, _ := strconv.Atoi(r.URL.Query().Get("ms"))
+		if ms <= 0 {
+			ms = 1
+		}
+		inflight.Add(1)
+		defer inflight.Add(-1)
+		deadline := time.Now().Add(time.Duration(ms) * time.Millisecond)
+		x := 0
+		for time.Now().Before(deadline) {
+			x++
+		}
+		fmt.Fprintf(w, "spun %dms (%d)\n", ms, x%7)
+	})
+	// GET /burn?mb=N — hold N MiB (memory pressure); 0 releases it.
+	mux.HandleFunc("GET /burn", func(w http.ResponseWriter, r *http.Request) {
+		mb, _ := strconv.Atoi(r.URL.Query().Get("mb"))
+		if mb < 0 {
+			mb = 0
+		}
+		heldMu.Lock()
+		held = make([]byte, mb<<20)
+		for i := 0; i < len(held); i += 4096 {
+			held[i] = 1 // touch every page so it is really resident
+		}
+		burned.Store(int64(mb))
+		heldMu.Unlock()
+		fmt.Fprintf(w, "holding %d MiB\n", mb)
+	})
+	mux.HandleFunc("GET /metrics", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+		fmt.Fprintf(w, "# TYPE benchapi_inflight gauge\nbenchapi_inflight %d\n", inflight.Load())
+		fmt.Fprintf(w, "# TYPE benchapi_burned_mb gauge\nbenchapi_burned_mb %d\n", burned.Load())
 	})
 	mux.HandleFunc("GET /users/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)

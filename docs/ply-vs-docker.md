@@ -23,10 +23,27 @@ An honest comparison. Short version: **Docker is a universal container platform;
 | Distribution     | Registry protocol (registry server required)                                                                                          | Any file host: HTTPS GET + hash check; GitHub Releases is a registry                                                                                                                                                                                                 |
 | Version upgrades | Rebuild image, re-push, re-pull                                                                                                       | `ply rebase app.img --runtime node@x.y.z` — metadata operation                                                                                                                                                                                                       |
 | Outbound policy  | Falco/Cilium/vendor add-on                                                                                                            | declared in the manifest, enforced per instance, audited to a file                                                                                                                                                                                                   |
+| Scaling          | None in Docker itself — Swarm or Kubernetes                                                                                           | `[scale]` in the manifest: the run parent grows and shrinks the count on CPU, memory, network or a custom metric, and resizes limits live; one host                                                                                                                  |
 
 ## Where ply wins
 
 **Startup latency and footprint.** Measured on the same machine, same kernel, both rootful: `ply run` 67 ms vs `docker run` 167 ms per container — with no daemon running between invocations. The binary is 4.7 MiB; a clean install touches exactly one file.
+
+**Under load, measured.** One REST + Postgres workload, the same static Go binary in both runtimes, the same box, back to back, Docker as the reference (the harness is `bench/` in the repo; the write-up is `bench/RESULTS-2026-09-05.md`):
+
+| | ply | Docker |
+|---|---:|---:|
+| `/ping` through a published port | 726k req/s | 714k req/s |
+| DB read through a published port | 257k | 256k |
+| runtime CPU during those cells | 0 | 0 |
+| runtime processes' memory | 28 MB | 150–185 MB |
+| 10 min at a fixed 50k req/s | flat | flat |
+| rolling restart under 655k req/s | 0 of 39 M requests lost | — |
+| egress audit / enforce on the same cells | no measurable cost | — |
+
+Both runtimes publish ports with kernel DNAT, so neither spends CPU on the request path; the difference is what idles beside your app: one run parent per app against a daemon, containerd and a shim per container. The rolling restart number needs the app to drain properly — see [Deploys](/docs/deploy/).
+
+**Scaling without an orchestrator.** Docker cannot change a replica count on its own; the answer is Swarm or Kubernetes. ply's run parent already owns the instance count, the health gate and the routing table, so a `[scale]` section in the manifest is enough: it grows and shrinks the count on CPU, memory, network throughput or a custom metric, and resizes CPU and memory limits live between a `min` and a `max`. No new process, no control plane, one host. See [Autoscaling](/docs/autoscale/).
 
 **Determinism.** Same source dir → byte-identical image, always (sorted entries, zeroed timestamps, fixed ownership). Same manifest → same lockfile → same resolution, forever. Docker builds are famously time- and cache-dependent; `RUN apt-get update` alone makes two builds differ.
 
@@ -50,7 +67,7 @@ An honest comparison. Short version: **Docker is a universal container platform;
 
 **Platform reach.** Docker Desktop covers macOS and Windows; ply is Linux-only by scope (macOS dev means a VM or remote host).
 
-**Orchestration on-ramps.** Multi-service dev is covered — `ply up` starts a `[stack]` the way compose does — but Docker's images carry to Kubernetes when you outgrow a host. ply deliberately stops at one host: if you need overlay networks, service discovery across hosts, or an orchestrator, ply's answer is "that's not this tool."
+**Orchestration on-ramps.** Multi-service dev is covered — `ply up` starts a `[stack]` the way compose does — and scaling on one host is built in, but Docker's images carry to Kubernetes when you outgrow a host. ply deliberately stops at one host: if you need overlay networks, service discovery across hosts, or a scheduler placing work on many machines, ply's answer is "that's not this tool."
 
 **Build caching for slow builds.** Docker's layer cache (and BuildKit's graph) shines when builds are expensive — big compiles, multi-stage toolchains. ply has no build cache by design; it assumes your own toolchain (`npm run build`, `cargo build`) produced the files and packaging them is cheap. True for most server apps, not for all.
 

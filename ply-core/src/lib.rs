@@ -3,6 +3,7 @@
 //! Library-first shape: everything the CLI does goes through here.
 
 pub mod apps;
+pub mod autoscale;
 pub mod build;
 pub mod bundle;
 pub mod catalog;

@@ -462,9 +462,10 @@ pub struct ScaleArgs {
     /// App to scale
     #[arg(value_name = "APP")]
     pub app: String,
-    /// Target instance count
-    #[arg(value_name = "N")]
-    pub n: u32,
+    /// Target instance count, or `auto` to hand the count back to the
+    /// manifest's `[scale]` policy after a manual pin
+    #[arg(value_name = "N|auto")]
+    pub n: String,
 }
 
 #[derive(Args)]

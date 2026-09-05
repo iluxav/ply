@@ -45,6 +45,9 @@ Zero downtime with `--scale ≥ 2`, and the failure mode is "some instances
 still on the old version," never "everything down." `--timeout <s>` bounds
 how long to watch before reporting partial progress.
 
+The same rules carry the [autoscaler](/docs/autoscale/): when a `[scale]`
+policy adds or removes instances it uses this launch and stop path.
+
 The same readiness rule holds for every launch, not only rolls: an instance
 takes traffic once its first published port accepts a connection, so a
 scale-up or a crash-restart never routes a request to a process that is

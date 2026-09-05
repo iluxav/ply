@@ -316,6 +316,11 @@ impl Membership {
     pub fn pools(&self) -> Vec<Pool> {
         self.pools.iter().map(|(p, _)| p.clone()).collect()
     }
+    /// Where the first published port reaches this instance — the address a
+    /// metrics scrape uses.
+    pub fn first_addr(&self) -> Option<SocketAddr> {
+        self.pools.first().map(|(_, b)| b.addr())
+    }
 }
 
 /// Take slot `n` out of every pool — no new connection is routed to it from

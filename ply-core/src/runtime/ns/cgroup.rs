@@ -45,7 +45,7 @@ impl Cgroup {
 
         if let Some(res) = resources {
             if let Some(mem) = &res.mem {
-                let bytes = parse_size(mem)?;
+                let bytes = parse_size(mem.initial())?;
                 cg.write("memory.max", &bytes.to_string())?;
                 // soft limit below the hard one: reclaim before the OOM kill
                 cg.write("memory.high", &(bytes * 9 / 10).to_string())?;
@@ -62,7 +62,7 @@ impl Cgroup {
                 }
                 cg.write("cpu.weight", &weight.to_string())?;
             }
-            if let Some(cpu) = &res.cpu {
+            if let Some(cpu) = res.cpu.as_ref().map(|c| c.initial()) {
                 let cores: f64 = cpu.parse().map_err(|_| {
                     Error::Manifest(format!(
                         "resources.cpu `{cpu}`: expected a number like \"1.5\""
@@ -103,21 +103,33 @@ impl Drop for Cgroup {
     }
 }
 
-/// "512M", "1G", "262144K", plain bytes.
-fn parse_size(s: &str) -> Result<u64> {
-    let s = s.trim();
-    let (digits, mult) = match s.chars().last() {
-        Some('K' | 'k') => (&s[..s.len() - 1], 1024u64),
-        Some('M' | 'm') => (&s[..s.len() - 1], 1024 * 1024),
-        Some('G' | 'g') => (&s[..s.len() - 1], 1024 * 1024 * 1024),
-        _ => (s, 1),
-    };
-    digits.parse::<u64>().map(|n| n * mult).map_err(|_| {
-        Error::Manifest(format!(
-            "resources.mem `{s}`: expected e.g. \"512M\", \"1G\""
-        ))
-    })
+/// Live resize of a running instance's memory limit (`memory.max`, with
+/// `memory.high` at 90 % as at creation). No handle: the parent owns the
+/// group and must not `Drop`-rmdir it.
+pub fn set_memory(app: &str, n: u32, bytes: u64) -> Result<()> {
+    let dir = instance_dir(app, n);
+    write_at(&dir, "memory.high", &(bytes * 9 / 10).to_string())?;
+    write_at(&dir, "memory.max", &bytes.to_string())
 }
+
+/// Live resize of the CPU quota, in millicores.
+pub fn set_cpu(app: &str, n: u32, millicores: u64) -> Result<()> {
+    let period = 100_000u64;
+    let quota = millicores * period / 1000;
+    write_at(
+        &instance_dir(app, n),
+        "cpu.max",
+        &format!("{quota} {period}"),
+    )
+}
+
+fn write_at(dir: &Path, file: &str, value: &str) -> Result<()> {
+    let path = dir.join(file);
+    std::fs::write(&path, value)
+        .map_err(|source| Error::Runtime(format!("cgroup {} = {value}: {source}", path.display())))
+}
+
+pub use crate::autoscale::parse_size;
 
 #[cfg(test)]
 mod tests {

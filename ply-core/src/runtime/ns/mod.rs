@@ -13,6 +13,7 @@ pub mod loopdev;
 pub mod mount;
 pub mod netns;
 pub mod network;
+pub mod probe;
 pub mod security;
 pub mod subid;
 pub mod term;

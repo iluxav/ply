@@ -167,7 +167,7 @@ tails new records; `--json` prints the raw log lines. See
 
 ```sh
 ply deploy IMAGE [--timeout S]     # rolling deploy, health-gated (see Deploys)
-ply scale APP N                    # grow/shrink the pool (a command is a file
+ply scale APP N|auto               # grow/shrink the pool; `auto` resumes [scale] after a pin (a command is a file
                                    # in the app's control dir; parent acts in ~2s)
 ply restart APP                    # rolling restart, health-gated
 ply reconcile                      # converge systemd units to

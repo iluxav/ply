@@ -52,10 +52,29 @@ cache  = { path = "/var/cache/myapp", ephemeral = true } # GC-able
 Per-instance is the default so scaling can never silently corrupt
 single-writer state. Plain host directories underneath.
 
+## [network]
+
+`egress = [...]` — the outbound claim: hostnames, `*.suffix` wildcards, IPv4
+addresses, CIDRs, or `*`. `[]` means "talks to nobody". Absent = not
+declared. Audit by default once declared; `--egress enforce` (or a stack
+member's `egress = { mode, allow }`) enforces. See the Security docs.
+
+## [scale]
+
+`min`, `max` (required), `signal` = `cpu` | `memory` | `net` | `metric:<name>`,
+`target` (`"70%"` for cpu/memory, `"40MB/s"` for net, a number for a metric),
+optional `cooldown` (default `"60s"`) and `metrics_path` (default
+`/metrics`, Prometheus text, scraped on the first published port). Validated
+at `ply build`; `memory` needs `resources.mem`. The run parent scales
+between min and max; `ply scale APP N` pins, `ply scale APP auto` resumes.
+
 ## [resources]
 
 cgroup v2 limits: `mem = "512M"`, `cpu = "1.5"`, `pids = 256`. `pids` is set
 even when omitted, so a fork bomb is contained with zero configuration.
+`mem` and `cpu` also take a range — `{ min = "256M", max = "2G" }` — which
+the run parent resizes live: grows by half under pressure (or an OOM kill),
+shrinks by a quarter after a cooldown idle.
 
 ## [health]
 

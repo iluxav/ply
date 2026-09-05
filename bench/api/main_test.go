@@ -141,3 +141,26 @@ func TestWhileClosingEveryResponseAsksTheClientToClose(t *testing.T) {
 		t.Fatalf("while closing: %d %q", rr.Code, rr.Header().Get("Connection"))
 	}
 }
+
+// Load knobs for the autoscale demo: burn CPU for a while, hold memory,
+// and report both as Prometheus text.
+func TestSpinBurnAndMetrics(t *testing.T) {
+	h := newMux(nil)
+	if rr := do(h, "GET", "/spin?ms=5", ""); rr.Code != 200 {
+		t.Fatalf("spin: %d %s", rr.Code, rr.Body.String())
+	}
+	if rr := do(h, "GET", "/burn?mb=8", ""); rr.Code != 200 {
+		t.Fatalf("burn: %d %s", rr.Code, rr.Body.String())
+	}
+	rr := do(h, "GET", "/metrics", "")
+	body := rr.Body.String()
+	if rr.Code != 200 || !strings.Contains(body, "benchapi_burned_mb 8") || !strings.Contains(body, "benchapi_inflight ") {
+		t.Fatalf("metrics: %d\n%s", rr.Code, body)
+	}
+	if rr := do(h, "GET", "/burn?mb=0", ""); rr.Code != 200 {
+		t.Fatalf("burn reset: %d", rr.Code)
+	}
+	if body := do(h, "GET", "/metrics", "").Body.String(); !strings.Contains(body, "benchapi_burned_mb 0") {
+		t.Fatalf("after reset:\n%s", body)
+	}
+}

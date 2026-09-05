@@ -2,3 +2,5 @@ api/server
 ply/api/server
 docker/server
 results/
+ply/autoapi/server
+ply/autoapi-metric/server

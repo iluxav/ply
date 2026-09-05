@@ -473,6 +473,7 @@ pub fn import(spec: &str, output: &Path) -> Result<ImportOutcome> {
         resources: None,
         requires: None,
         health: None,
+        scale: None,
         network: None,
         restart: None,
         layer: None,

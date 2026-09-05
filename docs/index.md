@@ -51,6 +51,8 @@ process, and your app runs as an ordinary child process. `Ctrl-C` stops it.
 - [Deployments & CD](/docs/deployments/) — a deployment is a file; push code, the host converges itself
 - [Agent-native ops](/docs/agent-ops/) — the filesystem is the API, so every AI agent already has the SDK
 - [Dashboard](/docs/dashboard/) — the optional web UI, terminal into containers included
+- [Autoscaling](/docs/autoscale/) — `[scale]` in the manifest; the run parent grows, shrinks and resizes, no orchestrator
+- [Security & rootless](/docs/security/) — namespaces, seccomp, cgroups, and the egress contract: what an app may reach, enforced and audited
 - [Dependencies & lockfiles](/docs/dependencies/) — how resolution works
 - [Registries & publishing](/docs/registries/) — shipping images anywhere
 - [ply vs Docker](/docs/ply-vs-docker/) — an honest comparison

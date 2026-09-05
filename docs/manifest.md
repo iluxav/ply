@@ -159,6 +159,14 @@ it takes a stack member's `egress = { mode, allow }` or `ply run
 [Security & rootless](/docs/security/#egress-the-contract).
 
 **`[resources]`** — cgroup v2 limits. `pids` is set even if you omit it.
+`mem` and `cpu` take a fixed value (`"512M"`, `"1.5"`) or a range
+(`{ min = "256M", max = "2G" }`) the run parent resizes live between —
+see [Autoscaling](/docs/autoscale/).
+
+**`[scale]`** — `min`, `max`, `signal` (`cpu`, `memory`, `net`,
+`metric:<name>`), `target`, optional `cooldown` and `metrics_path`: the run
+parent grows and shrinks the instance count on that signal. Validated at
+`ply build`; details in [Autoscaling](/docs/autoscale/).
 
 **`[health]` / `[restart]`** — see
 [Deploys, health & restarts](/docs/deploy/).

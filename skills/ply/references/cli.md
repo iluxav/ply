@@ -21,10 +21,12 @@ ply run IMAGE [--scale N]
               [--after APP]... [--after-timeout 60s]
               [-e K=V]... [--env-file FILE]
               [--link HOST:CONTAINER]                   # dev bind mount
+              [--egress off|audit|enforce] [--egress-allow ENTRY]...   # outbound policy
               [--privileged]                            # debugging only
 ply ps [--json]
 ply stats [APP|APP.N] [--json]
 ply exec APP[.N] CMD...
+ply egress APP [--follow] [--blocked] [--json]          # the outbound audit log as a table
 ```
 
 `--publish` forms:
@@ -45,10 +47,19 @@ the app's canonical address — what `--after` hands to dependants and what
 `<APP>_HOST` and `<APP>_PORT`. An explicit `[env]` or `-e` wins; an
 unpublished dependency injects nothing.
 
+`--egress` sets the outbound mode over the manifest's `[network] egress`
+claim (default `audit` when declared, else `off`); `--egress-allow`
+(repeatable) replaces the declared list. `ply egress APP` renders the audit
+log: destination, name, port, protocol, packets, first/last seen, verdict
+(`allowed` / `undeclared` / `blocked` / `refused`); `--blocked` keeps
+everything but `allowed`.
+
 ## Lifecycle
 
 ```sh
 ply deploy IMAGE [--timeout S]   # rolling, health-gated, reverts on failure
+ply scale APP N|auto             # N pins (pauses [scale]); auto hands the count back
+ply restart APP                  # rolling restart, health-gated
 ply rebase IMAGE --runtime name@x.y.z   # swap a runtime without rebuilding
 ply rm APP [--volumes]
 ply gc                           # drop store entries nothing references

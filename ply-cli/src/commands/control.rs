@@ -5,7 +5,11 @@ use crate::cli::{RestartArgs, ScaleArgs};
 
 pub fn scale(args: ScaleArgs) -> Result<()> {
     ensure_running(&args.app)?;
-    control::submit(&args.app, "scale", &args.n.to_string())?;
+    let n = args.n.trim();
+    if n != "auto" && !matches!(n.parse::<u32>(), Ok(v) if (1..=100).contains(&v)) {
+        bail!("scale: expected an instance count 1..=100, or `auto`");
+    }
+    control::submit(&args.app, "scale", n)?;
     println!(
         "scale request filed — the parent acts within ~2s (watch: ply ps; result: cat {})",
         control::dir(&args.app).join("last-result").display()

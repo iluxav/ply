@@ -422,6 +422,7 @@ pub fn commit(name: &str, version: &Version, output: Option<&Path>) -> Result<Co
         resources: None,
         requires: None,
         health: None,
+        scale: None,
         network: None,
         restart: None,
         layer: None,

@@ -1,0 +1,29 @@
+# The autoscale demo: the bench API under a [scale] policy and live
+# resource ranges. No database — /spin, /burn and /metrics are enough.
+[package]
+name = "autoapi"
+version = "0.1.0"
+entrypoint = ["./server"]
+include = ["server"]
+base = "debian@13"
+
+[ports]
+api = 8080
+
+[health]
+port = 8080
+grace = "30s"
+
+[scale]
+min = 1
+max = 4
+signal = "metric:benchapi_inflight"   # in-flight /spin requests per instance, from GET /metrics
+target = "4"
+cooldown = "20s"
+
+[resources]
+mem = { min = "64M", max = "512M" }
+cpu = { min = "0.5", max = "2" }
+
+[sources]
+default = "https://registry.plybox.sh/ply/{package}"
