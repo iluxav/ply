@@ -61,7 +61,11 @@ Instances reach the internet through the host: each rootful run enables
 IPv4 forwarding and a source-NAT rule for `10.77.0.0/16` (nft, or iptables
 where that is all the host has) and gives the instance the host's real
 upstream resolvers — a `127.0.0.53` systemd-resolved stub is replaced by
-what it forwards to. A rootless run makes its own namespace and reaches the
+what it forwards to. On a host that also runs Docker or ufw, both of which
+set the iptables `FORWARD` policy to `DROP`, ply inserts two accepts for
+its bridge at the top of that chain (out from `ply0`, and replies back by
+conntrack) — the same pair Docker installs for `docker0`. Both are checked
+before they are added, so repeated runs do not stack rules. A rootless run makes its own namespace and reaches the
 internet through a user-mode router (`pasta`, or `slirp4netns`), so it needs
 none of this.
 

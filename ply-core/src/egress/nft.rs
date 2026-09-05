@@ -465,7 +465,12 @@ table inet egress_web {
     #[test]
     #[ignore]
     fn write_sample_script_for_nft_check() {
-        std::fs::create_dir_all("target").unwrap();
+        // Unit tests run with the crate directory as cwd, so anchor on the
+        // workspace `target/` the command above names, not a relative path.
+        let target = std::env::var_os("CARGO_TARGET_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../target"));
+        std::fs::create_dir_all(&target).unwrap();
         let script = nft_script(
             "sample",
             &policy(
@@ -474,6 +479,6 @@ table inet egress_web {
             ),
             &[Ipv4Addr::new(8, 8, 8, 8)],
         );
-        std::fs::write("target/egress-sample.nft", script).unwrap();
+        std::fs::write(target.join("egress-sample.nft"), script).unwrap();
     }
 }

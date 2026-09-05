@@ -85,6 +85,59 @@ pub fn iptables_egress_rule() -> [&'static str; 8] {
     ]
 }
 
+/// FORWARD accepts for the bridge, in iptables terms. Docker and ufw both
+/// set that chain's policy to DROP, and the masquerade alone then leaves
+/// the bridge with no way out. It has to be iptables: a packet accepted in
+/// one nft base chain is still dropped by the next, so a chain of ours
+/// could not override the policy — and only hosts with iptables have it.
+/// Same two rules Docker installs for docker0.
+pub fn iptables_forward_rules() -> [Vec<&'static str>; 2] {
+    [
+        vec!["FORWARD", "-i", BRIDGE, "-j", "ACCEPT"],
+        vec![
+            "FORWARD",
+            "-o",
+            BRIDGE,
+            "-m",
+            "conntrack",
+            "--ctstate",
+            "RELATED,ESTABLISHED",
+            "-j",
+            "ACCEPT",
+        ],
+    ]
+}
+
+/// `iptables -C <chain> <rule>`: is it already there?
+pub fn iptables_check_args<'a>(rule: &[&'a str]) -> Vec<&'a str> {
+    let mut v = vec!["-C"];
+    v.extend_from_slice(rule);
+    v
+}
+
+/// `iptables -I <chain> 1 <rule>`: at the top, above the ufw/Docker jumps.
+pub fn iptables_insert_args<'a>(rule: &[&'a str]) -> Vec<&'a str> {
+    let mut v = vec!["-I", rule[0], "1"];
+    v.extend_from_slice(&rule[1..]);
+    v
+}
+
+/// Idempotent: each rule is checked before it is inserted. A host without
+/// iptables has no Docker or ufw either, so there is nothing to open.
+fn ensure_forward_accept() {
+    if !has("iptables") {
+        return;
+    }
+    for rule in iptables_forward_rules() {
+        if succeeds("iptables", &iptables_check_args(&rule)) {
+            continue;
+        }
+        if let Err(e) = sh("iptables", &iptables_insert_args(&rule)) {
+            eprintln!("ply: warning: iptables FORWARD accept for {BRIDGE} failed: {e}");
+        }
+    }
+}
+
 pub fn forwarding_needs_enable(current: &str) -> bool {
     current.trim() != "1"
 }
@@ -124,6 +177,7 @@ pub fn ensure_egress() {
             );
         }
     }
+    ensure_forward_accept();
     if has("nft") {
         if succeeds("nft", &["list", "table", "ip", "ply"]) {
             return;
@@ -267,6 +321,47 @@ mod tests {
                 "-j",
                 "MASQUERADE"
             ]
+        );
+    }
+
+    /// Docker and ufw both set the FORWARD policy to DROP; the masquerade
+    /// alone then leaves the bridge with no way out (seen 2026-09-05: SYNs
+    /// counted as allowed by the egress table, no reply ever). Open it the
+    /// way Docker opens docker0: out unconditionally, back only for
+    /// conntrack replies.
+    #[test]
+    fn forward_accepts_open_the_bridge_out_and_its_replies_back() {
+        let rules = iptables_forward_rules();
+        assert_eq!(rules[0], ["FORWARD", "-i", BRIDGE, "-j", "ACCEPT"]);
+        assert_eq!(
+            rules[1],
+            [
+                "FORWARD",
+                "-o",
+                BRIDGE,
+                "-m",
+                "conntrack",
+                "--ctstate",
+                "RELATED,ESTABLISHED",
+                "-j",
+                "ACCEPT"
+            ]
+        );
+    }
+
+    /// Checked with -C first (idempotent across runs), then inserted at
+    /// position 1 so it sits above the ufw/Docker jumps, not below the
+    /// chain's DROP policy.
+    #[test]
+    fn forward_accepts_are_checked_then_inserted_at_the_top() {
+        let rule = vec!["FORWARD", "-i", BRIDGE, "-j", "ACCEPT"];
+        assert_eq!(
+            iptables_check_args(&rule),
+            ["-C", "FORWARD", "-i", BRIDGE, "-j", "ACCEPT"]
+        );
+        assert_eq!(
+            iptables_insert_args(&rule),
+            ["-I", "FORWARD", "1", "-i", BRIDGE, "-j", "ACCEPT"]
         );
     }
 

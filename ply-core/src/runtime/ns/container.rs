@@ -160,7 +160,10 @@ fn setup_and_exec(spec: &ContainerSpec, egress: bool) -> Result<isize> {
     let (resolv, warning) = if egress {
         // The forwarder IS the policy: every name the app looks up has to
         // pass through it, so it is the only resolver this file may name.
-        (resolv_conf_via(&host_resolv, EGRESS_FORWARDER), None)
+        (
+            resolv_conf_for_forwarder(&host_resolv, EGRESS_FORWARDER),
+            None,
+        )
     } else {
         match &spec.dns {
             Some(server) => (resolv_conf_via(&host_resolv, server), None),
@@ -624,10 +627,22 @@ fn setup_dev_mounts(rootless: bool) -> Result<()> {
 /// stack namespace the host's resolver is unreachable — a loopback stub
 /// most of all — and the user-mode router answers DNS itself.
 pub fn resolv_conf_via(host: &str, server: &str) -> String {
+    resolv_conf_with(host, server, true)
+}
+
+/// The egress forwarder is this instance's only resolver, and it refuses
+/// undeclared names. The host's search domains would only make every
+/// REFUSED name come straight back as `<name>.lan` — refused again, and
+/// logged twice — so they stay out; the host's `options` still apply.
+pub fn resolv_conf_for_forwarder(host: &str, server: &str) -> String {
+    resolv_conf_with(host, server, false)
+}
+
+fn resolv_conf_with(host: &str, server: &str, keep_search: bool) -> String {
     let mut out = format!("nameserver {server}\n");
     for line in host.lines() {
-        let keep =
-            line.trim_start().starts_with("search") || line.trim_start().starts_with("options");
+        let l = line.trim_start();
+        let keep = l.starts_with("options") || (keep_search && l.starts_with("search"));
         if keep {
             out.push_str(line);
             out.push('\n');
@@ -731,6 +746,23 @@ mod tests {
         "# systemd-resolved\nnameserver 127.0.0.53\noptions edns0 trust-ad\nsearch example.com\n";
     const UPSTREAM: &str = "nameserver 10.124.15.254\nnameserver 10.124.15.254\n";
     const REAL: &str = "nameserver 1.1.1.1\nsearch lan\n";
+
+    /// Under an egress contract the forwarder is the only resolver, and the
+    /// host's search domains would only make every REFUSED name come back
+    /// as `<name>.lan` — refused again, logged twice. The stack router
+    /// keeps them: nothing there logs the retries.
+    #[test]
+    fn the_forwarder_resolv_conf_keeps_options_but_not_search_domains() {
+        let host = "nameserver 10.168.168.1\nsearch lan\ndomain lan\noptions edns0 trust-ad\n";
+        assert_eq!(
+            resolv_conf_for_forwarder(host, "127.0.0.53"),
+            "nameserver 127.0.0.53\noptions edns0 trust-ad\n"
+        );
+        assert_eq!(
+            resolv_conf_via(host, "10.77.0.1"),
+            "nameserver 10.77.0.1\nsearch lan\noptions edns0 trust-ad\n"
+        );
+    }
 
     #[test]
     fn rootless_keeps_the_host_file_verbatim() {

@@ -58,7 +58,7 @@ pub fn exec(args: EgressArgs) -> Result<()> {
 fn print_output(records: &[Record], args: &EgressArgs) {
     if args.json {
         for r in records {
-            if args.blocked && !matches!(r, Record::Blocked { .. } | Record::Refused { .. }) {
+            if args.blocked && !in_blocked_view(r) {
                 continue;
             }
             if let Ok(line) = serde_json::to_string(r) {
@@ -108,6 +108,15 @@ pub struct Row {
     pub first: String,
     pub last: String,
     pub verdict: String,
+}
+
+/// What `--blocked` keeps: what enforce dropped, what audit saw that
+/// enforce WOULD drop, and the names refused at DNS.
+pub fn in_blocked_view(r: &Record) -> bool {
+    matches!(
+        r,
+        Record::Blocked { .. } | Record::Undeclared { .. } | Record::Refused { .. }
+    )
 }
 
 /// One (dst, port, proto) × verdict bucket, accumulated while walking the
@@ -169,11 +178,20 @@ pub fn render_table(records: &[Record], blocked_only: bool) -> String {
                 name,
                 count,
                 ..
+            }
+            | Record::Undeclared {
+                t,
+                proto,
+                dst,
+                port,
+                name,
+                count,
+                ..
             } => {
-                let verdict = if matches!(r, Record::Allowed { .. }) {
-                    "allowed"
-                } else {
-                    "blocked"
+                let verdict = match r {
+                    Record::Allowed { .. } => "allowed",
+                    Record::Blocked { .. } => "blocked",
+                    _ => "undeclared",
                 };
                 let key = (*dst, *port, proto.clone(), verdict);
                 match index.get(&key) {
@@ -312,6 +330,30 @@ fn render_rows(rows: &[Row]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// In audit the traffic went through; the row must not say otherwise,
+    /// but `--blocked` still lists it — it is what enforce WOULD block.
+    #[test]
+    fn audit_rows_read_undeclared_and_still_show_under_blocked() {
+        let recs = vec![Record::Undeclared {
+            t: "2026-09-05T17:12:35Z".into(),
+            app: "web".into(),
+            n: 1,
+            proto: "tcp".into(),
+            dst: "100.63.40.118".parse().unwrap(),
+            port: 443,
+            name: Some("httpbin.org".into()),
+            count: 1,
+        }];
+        let out = render_table(&recs, false);
+        assert!(
+            out.contains("httpbin.org") && out.contains("undeclared"),
+            "{out}"
+        );
+        assert!(!out.contains("blocked"), "{out}");
+        assert!(render_table(&recs, true).contains("httpbin.org"));
+        assert!(in_blocked_view(&recs[0]));
+    }
 
     #[test]
     fn the_table_groups_by_destination_and_marks_verdicts() {

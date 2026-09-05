@@ -156,7 +156,8 @@ No APP lists what has logs; `-f` follows.
 **`ply egress`** reads the audit log every instance of `APP` has been
 writing since it started (`off` writes none): a table of destination,
 name, port, protocol, connection count, first/last seen, and verdict.
-`--blocked` narrows to blocked connections and refused names; `--follow`
+`--blocked` narrows to what was not `allowed` — `blocked`, `undeclared`
+(audit's word for what enforce would block), `refused`; `--follow`
 tails new records; `--json` prints the raw log lines. See
 [Security & rootless](/docs/security/#egress-the-contract).
 

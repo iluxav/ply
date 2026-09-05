@@ -269,6 +269,11 @@ which only makes what it does visible.
   resolver directly instead of going through the forwarder is treated
   like any other destination: logged, and blocked in `enforce`.
 
+The instance's `resolv.conf` names the forwarder and keeps the host's
+`options`, but not its `search` domains: with them, every refused name
+would come straight back as `<name>.lan` and be refused and logged a
+second time.
+
 What the bridge-subnet accept costs, plainly: `10.77.0.0/16` reaches
 **every other ply instance on this host**, and through `10.77.0.1`
 **anything the host itself listens on `0.0.0.0` or on that gateway
@@ -365,9 +370,12 @@ ply egress web [--follow] [--blocked] [--json]
 ```
 
 A table over every instance's audit log — `DESTINATION`, `NAME`, `PORT`,
-`PROTO`, `NEW PKTS`, `FIRST`, `LAST`, `VERDICT`. `--blocked` filters to
-blocked connections and refused names; `--follow` tails new records;
-`--json` prints the raw log lines instead. The log itself is
+`PROTO`, `NEW PKTS`, `FIRST`, `LAST`, `VERDICT`. The verdict is what
+happened: `allowed`, `blocked` (enforce dropped it), `undeclared` (audit
+saw it and let it through — what enforce would block), or `refused` (the
+name died at DNS). `--blocked` keeps everything but `allowed`; `--follow`
+tails new records; `--json` prints the raw log lines instead, whose `kind`
+field carries the same four words plus `resolved`. The log itself is
 `/var/lib/ply/egress/<app>.<n>.log` (`~/.local/share/ply/egress/`
 rootless), JSON lines, rotated like the log ring.
 
@@ -383,9 +391,13 @@ the connection evidence out of the log.
 
 The first `blocked` record for a destination emits an `egress-blocked`
 event, then at most once an hour per destination. In `audit` mode the
-same destination emits `egress-undeclared` under the same throttle, so
-the events journal shows what *would* be blocked before anyone flips the
-switch.
+same destination writes an `undeclared` record and emits
+`egress-undeclared` under the same throttle, so the events journal shows
+what *would* be blocked before anyone flips the switch. A destination is
+the name when the forwarder resolved it and the address otherwise, so a
+CDN rotating one name through many addresses is one event, not one per
+address; the event's detail carries the address and the name (`tcp
+100.63.40.118:443 httpbin.org`).
 
 ### Limits (v1)
 

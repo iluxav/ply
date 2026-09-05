@@ -70,6 +70,18 @@ pub enum Record {
         name: Option<String>,
         count: u64,
     },
+    /// The same counter as `blocked`, read under `audit`: the traffic went
+    /// through, and the kind must not say otherwise.
+    Undeclared {
+        t: String,
+        app: String,
+        n: u32,
+        proto: String,
+        dst: Ipv4Addr,
+        port: u16,
+        name: Option<String>,
+        count: u64,
+    },
 }
 
 pub fn dir() -> PathBuf {
@@ -252,6 +264,25 @@ mod tests {
             json,
             r#"{"kind":"allowed","t":"2026-09-04T21:03:11Z","app":"web","n":1,"proto":"tcp","dst":"54.187.174.169","port":443,"name":"api.stripe.com","count":12}"#
         );
+        assert_eq!(serde_json::from_str::<Record>(&json).unwrap(), r);
+    }
+
+    /// Audit lets undeclared traffic through and the log says so: its kind
+    /// is `undeclared`, never `blocked`, so `--json` readers are not lied to.
+    #[test]
+    fn an_undeclared_record_has_its_own_kind() {
+        let r = Record::Undeclared {
+            t: "2026-09-05T17:12:35Z".into(),
+            app: "web".into(),
+            n: 1,
+            proto: "tcp".into(),
+            dst: "100.63.40.118".parse().unwrap(),
+            port: 443,
+            name: Some("httpbin.org".into()),
+            count: 1,
+        };
+        let json = serde_json::to_string(&r).unwrap();
+        assert!(json.starts_with(r#"{"kind":"undeclared","#), "{json}");
         assert_eq!(serde_json::from_str::<Record>(&json).unwrap(), r);
     }
 

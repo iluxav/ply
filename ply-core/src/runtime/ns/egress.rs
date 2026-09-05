@@ -109,13 +109,34 @@ fn warn_full(warned: &mut bool, what: &str) {
     }
 }
 
-pub(crate) struct Throttle {
+/// What an event is about: the name when the forwarder resolved the
+/// address (a CDN rotates one name through many addresses, and the news is
+/// the name), else the address itself.
+pub(crate) type EventKey = (String, u16, String);
+
+pub(crate) fn event_key(name: Option<&str>, dst: Ipv4Addr, port: u16, proto: &str) -> EventKey {
+    (
+        name.map(str::to_string).unwrap_or_else(|| dst.to_string()),
+        port,
+        proto.to_string(),
+    )
+}
+
+/// The journal line's detail: `tcp 1.2.3.4:443`, plus the name when known.
+pub(crate) fn event_detail(proto: &str, dst: Ipv4Addr, port: u16, name: Option<&str>) -> String {
+    match name {
+        Some(n) => format!("{proto} {dst}:{port} {n}"),
+        None => format!("{proto} {dst}:{port}"),
+    }
+}
+
+pub(crate) struct Throttle<K = Key> {
     every: Duration,
-    last: HashMap<Key, Instant>,
+    last: HashMap<K, Instant>,
     full_warned: bool,
 }
 
-impl Throttle {
+impl<K: std::hash::Hash + Eq + Clone> Throttle<K> {
     pub(crate) fn new(every: Duration) -> Self {
         Throttle {
             every,
@@ -123,7 +144,7 @@ impl Throttle {
             full_warned: false,
         }
     }
-    pub(crate) fn allow(&mut self, key: &Key, now: Instant) -> bool {
+    pub(crate) fn allow(&mut self, key: &K, now: Instant) -> bool {
         if let Some(t) = self.last.get(key) {
             if now.duration_since(*t) < self.every {
                 return false;
@@ -254,6 +275,54 @@ struct Tracked {
 pub(crate) struct Tracker {
     keys: HashMap<Key, Tracked>,
     full_warned: bool,
+}
+
+/// The log line for a moved counter. `Blocked` only when enforce actually
+/// dropped it; audit saw the same counter grow and let the traffic through,
+/// so its kind is `undeclared` — the split the events already make.
+pub(crate) fn connection_record(
+    mode: Mode,
+    moved: &PollRecord,
+    t: String,
+    app: &str,
+    n: u32,
+    name: Option<String>,
+) -> log::Record {
+    let (dst, port, proto) = moved.key.clone();
+    let app = app.to_string();
+    let count = moved.count;
+    match moved.verdict {
+        Verdict::Allowed => log::Record::Allowed {
+            t,
+            app,
+            n,
+            proto,
+            dst,
+            port,
+            name,
+            count,
+        },
+        Verdict::Blocked if mode == Mode::Enforce => log::Record::Blocked {
+            t,
+            app,
+            n,
+            proto,
+            dst,
+            port,
+            name,
+            count,
+        },
+        Verdict::Blocked => log::Record::Undeclared {
+            t,
+            app,
+            n,
+            proto,
+            dst,
+            port,
+            name,
+            count,
+        },
+    }
 }
 
 /// What a counter did since the last poll. A counter that went BACKWARDS is
@@ -671,7 +740,7 @@ struct Serve<'a> {
     writer: Option<log::Writer>,
     names: NameMap,
     tracker: Tracker,
-    events: Throttle,
+    events: Throttle<EventKey>,
     /// One `refused`/`resolved` line a minute per name (I2): the container
     /// decides how often these happen, so it must not decide how fast the
     /// log rotates.
@@ -906,45 +975,35 @@ impl Serve<'_> {
 
         for record in self.tracker.poll(&allowed, &blocked, now) {
             let (dst, port, proto) = record.key.clone();
-            let t = log::now_rfc3339();
-            let app = self.app.to_string();
-            let n = self.n;
             let name = self.names.name_of(dst);
-            match record.verdict {
-                Verdict::Blocked => {
-                    self.write(log::Record::Blocked {
-                        t,
-                        app,
-                        n,
-                        proto: proto.clone(),
-                        dst,
-                        port,
-                        name,
-                        count: record.count,
-                    });
-                    // Only alongside a record, so the journal cannot fill
-                    // with events for a destination that has not moved.
-                    if self.events.allow(&record.key, now) {
-                        // In audit nothing was actually blocked — the same
-                        // rule counted what WOULD have been.
-                        let event = if self.policy.mode == Mode::Enforce {
-                            "egress-blocked"
-                        } else {
-                            "egress-undeclared"
-                        };
-                        events::emit(self.app, event, &format!("{proto} {dst}:{port}"));
-                    }
-                }
-                Verdict::Allowed => self.write(log::Record::Allowed {
-                    t,
-                    app,
-                    n,
-                    proto,
-                    dst,
-                    port,
-                    name,
-                    count: record.count,
-                }),
+            self.write(connection_record(
+                self.policy.mode,
+                &record,
+                log::now_rfc3339(),
+                self.app,
+                self.n,
+                name.clone(),
+            ));
+            // Only alongside a record, so the journal cannot fill with
+            // events for a destination that has not moved; keyed by name
+            // when there is one, so a CDN's address rotation is one event.
+            if record.verdict == Verdict::Blocked
+                && self
+                    .events
+                    .allow(&event_key(name.as_deref(), dst, port, &proto), now)
+            {
+                // In audit nothing was actually blocked — the same rule
+                // counted what WOULD have been.
+                let event = if self.policy.mode == Mode::Enforce {
+                    "egress-blocked"
+                } else {
+                    "egress-undeclared"
+                };
+                events::emit(
+                    self.app,
+                    event,
+                    &event_detail(&proto, dst, port, name.as_deref()),
+                );
             }
         }
     }
@@ -1038,6 +1097,96 @@ mod tests {
         assert!(t.allow(&key, now));
         assert!(!t.allow(&key, now + std::time::Duration::from_secs(10)));
         assert!(t.allow(&key, now + std::time::Duration::from_secs(3601)));
+    }
+
+    /// The record kind says what happened: enforce blocked it, audit only
+    /// saw it. Same split the events already make.
+    #[test]
+    fn audit_writes_undeclared_where_enforce_writes_blocked() {
+        let moved = blocked(Ipv4Addr::new(8, 8, 8, 8), 443, 8);
+        let rec = |mode| {
+            connection_record(
+                mode,
+                &moved,
+                "t".into(),
+                "web",
+                1,
+                Some("dns.google".into()),
+            )
+        };
+        assert!(matches!(
+            rec(Mode::Enforce),
+            log::Record::Blocked { dst, count: 8, .. } if dst == Ipv4Addr::new(8, 8, 8, 8)
+        ));
+        assert!(matches!(
+            rec(Mode::Audit),
+            log::Record::Undeclared { dst, count: 8, .. } if dst == Ipv4Addr::new(8, 8, 8, 8)
+        ));
+        let ok = allowed(Ipv4Addr::new(1, 1, 1, 1), 443, 2);
+        assert!(matches!(
+            connection_record(Mode::Audit, &ok, "t".into(), "web", 1, None),
+            log::Record::Allowed { count: 2, .. }
+        ));
+    }
+
+    /// A CDN name rotates through many addresses (httpbin.org: eight events
+    /// in four rounds); the news is the name, so the throttle keys on it
+    /// when the forwarder knows it, and on the address when it does not.
+    #[test]
+    fn undeclared_events_are_throttled_per_name_when_the_address_has_one() {
+        let mut t = Throttle::new(EVENT_EVERY);
+        let now = Instant::now();
+        let first = event_key(
+            Some("httpbin.org"),
+            Ipv4Addr::new(100, 63, 40, 118),
+            443,
+            "tcp",
+        );
+        let second = event_key(
+            Some("httpbin.org"),
+            Ipv4Addr::new(44, 195, 8, 204),
+            443,
+            "tcp",
+        );
+        assert!(t.allow(&first, now));
+        assert!(
+            !t.allow(&second, now + Duration::from_secs(16)),
+            "another address of the same name is not new news"
+        );
+        assert!(t.allow(&event_key(None, Ipv4Addr::new(8, 8, 8, 8), 443, "tcp"), now));
+        assert!(
+            t.allow(&event_key(None, Ipv4Addr::new(8, 8, 4, 4), 443, "tcp"), now),
+            "nameless addresses still throttle per address"
+        );
+        assert!(
+            t.allow(
+                &event_key(
+                    Some("httpbin.org"),
+                    Ipv4Addr::new(44, 195, 8, 204),
+                    80,
+                    "tcp"
+                ),
+                now
+            ),
+            "the same name on another port is another destination"
+        );
+    }
+
+    #[test]
+    fn the_event_detail_names_the_destination_when_it_can() {
+        assert_eq!(
+            event_detail(
+                "tcp",
+                Ipv4Addr::new(100, 63, 40, 118),
+                443,
+                Some("httpbin.org")
+            ),
+            "tcp 100.63.40.118:443 httpbin.org"
+        );
+        assert_eq!(
+            event_detail("udp", Ipv4Addr::new(8, 8, 8, 8), 53, None),
+            "udp 8.8.8.8:53"
+        );
     }
 
     #[test]
@@ -1334,7 +1483,7 @@ mod tests {
 
     #[test]
     fn the_event_throttle_stops_taking_new_destinations_at_the_cap() {
-        let mut t = Throttle::new(EVENT_EVERY);
+        let mut t: Throttle<Key> = Throttle::new(EVENT_EVERY);
         let now = Instant::now();
         for i in 0..MAX_TRACKED {
             assert!(t.allow(&(Ipv4Addr::from(i as u32), 443, "tcp".into()), now));
