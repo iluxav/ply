@@ -69,6 +69,31 @@ zero lost — with the idle-close variant, one request per connection was.
 There's no magic: you can watch the pointer file and per-instance state
 files change under `/run/ply/` while it happens.
 
+## When something restarts
+
+`ply why APP` answers before you start guessing:
+
+```
+web — 2 instances, image /srv/web-1.2.0-linux-x64.img, published 10.77.0.1:8080
+  web.1  10.77.0.3  pid 4242  up 12m  restarts 2
+  web.2  10.77.0.4  pid 4301  up 1h 4m  restarts 0
+  last deploy: web 1.1.0 -> 1.2.0
+
+restarts: 2 (newest first)
+  2026-09-05T17:16:40Z  web.1  killed by signal 9 (SIGKILL), OOM-killed (oom_kill=1), up 1m 30s; policy on-failure -> restart in 2s
+    log: fatal: out of memory allocating 512 MiB
+  2026-09-05T17:15:10Z  web.1  exit code 1, up 30s; policy on-failure -> restart in 1s
+    log: Error: connect ECONNREFUSED 10.77.0.1:5432
+
+changes: 3 (newest first)
+  2026-09-05T17:14:00Z  deploy           web 1.1.0 -> 1.2.0
+  …
+```
+
+Exits, with their code or signal, OOM kills and uptime, come from the
+journal; the log lines from the slot's ring; blocked traffic from the
+egress log; changes from the journal. `--json` gives an agent the same.
+
 ## Rollback
 
 Images are content-addressed files and registries are append-only — the old

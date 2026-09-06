@@ -148,12 +148,23 @@ ply stats [APP|APP.N] [--json] [--sample-ms MS]
 ply exec APP[.N] CMD…
 ply logs [APP[.N]] [-f] [-n LINES]
 ply egress APP [--follow] [--blocked] [--json]
+ply why APP [--json]
 ```
 
 **`ply logs`** reads the bounded per-instance ring the run parent tees
 (512 KiB ×2 per instance, in the run dir) — identical foreground, under
 systemd, rootless. journald remains the unbounded archive on systemd hosts.
 No APP lists what has logs; `-f` follows.
+
+**`ply why`** is the app explaining itself: its instances and image, every
+recent exit with the code or signal, whether it was OOM-killed, how long it
+had been up, what the restart policy did next and the last lines of that
+slot's log; the names and addresses it was refused or blocked on, with the
+fix; and the deploys, scale steps and resizes that preceded all of it,
+newest first. Every line is evidence from the journal, the state files, the
+egress log and the log ring — no inference. `--json` is the same report for
+scripts and agents. The journal is a ring, and the report says how far back
+it reaches.
 
 **`ply egress`** reads the audit log every instance of `APP` has been
 writing since it started (`off` writes none): a table of destination,

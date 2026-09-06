@@ -33,6 +33,7 @@ pub mod source;
 pub mod stack;
 pub mod stats;
 pub mod store;
+pub mod why;
 
 pub use error::{Error, Result};
 

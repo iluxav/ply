@@ -27,6 +27,7 @@ ply ps [--json]
 ply stats [APP|APP.N] [--json]
 ply exec APP[.N] CMD...
 ply egress APP [--follow] [--blocked] [--json]          # the outbound audit log as a table
+ply why APP [--json]                                    # exits, blocked traffic, changes — with evidence
 ```
 
 `--publish` forms:

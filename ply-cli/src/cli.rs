@@ -88,6 +88,9 @@ pub enum Command {
     /// What an app's instances reached: the egress audit log as a table
     Egress(EgressArgs),
 
+    /// Why an app is in the state it is in: exits, blocked traffic, changes — with evidence
+    Why(WhyArgs),
+
     /// List running instances
     Ps(PsArgs),
 
@@ -488,6 +491,16 @@ pub struct LogsArgs {
     /// Lines of history to show first
     #[arg(short = 'n', long, value_name = "N", default_value_t = 100)]
     pub lines: usize,
+}
+
+#[derive(Args)]
+pub struct WhyArgs {
+    /// App to explain
+    #[arg(value_name = "APP")]
+    pub app: String,
+    /// The same report as JSON
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Args)]

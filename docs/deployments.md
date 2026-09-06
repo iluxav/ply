@@ -134,9 +134,11 @@ there and deploy with `from`.
   last reconcile verdict (`deployed …`, `building @ <commit>…`,
   `unchanged (…)`, or the failure).
 - `<apps>/events.log` — an append-only journal of deploys, scales,
-  restarts, crash respawns, autoscale steps (`scale-up`, `scale-down`,
-  `resize`, each with its reason) and egress violations (`egress-blocked`,
-  `egress-undeclared`). `tail -f` it, or read it in the dashboard.
+  restarts, every instance exit (`instance-exit`: code or signal, uptime,
+  OOM count, what the restart policy did), autoscale steps (`scale-up`,
+  `scale-down`, `resize`, each with its reason) and egress violations
+  (`egress-blocked`, `egress-undeclared`). `tail -f` it, read it in the
+  dashboard, or let `ply why <app>` join it with the rest of the evidence.
 
 ## Spec reference
 

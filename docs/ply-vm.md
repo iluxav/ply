@@ -7,14 +7,15 @@ instead of namespaces — on Linux hosts (multi-tenant isolation) and later
 macOS/Windows hosts (native `ply run` off-Linux, no Docker-Desktop-style
 VM product).
 
-Status 2026-08-20: requirements only, **parked** — decision: Lima is the
-macOS middleground for now (docs/macos.md), WSL2 covers Windows. Revisit
-when hostile multi-tenancy or native-Mac demand materializes. Queue
-position: after the CI deployment verbs (`ply push`/`status`/`rollback`).
-Before building, spend one day evaluating **libkrun** (Linux KVM + macOS
-HVF as an embeddable library) — building our own wins only if we want the
-blk-per-image design, Windows support, or zero C dependencies badly
-enough; if libkrun fits, M1+M3 collapse to ~2 weeks of integration.
+Status 2026-09-05: **built** for macOS — `ply-core/src/runtime/vm/`:
+Hypervisor.framework microVMs (own device models, no libkrun), a userspace
+switch with DNS and NAT, the kernel pinned as `ply/microvm-kernel@6.12.0`,
+an Apple Silicon integration suite (`make mac-test`). Not yet: the kernel
+keg published, a signed macOS release, `ply exec` into a guest, egress
+enforcement in the VM backend, the Linux `isolation = "vm"` arm. The
+requirements below are the original document; where the build diverged,
+the code is the record. (Status 2026-08-20 was: requirements only, parked,
+Lima as the middleground.)
 
 ---
 

@@ -8,7 +8,30 @@
 use std::io::Write;
 use std::path::PathBuf;
 
+use serde::{Deserialize, Serialize};
+
 const CAP: u64 = 512 * 1024;
+
+/// One journal line.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Event {
+    pub ts: u64,
+    pub app: String,
+    pub event: String,
+    pub detail: String,
+}
+
+/// Every parseable line of the journal, oldest first. A half-written last
+/// line, or a line from before the schema, is skipped, not an error.
+pub fn read() -> Vec<Event> {
+    std::fs::read_to_string(path())
+        .map(|text| {
+            text.lines()
+                .filter_map(|l| serde_json::from_str::<Event>(l).ok())
+                .collect()
+        })
+        .unwrap_or_default()
+}
 
 fn path() -> PathBuf {
     crate::paths::apps_dir().join("events.log")

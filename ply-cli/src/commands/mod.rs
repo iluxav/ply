@@ -22,6 +22,7 @@ mod setup;
 mod stats;
 mod up;
 mod volume;
+mod why;
 
 use anyhow::Result;
 
@@ -38,6 +39,7 @@ pub fn dispatch(command: Command) -> Result<()> {
         Command::Exec(args) => exec::exec(args),
         Command::Logs(args) => logs::exec(args),
         Command::Egress(args) => egress::exec(args),
+        Command::Why(args) => why::exec(args),
         Command::Scale(args) => control::scale(args),
         Command::Restart(args) => control::restart(args),
         Command::Reconcile(args) => reconcile::exec(args),

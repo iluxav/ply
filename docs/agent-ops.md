@@ -25,6 +25,7 @@ legible text at stable paths — not rows inside a daemon.
 | deploy an app | write `/var/lib/ply/deployments/<name>.toml` |
 | check how it went | read `deployments/.status/<name>.status` |
 | see what happened | read `<apps>/events.log` (JSON lines) |
+| understand why an app is in its state | `ply why <app> --json` — exits with codes and OOM kills, blocked traffic, recent changes, all as evidence |
 | read logs — dead builders included | read `<run>/logs/<app>.<n>.log` |
 | scale to 3 | write `3` into `<apps>/<app>/control/scale` (pins an autoscaled app) |
 | hand scaling back to `[scale]` | write `auto` into the same file |

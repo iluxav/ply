@@ -470,24 +470,47 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
             };
             let info = slots.get_mut(&slot).expect("live instance has a slot");
             update_child(info.sig_idx, 0);
+            // Evidence for `ply why`, read while the cgroup still exists.
+            let uptime = info.started.elapsed().as_secs();
+            let oom_kill = platform::sample(&identity, slot, instances[pos].inner.ip())
+                .oom_kill
+                .unwrap_or(0);
             drop(instances.remove(pos)); // unmount, remove state + hosts now
 
+            let policy_name = restart_policy
+                .as_ref()
+                .map(|r| r.policy.clone())
+                .unwrap_or_else(|| "never".to_string());
             let respawn = !shutting_down
-                && match restart_policy.as_ref().map(|r| r.policy.as_str()) {
-                    Some("always") => true,
-                    Some("on-failure") => failed,
+                && match policy_name.as_str() {
+                    "always" => true,
+                    "on-failure" => failed,
                     _ => false,
                 };
-            if respawn {
+            let outcome = if respawn {
                 // A healthy stretch resets the backoff ladder.
                 if info.started.elapsed() > std::time::Duration::from_secs(60) {
                     info.backoff = initial_backoff;
                 }
-                pending.push((slot, std::time::Instant::now() + info.backoff));
+                let wait = info.backoff;
+                pending.push((slot, std::time::Instant::now() + wait));
                 info.backoff = (info.backoff * 2).min(max_backoff);
-            } else if exit_code == 0 && code != 0 {
-                exit_code = code;
-            }
+                format!("policy {policy_name} -> restart in {}s", wait.as_secs())
+            } else {
+                if exit_code == 0 && code != 0 {
+                    exit_code = code;
+                }
+                if shutting_down {
+                    "stopping".to_string()
+                } else {
+                    format!("not restarted (policy {policy_name})")
+                }
+            };
+            crate::runtime::events::emit(
+                &identity,
+                "instance-exit",
+                &crate::why::ExitInfo::detail(&identity, slot, code, uptime, oom_kill, &outcome),
+            );
         }
         if shutting_down {
             pending.clear();
