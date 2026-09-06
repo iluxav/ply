@@ -1,0 +1,23 @@
+# The scale-to-zero demo: the bench API that sleeps after 20 s with no
+# connections and wakes on the next one. One instance, no signal needed.
+[package]
+name = "sleepapi"
+version = "0.1.0"
+entrypoint = ["./server"]
+include = ["server"]
+base = "debian@13"
+
+[ports]
+api = 8080
+
+[health]
+port = 8080
+grace = "30s"
+
+[scale]
+min = 0
+max = 1
+idle = "20s"
+
+[sources]
+default = "https://registry.plybox.sh/ply/{package}"

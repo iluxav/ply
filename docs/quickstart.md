@@ -20,24 +20,24 @@ user it installs to `~/.local/bin/ply` and tells you if a one-time
 ## Write a manifest
 
 A ply app is a directory with a `ply.toml`. `ply init` writes it for you
-(it detects Python/Node projects and asks a few questions); `ply add python3`
+(it detects Python/Node projects and asks a few questions); `ply add node`
 adds a dependency at its latest version. By hand, it is:
 
 ```toml
 [package]
 name = "hello"
 version = "0.1.0"
-entrypoint = ["python3", "-c", "print('hello from ply')"]
+entrypoint = ["node", "-e", "console.log('hello from ply')"]
 base = "debian@13"
 
 [dependencies]
-python3 = "3.13"
+node = "22"
 
 [sources]
 default = "https://registry.plybox.sh/ply/{package}"
 ```
 
-`base` and `python3` come from the [official registry](https://registry.plybox.sh)
+`base` and `node` come from the [official registry](https://registry.plybox.sh)
 — prebuilt, content-addressed packages served from a CDN.
 
 ## Build
@@ -50,12 +50,13 @@ This resolves the version ranges (writing `ply.lock`), fetches the
 dependencies by hash, and produces a deterministic image:
 
 ```
-locked debian 13.6.0, python3 3.13.5
-built hello-0.1.0-linux-x64.img (4.0 KiB)
+locked node 22.23.2
+locked debian 13.6.0
+built ./hello-0.1.0-linux-x64.img (4.0 KiB)
 ```
 
 The image is tiny because dependencies are *references*, not copies — ten
-Python apps on one host share one python3 in the store. Rebuilding the same
+Node apps on one host share one node in the store. Rebuilding the same
 directory produces a byte-identical file, always.
 
 ## Run

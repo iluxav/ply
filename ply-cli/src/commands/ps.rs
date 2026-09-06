@@ -16,7 +16,8 @@ pub fn exec(args: PsArgs) -> Result<()> {
     }
 
     let waiting = ply_core::runtime::after::WaitingMarker::list();
-    if states.is_empty() && waiting.is_empty() {
+    let asleep = ply_core::runtime::after::AsleepMarker::list();
+    if states.is_empty() && waiting.is_empty() && asleep.is_empty() {
         println!("no instances running");
         return Ok(());
     }
@@ -62,6 +63,21 @@ pub fn exec(args: PsArgs) -> Result<()> {
             human_duration(now.saturating_sub(w.since)),
             "—",
             w.after.join(", ")
+        );
+    }
+    // Asleep parents hold their port with no instance behind it; the row
+    // says where the next connection wakes them.
+    for m in &asleep {
+        println!(
+            "{:<24} {:>8} {:<14} {:<20} {:>8} {:>8} asleep, wakes on :{} (idle {})",
+            m.app,
+            m.pid,
+            "—",
+            "—",
+            human_duration(now.saturating_sub(m.since)),
+            "—",
+            m.port,
+            human_duration(m.idle_secs)
         );
     }
     if any_stale {

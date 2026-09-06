@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -203,6 +203,82 @@ pub trait PoolMirror: Send + Sync {
     fn sync(&self, backends: &[SocketAddr]);
     /// Undo whatever `sync` installed. Called once, when the parent exits.
     fn teardown(&self) {}
+    /// Connections the mirror's path has accepted so far, when it can count
+    /// them — what the relay never saw.
+    fn accepted(&self) -> Option<u64> {
+        None
+    }
+}
+
+/// What the relay has seen on one pool: connections accepted since the
+/// pool was made, and connections it is splicing right now. The sleeper's
+/// evidence in relay mode; in kernel mode the DNAT rule's counter carries
+/// the accepts the relay never sees.
+#[derive(Default)]
+pub struct Activity {
+    accepted: AtomicU64,
+    open: AtomicUsize,
+}
+
+impl Activity {
+    pub fn accepted(&self) -> u64 {
+        self.accepted.load(Ordering::Relaxed)
+    }
+    pub fn open(&self) -> usize {
+        self.open.load(Ordering::Relaxed)
+    }
+}
+
+/// Counts one open relay for as long as it lives.
+struct OpenGuard(Arc<Activity>);
+impl OpenGuard {
+    fn new(a: &Arc<Activity>) -> Self {
+        a.open.fetch_add(1, Ordering::Relaxed);
+        OpenGuard(a.clone())
+    }
+}
+impl Drop for OpenGuard {
+    fn drop(&mut self) {
+        self.0.open.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+/// How long a connection that arrived at an empty pool is held for an
+/// instance to start and accept, and how often it looks.
+pub const WAKE_TIMEOUT: Duration = Duration::from_secs(60);
+const WAKE_POLL: Duration = Duration::from_millis(50);
+
+/// What an empty pool does with a connection when the app is asleep: ask the
+/// run loop for an instance and hold the client until one joins. The relay
+/// side sets it; the run loop takes it, once, on its next turn.
+pub struct Waker {
+    requested: AtomicBool,
+    first: Mutex<Option<(std::time::Instant, Option<SocketAddr>)>>,
+    timeout: Duration,
+}
+
+impl Waker {
+    pub fn new(timeout: Duration) -> Arc<Waker> {
+        Arc::new(Waker {
+            requested: AtomicBool::new(false),
+            first: Mutex::new(None),
+            timeout,
+        })
+    }
+    fn request(&self, peer: Option<SocketAddr>) {
+        let mut first = self.first.lock().unwrap();
+        if first.is_none() {
+            *first = Some((std::time::Instant::now(), peer));
+        }
+        self.requested.store(true, Ordering::SeqCst);
+    }
+    /// The pending request — when it was made and by whom — once.
+    pub fn take(&self) -> Option<(std::time::Instant, Option<SocketAddr>)> {
+        if !self.requested.swap(false, Ordering::SeqCst) {
+            return None;
+        }
+        self.first.lock().unwrap().take()
+    }
 }
 
 /// The live backend set, shared between the run loop (writer) and the
@@ -212,11 +288,33 @@ pub struct Pool {
     backends: Arc<Mutex<BTreeMap<u32, Arc<dyn Connector>>>>,
     counter: Arc<AtomicUsize>,
     mirror: Arc<Mutex<Option<Arc<dyn PoolMirror>>>>,
+    activity: Arc<Activity>,
+    waker: Arc<Mutex<Option<Arc<Waker>>>>,
 }
 
 impl Pool {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn activity(&self) -> Arc<Activity> {
+        self.activity.clone()
+    }
+
+    /// From now on a connection to an empty pool asks `waker` for an
+    /// instance and waits, instead of being dropped.
+    pub fn wake_with(&self, waker: Arc<Waker>) {
+        *self.waker.lock().unwrap() = Some(waker);
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.backends.lock().unwrap().is_empty()
+    }
+
+    /// The mirror's accept count, if there is a mirror that counts.
+    pub fn mirror_accepted(&self) -> Option<u64> {
+        let mirror = self.mirror.lock().unwrap().clone();
+        mirror.and_then(|m| m.accepted())
     }
 
     pub fn insert(&self, slot: u32, backend: Arc<dyn Connector>) {
@@ -454,7 +552,23 @@ pub fn serve(listener: TcpListener, pool: Pool, same_network: bool) {
         let pool = pool.clone();
         std::thread::spawn(move || {
             let _ = client.set_nodelay(true);
-            for backend in pool.rotated() {
+            pool.activity.accepted.fetch_add(1, Ordering::Relaxed);
+            let mut backends = pool.rotated();
+            if backends.is_empty() {
+                // An asleep app: this connection is the wake-up call. Ask,
+                // then wait for the instance to join — every later arrival
+                // waits in its own thread the same way.
+                let waker = pool.waker.lock().unwrap().clone();
+                if let Some(waker) = waker {
+                    waker.request(client.peer_addr().ok());
+                    let deadline = std::time::Instant::now() + waker.timeout;
+                    while backends.is_empty() && std::time::Instant::now() < deadline {
+                        std::thread::sleep(WAKE_POLL);
+                        backends = pool.rotated();
+                    }
+                }
+            }
+            for backend in backends {
                 let addr = backend.addr();
                 if Some(addr) == own {
                     eprintln!(
@@ -465,6 +579,7 @@ pub fn serve(listener: TcpListener, pool: Pool, same_network: bool) {
                 }
                 match backend.connect(std::time::Duration::from_millis(500)) {
                     Ok(upstream) => {
+                        let _open = OpenGuard::new(&pool.activity);
                         relay(client, upstream);
                         return;
                     }
@@ -1050,5 +1165,68 @@ mod tests {
             Ok(_) => assert!(out.is_empty()),
             Err(e) => assert_eq!(e.kind(), std::io::ErrorKind::ConnectionReset),
         }
+    }
+    /// A connection to an empty pool with a waker attached is the wake-up
+    /// call: it is held, the run loop's side sees one request, and once a
+    /// backend joins the bytes flow as if nothing happened. Without a waker
+    /// the old contract holds — dropped. Past the timeout — dropped.
+    #[test]
+    fn a_connection_to_an_asleep_app_is_held_until_an_instance_joins() {
+        let pool = Pool::new();
+        let waker = Waker::new(Duration::from_secs(5));
+        pool.wake_with(waker.clone());
+        let front = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let front_addr = front.local_addr().unwrap();
+        let serve_pool = pool.clone();
+        std::thread::spawn(move || serve(front, serve_pool, true));
+
+        let mut c = TcpStream::connect(front_addr).unwrap();
+        c.set_read_timeout(Some(Duration::from_secs(5))).ok();
+        // the request shows up on the loop's side, once
+        let mut asked = None;
+        for _ in 0..100 {
+            asked = waker.take();
+            if asked.is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let (_, peer) = asked.expect("the connection asked for an instance");
+        assert_eq!(peer.map(|p| p.ip()), Some(c.local_addr().unwrap().ip()));
+        assert!(waker.take().is_none(), "taken once");
+        assert_eq!(pool.activity().accepted(), 1);
+
+        // the instance "starts" and joins: the held connection is served
+        let (backend, hits) = echo_backend();
+        pool.insert(1, connector_for(backend));
+        c.write_all(b"woke").unwrap();
+        c.shutdown(std::net::Shutdown::Write).unwrap();
+        let mut out = Vec::new();
+        c.read_to_end(&mut out).unwrap();
+        assert_eq!(out, b"woke");
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+        for _ in 0..50 {
+            if pool.activity().open() == 0 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(pool.activity().open(), 0, "the relay let go");
+
+        // past the timeout, a held connection is dropped like any other
+        let short = Pool::new();
+        short.wake_with(Waker::new(Duration::from_millis(200)));
+        let front = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let front_addr = front.local_addr().unwrap();
+        let serve_pool = short.clone();
+        std::thread::spawn(move || serve(front, serve_pool, true));
+        let mut c = TcpStream::connect(front_addr).unwrap();
+        c.set_read_timeout(Some(Duration::from_secs(5))).ok();
+        let started = std::time::Instant::now();
+        let mut out = Vec::new();
+        let _ = c.read_to_end(&mut out);
+        assert!(out.is_empty());
+        assert!(started.elapsed() >= Duration::from_millis(150), "held until the timeout");
+        assert!(started.elapsed() < Duration::from_secs(4), "then dropped");
     }
 }

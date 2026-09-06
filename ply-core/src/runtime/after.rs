@@ -201,6 +201,11 @@ pub fn check(app: &str) -> Readiness {
         Ok(all) => all.into_iter().filter(|s| s.app == app).collect(),
         Err(_) => return Readiness::NotRunning,
     };
+    // Asleep is available: the parent holds the port and the dependent's
+    // first connection is what starts an instance. Nothing to probe.
+    if !states.iter().any(|s| s.alive()) && AsleepMarker::find(app).is_some() {
+        return Readiness::Ready;
+    }
     let health_port = states.iter().find_map(|s| s.health_port);
     let endpoints: Vec<Endpoint> = states
         .iter()
@@ -387,6 +392,122 @@ impl WaitingMarker {
             .collect();
         out.sort_by(|a, b| a.app.cmp(&b.app));
         out
+    }
+}
+
+/// A parent whose app is asleep — no instances, the published port held —
+/// leaves this so `ply ps`, `ply why`, `--after` and `ply deploy` can tell
+/// "asleep" from "gone". Same contract as `WaitingMarker`: the file lives
+/// while the parent does, and a dead writer's file is skipped.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AsleepMarker {
+    pub app: String,
+    pub pid: i32,
+    /// Unix seconds.
+    pub since: u64,
+    /// The published port it wakes on, and the address a client reaches it at.
+    pub port: u16,
+    pub addr: String,
+    /// The image the next wake runs — rewritten by a deploy while asleep.
+    pub image: String,
+    pub idle_secs: u64,
+}
+
+/// Removes the marker when dropped (woke, or the parent is leaving).
+pub struct AsleepGuard {
+    path: PathBuf,
+    marker: AsleepMarker,
+}
+
+impl Drop for AsleepGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+impl AsleepGuard {
+    /// A deploy while asleep: the next wake runs `image`.
+    pub fn set_image(&mut self, image: &str) -> Result<()> {
+        self.marker.image = image.to_string();
+        write_json(&self.path, &self.marker)
+    }
+}
+
+fn asleep_dir() -> PathBuf {
+    crate::paths::run_dir().join("asleep")
+}
+
+fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+    let text = serde_json::to_string(value).map_err(|e| Error::Runtime(e.to_string()))?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, text).map_err(|source| Error::Io {
+        path: tmp.clone(),
+        source,
+    })?;
+    std::fs::rename(&tmp, path).map_err(|source| Error::Io {
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
+impl AsleepMarker {
+    pub fn write(self) -> Result<AsleepGuard> {
+        self.write_in(&asleep_dir())
+    }
+
+    pub fn write_in(self, dir: &Path) -> Result<AsleepGuard> {
+        std::fs::create_dir_all(dir).map_err(|source| Error::Io {
+            path: dir.to_path_buf(),
+            source,
+        })?;
+        let path = dir.join(format!("{}.json", self.app));
+        write_json(&path, &self)?;
+        Ok(AsleepGuard { path, marker: self })
+    }
+
+    /// Markers whose writer is still alive.
+    pub fn list() -> Vec<AsleepMarker> {
+        Self::list_in(&asleep_dir())
+    }
+
+    pub fn list_in(dir: &Path) -> Vec<AsleepMarker> {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return Vec::new();
+        };
+        let mut out: Vec<AsleepMarker> = entries
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+            .filter_map(|e| std::fs::read_to_string(e.path()).ok())
+            .filter_map(|t| serde_json::from_str::<AsleepMarker>(&t).ok())
+            .filter(|m| alive(m.pid))
+            .collect();
+        out.sort_by(|a, b| a.app.cmp(&b.app));
+        out
+    }
+
+    pub fn find(app: &str) -> Option<AsleepMarker> {
+        Self::find_in(&asleep_dir(), app)
+    }
+
+    /// A guard with no file behind it, for a parent that could not write
+    /// one: it is asleep all the same. Dropping it removes nothing.
+    pub fn ghost(app: &str) -> Option<AsleepGuard> {
+        Some(AsleepGuard {
+            path: asleep_dir().join(format!("{app}.json.none")),
+            marker: AsleepMarker {
+                app: app.to_string(),
+                pid: std::process::id() as i32,
+                since: 0,
+                port: 0,
+                addr: String::new(),
+                image: String::new(),
+                idle_secs: 0,
+            },
+        })
+    }
+
+    pub fn find_in(dir: &Path, app: &str) -> Option<AsleepMarker> {
+        Self::list_in(dir).into_iter().find(|m| m.app == app)
     }
 }
 
@@ -699,5 +820,41 @@ mod tests {
             Readiness::Unhealthy(why) => assert!(why.contains(&format!("port {closed}")), "{why}"),
             other => panic!("expected Unhealthy, got {other:?}"),
         }
+    }
+    /// The asleep marker: written, found, rewritten by a deploy, gone on
+    /// drop; a dead writer's file is not a sleeping app.
+    #[test]
+    fn an_asleep_marker_lives_with_its_parent_and_carries_the_next_image() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = AsleepMarker {
+            app: "web".into(),
+            pid: std::process::id() as i32,
+            since: 1_700_000_000,
+            port: 8080,
+            addr: "10.77.0.1".into(),
+            image: "/var/lib/ply/apps/web/current.img".into(),
+            idle_secs: 600,
+        };
+        let mut guard = marker.clone().write_in(dir.path()).unwrap();
+        assert_eq!(AsleepMarker::find_in(dir.path(), "web"), Some(marker.clone()));
+        assert_eq!(AsleepMarker::find_in(dir.path(), "db"), None);
+        guard.set_image("/var/lib/ply/apps/web/next.img").unwrap();
+        assert_eq!(
+            AsleepMarker::find_in(dir.path(), "web").unwrap().image,
+            "/var/lib/ply/apps/web/next.img"
+        );
+        drop(guard);
+        assert!(AsleepMarker::list_in(dir.path()).is_empty(), "removed on drop");
+
+        let dead = AsleepMarker {
+            pid: i32::MAX - 1,
+            ..marker
+        };
+        std::fs::write(
+            dir.path().join("web.json"),
+            serde_json::to_string(&dead).unwrap(),
+        )
+        .unwrap();
+        assert!(AsleepMarker::find_in(dir.path(), "web").is_none(), "dead writer");
     }
 }

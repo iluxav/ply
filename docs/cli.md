@@ -178,8 +178,9 @@ tails new records; `--json` prints the raw log lines. See
 
 ```sh
 ply deploy IMAGE [--timeout S]     # rolling deploy, health-gated (see Deploys)
-ply scale APP N|auto               # grow/shrink the pool; `auto` resumes [scale] after a pin (a command is a file
-                                   # in the app's control dir; parent acts in ~2s)
+ply scale APP N|auto|0             # grow/shrink the pool; `auto` resumes [scale] after a pin; 0 puts an app
+                                   # with `[scale] min = 0` to sleep now (a command is a file in the app's
+                                   # control dir; parent acts in ~2s)
 ply restart APP                    # rolling restart, health-gated
 ply reconcile                      # converge systemd units to
                                    # /var/lib/ply/deployments/*.toml — fired
@@ -406,7 +407,9 @@ ply self-update --check           # just report what's newer
 
 Hosts prepared by `ply setup --edge` run this daily on a jittered timer;
 `ply ps` marks instances whose supervisor predates the installed binary
-with `up*`.
+with `up*`. An app asleep under `[scale] min = 0` shows as one row with no
+instance — `asleep, wakes on :PORT (idle 10m)` — and a parent blocked on
+`--after` as `waiting on …`.
 
 ## Fleet hygiene
 

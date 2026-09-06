@@ -165,8 +165,11 @@ see [Autoscaling](/docs/autoscale/).
 
 **`[scale]`** — `min`, `max`, `signal` (`cpu`, `memory`, `net`,
 `metric:<name>`), `target`, optional `cooldown` and `metrics_path`: the run
-parent grows and shrinks the instance count on that signal. Validated at
-`ply build`; details in [Autoscaling](/docs/autoscale/).
+parent grows and shrinks the instance count on that signal. `min = 0` with
+`idle = "10m"` lets the app sleep — the last instance stops after that long
+with no connections and the next connection wakes it; `signal`/`target` are
+then only needed when `max > 1`. Validated at `ply build`; details in
+[Autoscaling](/docs/autoscale/).
 
 **`[health]` / `[restart]`** — see
 [Deploys, health & restarts](/docs/deploy/).

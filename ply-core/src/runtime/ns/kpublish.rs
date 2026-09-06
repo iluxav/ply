@@ -67,6 +67,9 @@ impl PoolMirror for KernelMirror {
     fn teardown(&self) {
         let _ = self.kp.teardown();
     }
+    fn accepted(&self) -> Option<u64> {
+        self.kp.read_counter().ok()
+    }
 }
 
 /// One published port's presence in the kernel.
@@ -96,6 +99,12 @@ impl KernelPublish {
     pub fn chain_out(&self) -> String {
         format!("pub_{}_p{}_out", self.host_port, self.pid)
     }
+    /// The named counter both rules feed. A nat chain sees only a
+    /// connection's first packet, so its packets are new connections — the
+    /// sleeper's evidence in kernel mode, where the relay sees nothing.
+    pub fn counter(&self) -> String {
+        format!("pub_{}_p{}", self.host_port, self.pid)
+    }
 
     /// What this port's rule matches, or `None` when the scope has no kernel
     /// path (a loopback address: DNAT from lo needs `route_localnet`, and the
@@ -117,27 +126,47 @@ impl KernelPublish {
     /// is atomic under `nft -f`, so there is never a moment with two rules
     /// or none where one was.
     pub fn sync_script(&self, backends: &[Ipv4Addr]) -> String {
-        let (pre, out) = (self.chain_pre(), self.chain_out());
+        let (pre, out, ctr) = (self.chain_pre(), self.chain_out(), self.counter());
         let mut s = format!(
             "add table {TABLE}\n\
              add chain {TABLE} {pre} {{ type nat hook prerouting priority dstnat; policy accept; }}\n\
              add chain {TABLE} {out} {{ type nat hook output priority dstnat; policy accept; }}\n\
+             add counter {TABLE} {ctr}\n\
              flush chain {TABLE} {pre}\n\
              flush chain {TABLE} {out}\n"
         );
         if let (Some(m), Some(d)) = (self.match_expr(), dnat_expr(backends, self.instance_port)) {
-            s.push_str(&format!("add rule {TABLE} {pre} {m} {d}\n"));
-            s.push_str(&format!("add rule {TABLE} {out} {m} {d}\n"));
+            s.push_str(&format!("add rule {TABLE} {pre} {m} counter name \"{ctr}\" {d}\n"));
+            s.push_str(&format!("add rule {TABLE} {out} {m} counter name \"{ctr}\" {d}\n"));
         }
         s
     }
 
+    /// Chains first: a counter a rule still references cannot go.
     pub fn teardown_script(&self) -> String {
         format!(
-            "delete chain {TABLE} {}\ndelete chain {TABLE} {}\n",
+            "delete chain {TABLE} {}\ndelete chain {TABLE} {}\ndelete counter {TABLE} {}\n",
             self.chain_pre(),
-            self.chain_out()
+            self.chain_out(),
+            self.counter()
         )
+    }
+
+    /// Connections the kernel has accepted on this port since the counter
+    /// was made.
+    pub fn read_counter(&self) -> Result<u64> {
+        let out = Command::new("nft")
+            .args(["-j", "list", "counter", "ip", "ply", &self.counter()])
+            .output()
+            .map_err(|e| Error::Runtime(format!("nft: {e}")))?;
+        if !out.status.success() {
+            return Err(Error::Runtime(format!(
+                "nft: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            )));
+        }
+        counter_packets(&String::from_utf8_lossy(&out.stdout))
+            .ok_or_else(|| Error::Runtime("nft: counter not in the listing".into()))
     }
 
     /// Put `backends` in the kernel (and the hairpin chain, cheaply, every
@@ -229,8 +258,55 @@ fn parse_chain_name(name: &str) -> Option<(u16, u32)> {
     matches!(parts.next(), Some("pre") | Some("out")).then_some((port, pid))
 }
 
-/// Delete what `stale_chains` names. Best effort: a host without the table
-/// yet has nothing to clean.
+/// `pub_18080_p4242` → (18080, 4242).
+fn parse_counter_name(name: &str) -> Option<(u16, u32)> {
+    let rest = name.strip_prefix("pub_")?;
+    let mut parts = rest.split('_');
+    let port = parts.next()?.parse().ok()?;
+    let pid = parts.next()?.strip_prefix('p')?.parse().ok()?;
+    parts.next().is_none().then_some((port, pid))
+}
+
+/// The counters that go with `stale_chains`, by the same rule.
+pub fn stale_counters(list_json: &str, own_port: u16, alive: impl Fn(u32) -> bool) -> Vec<String> {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(list_json) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for item in v
+        .get("nftables")
+        .and_then(|n| n.as_array())
+        .into_iter()
+        .flatten()
+    {
+        let Some(name) = item
+            .get("counter")
+            .and_then(|c| c.get("name"))
+            .and_then(|n| n.as_str())
+        else {
+            continue;
+        };
+        let Some((port, pid)) = parse_counter_name(name) else {
+            continue;
+        };
+        if port == own_port || !alive(pid) {
+            out.push(name.to_string());
+        }
+    }
+    out
+}
+
+/// `packets` of the (single) counter in an `nft -j list counter` listing.
+pub fn counter_packets(list_json: &str) -> Option<u64> {
+    let v = serde_json::from_str::<serde_json::Value>(list_json).ok()?;
+    v.get("nftables")?
+        .as_array()?
+        .iter()
+        .find_map(|item| item.get("counter")?.get("packets")?.as_u64())
+}
+
+/// Delete what `stale_chains` and `stale_counters` name. Best effort: a
+/// host without the table yet has nothing to clean.
 pub fn gc_stale(own_port: u16) {
     let Ok(out) = Command::new("nft")
         .args(["-j", "list", "table", "ip", "ply"])
@@ -242,13 +318,16 @@ pub fn gc_stale(own_port: u16) {
         return;
     }
     let alive = |pid: u32| std::path::Path::new(&format!("/proc/{pid}")).exists();
-    let stale = stale_chains(&String::from_utf8_lossy(&out.stdout), own_port, alive);
-    if stale.is_empty() {
+    let listing = String::from_utf8_lossy(&out.stdout);
+    let chains = stale_chains(&listing, own_port, alive);
+    let counters = stale_counters(&listing, own_port, alive);
+    if chains.is_empty() && counters.is_empty() {
         return;
     }
-    let script: String = stale
+    let script: String = chains
         .iter()
         .map(|c| format!("delete chain {TABLE} {c}\n"))
+        .chain(counters.iter().map(|c| format!("delete counter {TABLE} {c}\n")))
         .collect();
     if let Err(e) = nft_batch(&script) {
         eprintln!("ply: warning: could not remove stale publish chains ({e})");
@@ -345,10 +424,11 @@ mod tests {
 add table ip ply
 add chain ip ply pub_18080_p4242_pre { type nat hook prerouting priority dstnat; policy accept; }
 add chain ip ply pub_18080_p4242_out { type nat hook output priority dstnat; policy accept; }
+add counter ip ply pub_18080_p4242
 flush chain ip ply pub_18080_p4242_pre
 flush chain ip ply pub_18080_p4242_out
-add rule ip ply pub_18080_p4242_pre ip daddr != 127.0.0.0/8 fib daddr type local tcp dport 18080 ip protocol tcp dnat ip addr . port to numgen inc mod 2 map { 0 : 10.77.0.2 . 8080, 1 : 10.77.0.3 . 8080 }
-add rule ip ply pub_18080_p4242_out ip daddr != 127.0.0.0/8 fib daddr type local tcp dport 18080 ip protocol tcp dnat ip addr . port to numgen inc mod 2 map { 0 : 10.77.0.2 . 8080, 1 : 10.77.0.3 . 8080 }
+add rule ip ply pub_18080_p4242_pre ip daddr != 127.0.0.0/8 fib daddr type local tcp dport 18080 counter name \"pub_18080_p4242\" ip protocol tcp dnat ip addr . port to numgen inc mod 2 map { 0 : 10.77.0.2 . 8080, 1 : 10.77.0.3 . 8080 }
+add rule ip ply pub_18080_p4242_out ip daddr != 127.0.0.0/8 fib daddr type local tcp dport 18080 counter name \"pub_18080_p4242\" ip protocol tcp dnat ip addr . port to numgen inc mod 2 map { 0 : 10.77.0.2 . 8080, 1 : 10.77.0.3 . 8080 }
 ";
         assert_eq!(s, want);
     }
@@ -366,11 +446,32 @@ add rule ip ply pub_18080_p4242_out ip daddr != 127.0.0.0/8 fib daddr type local
     }
 
     #[test]
-    fn teardown_deletes_both_chains() {
+    fn teardown_deletes_both_chains_then_the_counter() {
         assert_eq!(
             kp(BindScope::Public).teardown_script(),
-            "delete chain ip ply pub_18080_p4242_pre\ndelete chain ip ply pub_18080_p4242_out\n"
+            "delete chain ip ply pub_18080_p4242_pre\ndelete chain ip ply pub_18080_p4242_out\ndelete counter ip ply pub_18080_p4242\n"
         );
+    }
+
+    /// The counter is the sleeper's only view of a port the kernel serves:
+    /// one object per port, fed by both rules, read back as `packets`.
+    #[test]
+    fn the_counter_is_read_back_as_packets_and_gcd_with_its_chains() {
+        let listing = r#"{"nftables":[{"metainfo":{"version":"1.0.9"}},
+            {"counter":{"family":"ip","name":"pub_18080_p4242","table":"ply","handle":7,"packets":12,"bytes":804}}]}"#;
+        assert_eq!(counter_packets(listing), Some(12));
+        assert_eq!(counter_packets("not json"), None);
+        assert_eq!(counter_packets(r#"{"nftables":[{"metainfo":{}}]}"#), None);
+
+        let table = r#"{"nftables":[{"table":{"family":"ip","name":"ply"}},
+            {"counter":{"family":"ip","table":"ply","name":"pub_18080_p111","handle":1}},
+            {"counter":{"family":"ip","table":"ply","name":"pub_5432_p222","handle":2}},
+            {"counter":{"family":"ip","table":"ply","name":"pub_9000_p333","handle":3}},
+            {"counter":{"family":"ip","table":"ply","name":"other","handle":4}}]}"#;
+        let mut got = stale_counters(table, 18080, |pid| pid != 111);
+        got.sort();
+        assert_eq!(got, vec!["pub_18080_p111"]);
+        assert_eq!(stale_counters(table, 9000, |_| true), vec!["pub_9000_p333"]);
     }
 
     /// A bridge client DNATed back onto the bridge would get its reply

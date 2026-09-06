@@ -103,6 +103,9 @@ pub struct Status {
     pub published: Option<String>,
     pub scale: Option<String>,
     pub last_deploy: Option<String>,
+    /// Asleep: no instances on purpose, the port held. Since when, and where
+    /// the next connection wakes it.
+    pub asleep: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -142,6 +145,7 @@ pub struct Report {
 /// Join the evidence. `states`: this app's live instances; `events`: the
 /// whole journal (filtered here); `egress`: this app's egress records;
 /// `log_tail(slot)`: the last lines of a slot's log ring.
+#[allow(clippy::too_many_arguments)]
 pub fn build(
     app: &str,
     now: u64,
@@ -149,9 +153,21 @@ pub fn build(
     events: &[Event],
     egress: &[Record],
     manifest: Option<&Manifest>,
+    asleep: Option<&crate::runtime::after::AsleepMarker>,
     log_tail: impl Fn(u32) -> Vec<String>,
 ) -> Report {
     let mut status = Status::default();
+    if let Some(m) = asleep {
+        status.asleep = Some(format!(
+            "since {} ({} ago), wakes on {}:{}",
+            rfc3339(m.since),
+            humanize(now.saturating_sub(m.since)),
+            m.addr,
+            m.port
+        ));
+        status.image.get_or_insert_with(|| m.image.clone());
+        status.published.get_or_insert_with(|| format!("{}:{}", m.addr, m.port));
+    }
     for s in states.iter().filter(|s| s.app == app) {
         status.instances.push(Instance {
             slot: s.n,
@@ -167,10 +183,17 @@ pub fn build(
     }
     status.instances.sort_by_key(|i| i.slot);
     if let Some(scale) = manifest.and_then(|m| m.scale.as_ref()) {
-        status.scale = Some(format!(
-            "{}..{} on {} (target {})",
-            scale.min, scale.max, scale.signal, scale.target
-        ));
+        let mut line = match (&scale.signal, &scale.target) {
+            (Some(signal), Some(target)) => format!(
+                "{}..{} on {signal} (target {target})",
+                scale.min, scale.max
+            ),
+            _ => format!("{}..{}", scale.min, scale.max),
+        };
+        if let Some(idle) = &scale.idle {
+            line.push_str(&format!(", sleeps after {idle} idle"));
+        }
+        status.scale = Some(line);
     }
 
     let mine: Vec<&Event> = events.iter().filter(|e| e.app == app).collect();
@@ -296,6 +319,9 @@ impl Report {
                 humanize(i.uptime_secs),
                 i.restarts
             ));
+        }
+        if let Some(a) = &st.asleep {
+            out.push_str(&format!("  asleep {a}\n"));
         }
         if let Some(d) = &st.last_deploy {
             out.push_str(&format!("  last deploy: {d}\n"));
@@ -428,7 +454,7 @@ mod tests {
             domains: vec![],
             network: None,
         }];
-        let r = build("web", 1_000_600, &states, &[], &[], None, |_| vec![]);
+        let r = build("web", 1_000_600, &states, &[], &[], None, None, |_| vec![]);
         assert_eq!(r.status.instances.len(), 1);
         assert_eq!(r.status.instances[0].uptime_secs, 600);
         assert!(r.restarts.is_empty() && r.blocked.is_empty() && r.changes.is_empty());
@@ -463,7 +489,7 @@ mod tests {
                 "web.1 exited 137 after 90s; oom_kill=1; policy on-failure -> restart in 2s",
             ),
         ];
-        let r = build("web", 1_000_300, &[], &events, &[], None, |n| {
+        let r = build("web", 1_000_300, &[], &events, &[], None, None, |n| {
             vec![format!("slot {n}: fatal: out of memory")]
         });
         assert_eq!(r.restarts.len(), 2);
@@ -511,7 +537,7 @@ mod tests {
                 count: 2,
             },
         ];
-        let r = build("web", 1_000_000, &[], &[], &recs, None, |_| vec![]);
+        let r = build("web", 1_000_000, &[], &[], &recs, None, None, |_| vec![]);
         assert_eq!(r.blocked.len(), 2);
         let text = r.render();
         assert!(
@@ -543,7 +569,7 @@ mod tests {
                 "health gate: no answer on 8080 within 30s",
             ),
         ];
-        let r = build("web", 1_000_100, &[], &events, &[], None, |_| vec![]);
+        let r = build("web", 1_000_100, &[], &events, &[], None, None, |_| vec![]);
         assert_eq!(
             r.changes
                 .iter()

@@ -600,20 +600,29 @@ fn default_scope() -> String {
     "instance".into()
 }
 
-/// `[scale]`: horizontal autoscaling, evaluated by the run parent.
+/// `[scale]`: the instance-count ladder the run parent walks. `min = 0`
+/// adds the bottom rung — sleep after `idle` with no connections, wake on
+/// the next one; `signal`/`target` decide between 1 and `max` and are only
+/// needed when `max > 1`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Scale {
     pub min: u32,
     pub max: u32,
-    /// `cpu`, `memory`, `net`, or `metric:<name>`.
-    pub signal: String,
+    /// `cpu`, `memory`, `net`, or `metric:<name>`. Required when `max > 1`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signal: Option<String>,
     /// Per-instance target in the signal's unit: `"70%"`, `"40MB/s"`, `"100"`.
-    pub target: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cooldown: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metrics_path: Option<String>,
+    /// `min = 0` only: no connections on the published port for this long
+    /// and the last instance stops (`"10m"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle: Option<String>,
 }
 
 /// A resource limit: a fixed value (`"512M"`), or a range the run parent
@@ -875,7 +884,7 @@ impl Manifest {
             // The published port is a run-time fact (`--publish`); the parent
             // checks it. Everything else is knowable here.
             let has_mem = self.resources.as_ref().is_some_and(|r| r.mem.is_some());
-            crate::autoscale::Policy::parse(scale, has_mem, true)?;
+            crate::autoscale::parse_scale(scale, has_mem, true)?;
         }
         if let Some(user) = &self.package.user {
             parse_user(user)?;

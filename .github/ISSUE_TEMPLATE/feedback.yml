@@ -1,0 +1,49 @@
+name: Feedback from trying ply
+description: You tried ply on an application. Tell us how it went, whether it worked or not.
+labels: ["feedback"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This is the most useful thing you can send. Successes count as much as failures: both tell us what to keep and what to fix.
+  - type: textarea
+    id: app
+    attributes:
+      label: What you tried to run
+      description: The kind of application, its language or framework, the services it needs (database, cache), and where you ran it (laptop, VPS, CI).
+      placeholder: A Rails app with Postgres and Redis, on a 2 GB DigitalOcean droplet.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: What happened
+      description: How far you got and what the result was. Commands and output are welcome; remove credentials and private data.
+    validations:
+      required: true
+  - type: textarea
+    id: friction
+    attributes:
+      label: Where it got awkward
+      description: Anything that made you stop, search the docs, or guess. A missing package, an unclear error, a step that took longer than it should have.
+  - type: dropdown
+    id: again
+    attributes:
+      label: Did you use ply again after this?
+      options:
+        - Yes, it is now part of how I deploy
+        - Yes, for experiments so far
+        - Not yet, but I intend to
+        - No, and here is why (below)
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else
+      description: What you compared it with, what would have made it a clear win, what you would tell someone considering it.
+  - type: input
+    id: version
+    attributes:
+      label: ply version
+      description: Output of `ply --version`, if you still have it.

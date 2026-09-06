@@ -177,6 +177,16 @@ pub fn deploy(image: &Path, timeout_secs: u64) -> Result<DeployReport> {
             }
         }
     }
+    // Asleep is not gone: the parent is there, holding the port. It takes
+    // the pointer like any other and runs the new image on the next wake.
+    let asleep = if parents.is_empty() {
+        crate::runtime::after::AsleepMarker::find(&app)
+    } else {
+        None
+    };
+    if let Some(m) = &asleep {
+        parents.insert(m.pid);
+    }
     if parents.is_empty() {
         return Err(Error::Runtime(format!(
             "no running instances of `{app}` — nothing to roll (just `ply run {}`)",
@@ -229,6 +239,36 @@ pub fn deploy(image: &Path, timeout_secs: u64) -> Result<DeployReport> {
         .unwrap_or(0);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
     let want = image_abs.display().to_string();
+    if asleep.is_some() {
+        // Done when the marker names the new image — or, should a
+        // connection wake it meanwhile, when an instance runs it.
+        loop {
+            let marker = crate::runtime::after::AsleepMarker::find(&app);
+            let switched = match &marker {
+                Some(m) => m.image == want,
+                None => state::list()?.iter().any(|s| {
+                    s.app == app && s.alive() && slot_rolled(&s.image, &want, s.started, deploy_started)
+                }),
+            };
+            if switched {
+                return Ok(DeployReport {
+                    app,
+                    parents: 1,
+                    rolled: vec![format!("(asleep — the next wake runs {want})")],
+                    complete: true,
+                });
+            }
+            if std::time::Instant::now() >= deadline {
+                return Ok(DeployReport {
+                    app,
+                    parents: 1,
+                    rolled: Vec::new(),
+                    complete: false,
+                });
+            }
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+    }
     let mut rolled: BTreeSet<String> = BTreeSet::new();
     loop {
         let mut all = true;

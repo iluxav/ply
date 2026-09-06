@@ -6,8 +6,8 @@ use crate::cli::{RestartArgs, ScaleArgs};
 pub fn scale(args: ScaleArgs) -> Result<()> {
     ensure_running(&args.app)?;
     let n = args.n.trim();
-    if n != "auto" && !matches!(n.parse::<u32>(), Ok(v) if (1..=100).contains(&v)) {
-        bail!("scale: expected an instance count 1..=100, or `auto`");
+    if n != "auto" && !matches!(n.parse::<u32>(), Ok(v) if v <= 100) {
+        bail!("scale: expected an instance count 0..=100 (0 = sleep now), or `auto`");
     }
     control::submit(&args.app, "scale", n)?;
     println!(
@@ -27,7 +27,8 @@ pub fn restart(args: RestartArgs) -> Result<()> {
 /// A command for a stopped app would sit in the dir until some future run
 /// consumed it, surprising everyone — refuse instead.
 fn ensure_running(app: &str) -> Result<()> {
-    let running = state::list()?.iter().any(|s| s.app == app && s.alive());
+    let running = state::list()?.iter().any(|s| s.app == app && s.alive())
+        || ply_core::runtime::after::AsleepMarker::find(app).is_some();
     if !running {
         bail!("no running instances of `{app}` — commands act on a live run parent (ply ps)");
     }

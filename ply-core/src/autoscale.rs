@@ -86,24 +86,107 @@ const DOWN_HYSTERESIS: f64 = 0.7;
 /// `ceil()` would otherwise turn a hair over target into an instance.
 const UP_TOLERANCE: f64 = 1.1;
 
+/// `[scale]`, validated: the horizontal policy (between 1 and `max`; absent
+/// when `max = 1`) and the bottom rung (`idle`, when `min = 0`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScalePolicy {
+    pub horizontal: Option<Policy>,
+    pub idle: Option<Duration>,
+}
+
+/// `has_mem_limit`: `[resources] mem` is set (memory is measured against
+/// it). `has_port`: something is published — a metric is scraped there, and
+/// a sleeping app wakes there.
+pub fn parse_scale(
+    scale: &crate::manifest::Scale,
+    has_mem_limit: bool,
+    has_port: bool,
+) -> Result<ScalePolicy> {
+    if scale.max < 1 {
+        return Err(Error::Manifest("scale.max must be at least 1".into()));
+    }
+    if scale.max < scale.min {
+        return Err(Error::Manifest(format!(
+            "scale.max ({}) must be at least scale.min ({})",
+            scale.max, scale.min
+        )));
+    }
+    let idle = match (&scale.idle, scale.min) {
+        (Some(s), 0) => {
+            if !has_port {
+                return Err(Error::Manifest(
+                    "scale.min = 0 wakes on a published port — publish one".into(),
+                ));
+            }
+            let idle = crate::manifest::parse_duration(s)?;
+            if idle < Duration::from_secs(1) {
+                return Err(Error::Manifest(format!(
+                    "scale.idle `{s}`: at least 1s"
+                )));
+            }
+            Some(idle)
+        }
+        (None, 0) => {
+            return Err(Error::Manifest(
+                "scale.min = 0 (sleep when idle) needs `idle = \"10m\"` — how long with \
+                 no connections before the last instance stops"
+                    .into(),
+            ))
+        }
+        (Some(_), _) => {
+            return Err(Error::Manifest(
+                "scale.idle only means something with min = 0".into(),
+            ))
+        }
+        (None, _) => None,
+    };
+    let horizontal = match (&scale.signal, &scale.target) {
+        (Some(signal), Some(target)) => Some(Policy::parse_horizontal(
+            scale,
+            signal,
+            target,
+            has_mem_limit,
+            has_port,
+        )?),
+        (None, None) if scale.max == 1 => None,
+        (None, None) => {
+            return Err(Error::Manifest(format!(
+                "scale.max = {} needs signal and target to decide between 1 and {}",
+                scale.max, scale.max
+            )))
+        }
+        (Some(_), None) => return Err(Error::Manifest("scale.target is missing".into())),
+        (None, Some(_)) => {
+            return Err(Error::Manifest(
+                "scale.signal is missing: cpu, memory, net, or metric:<name>".into(),
+            ))
+        }
+    };
+    Ok(ScalePolicy { horizontal, idle })
+}
+
 impl Policy {
-    /// `has_mem_limit`: `[resources] mem` is set (memory is measured against
-    /// it). `has_port`: something is published to scrape a metric from.
+    /// The horizontal policy alone; a manifest whose `[scale]` has no signal
+    /// (`max = 1`) has none, which is an error here. `parse_scale` is the
+    /// whole section.
     pub fn parse(
         scale: &crate::manifest::Scale,
         has_mem_limit: bool,
         has_port: bool,
     ) -> Result<Policy> {
-        if scale.min < 1 {
-            return Err(Error::Manifest("scale.min must be at least 1".into()));
-        }
-        if scale.max < scale.min {
-            return Err(Error::Manifest(format!(
-                "scale.max ({}) must be at least scale.min ({})",
-                scale.max, scale.min
-            )));
-        }
-        let signal = match scale.signal.as_str() {
+        parse_scale(scale, has_mem_limit, has_port)?
+            .horizontal
+            .ok_or_else(|| Error::Manifest("scale: no signal to scale on".into()))
+    }
+
+    fn parse_horizontal(
+        scale: &crate::manifest::Scale,
+        signal: &str,
+        target: &str,
+        has_mem_limit: bool,
+        has_port: bool,
+    ) -> Result<Policy> {
+        let signal = match signal {
             "cpu" => Signal::Cpu,
             "memory" => Signal::Memory,
             "net" => Signal::Net,
@@ -127,13 +210,15 @@ impl Policy {
                     .into(),
             ));
         }
-        let target = parse_target(&signal, &scale.target)?;
+        let target = parse_target(&signal, target)?;
         let cooldown = match &scale.cooldown {
             Some(s) => crate::manifest::parse_duration(s)?,
             None => Duration::from_secs(60),
         };
         Ok(Policy {
-            min: scale.min,
+            // The floor of the horizontal ladder is 1: zero is the sleeper's
+            // decision, never this policy's.
+            min: scale.min.max(1),
             max: scale.max,
             signal,
             target,
@@ -431,6 +516,70 @@ impl Horizontal {
     }
 }
 
+/// The bottom rung of the ladder: 1 ↔ 0. Fed the app's connection counts
+/// each tick, it says when the last instance has had nothing to do for
+/// `idle`. Pure, like `Horizontal`.
+pub struct Sleeper {
+    idle: Duration,
+    last_active: Instant,
+}
+
+impl Sleeper {
+    pub fn new(idle: Duration, now: Instant) -> Self {
+        Sleeper {
+            idle,
+            last_active: now,
+        }
+    }
+    pub fn idle(&self) -> Duration {
+        self.idle
+    }
+    /// One tick's counts, summed over the app's published ports: new
+    /// connections since the last tick, and connections open right now.
+    pub fn observe(&mut self, now: Instant, new_conns: u64, open_conns: u64) {
+        if new_conns > 0 || open_conns > 0 {
+            self.last_active = now;
+        }
+    }
+    /// A wake (and the start) grants a full `idle` before the next sleep.
+    pub fn woke(&mut self, now: Instant) {
+        self.last_active = now;
+    }
+    /// `Some(reason)` when the last instance should stop: the count is 1,
+    /// nobody pinned it, nothing is mid-flight (`busy`: a roll or a respawn),
+    /// and `idle` has passed with no activity. `on` names the port for the
+    /// reason line (`":8080"`).
+    pub fn decide(&self, current: u32, pinned: bool, busy: bool, now: Instant, on: &str) -> Option<String> {
+        if current != 1 || pinned || busy {
+            return None;
+        }
+        if now.saturating_duration_since(self.last_active) < self.idle {
+            return None;
+        }
+        Some(format!(
+            "idle {}: no connections on {on}",
+            show_duration(self.idle)
+        ))
+    }
+}
+
+/// `90s` → `1m30s`, `600s` → `10m`, `20s` → `20s`.
+pub fn show_duration(d: Duration) -> String {
+    let secs = d.as_secs();
+    let (h, m, s) = (secs / 3600, (secs % 3600) / 60, secs % 60);
+    let mut out = String::new();
+    if h > 0 {
+        out.push_str(&format!("{h}h"));
+    }
+    if m > 0 {
+        out.push_str(&format!("{m}m"));
+    }
+    if s > 0 || out.is_empty() {
+        out.push_str(&format!("{s}s"));
+    }
+    out
+}
+
 /// A live-resizable limit: bytes for memory, millicores for cpu.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Range {
@@ -575,10 +724,11 @@ mod tests {
         crate::manifest::Scale {
             min: 2,
             max: 8,
-            signal: signal.into(),
-            target: target.into(),
+            signal: Some(signal.into()),
+            target: Some(target.into()),
             cooldown: None,
             metrics_path: None,
+            idle: None,
         }
     }
 
@@ -633,7 +783,86 @@ mod tests {
         assert!(err(&s, true, true).contains("max"));
         let mut s = scale("cpu", "70%");
         s.min = 0;
-        assert!(err(&s, true, true).contains("min"));
+        assert!(err(&s, true, true).contains("idle"), "min = 0 needs idle");
+    }
+
+    /// `min = 0` is the sleeper's rung: it needs `idle` and a port, and the
+    /// horizontal policy's floor stays 1. With `max = 1` there is nothing
+    /// for a signal to decide, so none is needed; with more, it is.
+    #[test]
+    fn min_zero_adds_a_sleeper_and_keeps_the_horizontal_floor_at_one() {
+        let mut s = scale("cpu", "70%");
+        s.min = 0;
+        s.idle = Some("10m".into());
+        let p = parse_scale(&s, true, true).unwrap();
+        assert_eq!(p.idle, Some(Duration::from_secs(600)));
+        assert_eq!(p.horizontal.as_ref().unwrap().min, 1);
+        assert!(
+            parse_scale(&s, true, false)
+                .unwrap_err()
+                .to_string()
+                .contains("port"),
+            "a wake needs a published port"
+        );
+
+        let only_sleep = crate::manifest::Scale {
+            min: 0,
+            max: 1,
+            signal: None,
+            target: None,
+            cooldown: None,
+            metrics_path: None,
+            idle: Some("20s".into()),
+        };
+        let p = parse_scale(&only_sleep, false, true).unwrap();
+        assert!(p.horizontal.is_none());
+        assert_eq!(p.idle, Some(Duration::from_secs(20)));
+
+        let mut no_signal = only_sleep.clone();
+        no_signal.max = 3;
+        assert!(parse_scale(&no_signal, false, true)
+            .unwrap_err()
+            .to_string()
+            .contains("signal and target"));
+
+        let mut idle_without_zero = scale("cpu", "70%");
+        idle_without_zero.idle = Some("10m".into());
+        assert!(parse_scale(&idle_without_zero, true, true)
+            .unwrap_err()
+            .to_string()
+            .contains("min = 0"));
+    }
+
+    #[test]
+    fn a_sleeper_stops_the_last_instance_only_after_a_quiet_idle_period() {
+        let t0 = T0();
+        let mut sl = Sleeper::new(secs(20), t0);
+        let on = ":8080";
+        assert_eq!(sl.decide(1, false, false, t0 + secs(19), on), None);
+        assert_eq!(
+            sl.decide(1, false, false, t0 + secs(20), on).as_deref(),
+            Some("idle 20s: no connections on :8080")
+        );
+        // never with more than one instance, pinned, or mid-flight
+        assert_eq!(sl.decide(2, false, false, t0 + secs(60), on), None);
+        assert_eq!(sl.decide(1, true, false, t0 + secs(60), on), None);
+        assert_eq!(sl.decide(1, false, true, t0 + secs(60), on), None);
+        // a new connection resets the clock; so does one still open
+        sl.observe(t0 + secs(15), 3, 0);
+        assert_eq!(sl.decide(1, false, false, t0 + secs(30), on), None);
+        assert!(sl.decide(1, false, false, t0 + secs(35), on).is_some());
+        sl.observe(t0 + secs(35), 0, 1);
+        assert_eq!(sl.decide(1, false, false, t0 + secs(50), on), None);
+        // a quiet tick changes nothing
+        sl.observe(t0 + secs(40), 0, 0);
+        assert!(sl.decide(1, false, false, t0 + secs(55), on).is_some());
+        // waking grants a full idle again
+        sl.woke(t0 + secs(100));
+        assert_eq!(sl.decide(1, false, false, t0 + secs(119), on), None);
+        assert!(sl.decide(1, false, false, t0 + secs(120), on).is_some());
+        assert_eq!(show_duration(secs(90)), "1m30s");
+        assert_eq!(show_duration(secs(600)), "10m");
+        assert_eq!(show_duration(secs(3661)), "1h1m1s");
     }
 
     #[test]

@@ -1,0 +1,15 @@
+[package]
+name = "hello"
+version = "0.1.0"
+base = "debian@13"
+entrypoint = ["node", "server.js"]
+include = ["server.js", "index.html"]
+
+[dependencies]
+node = "22"
+
+[ports]
+web = 8000
+
+[sources]
+default = "https://registry.plybox.sh/ply/{package}"

@@ -11,9 +11,14 @@ pub fn exec(args: WhyArgs) -> Result<()> {
         .collect();
     let events = events::read();
     let egress = ply_core::egress::log::read_app(&args.app);
-    let manifest = states
+    // Asleep, there is no instance to name the image: the marker does.
+    let asleep = ply_core::runtime::after::AsleepMarker::find(&args.app);
+    let image = states
         .first()
-        .and_then(|s| ply_core::image::read::read_manifest(std::path::Path::new(&s.image)).ok());
+        .map(|s| s.image.clone())
+        .or_else(|| asleep.as_ref().map(|m| m.image.clone()));
+    let manifest = image
+        .and_then(|i| ply_core::image::read::read_manifest(std::path::Path::new(&i)).ok());
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -25,6 +30,7 @@ pub fn exec(args: WhyArgs) -> Result<()> {
         &events,
         &egress,
         manifest.as_ref(),
+        asleep.as_ref(),
         |slot| logring::tail(&args.app, slot, ply_core::why::LOG_TAIL_LINES),
     );
     if args.json {

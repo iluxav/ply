@@ -69,6 +69,17 @@ zero lost — with the idle-close variant, one request per connection was.
 There's no magic: you can watch the pointer file and per-instance state
 files change under `/run/ply/` while it happens.
 
+### Deploying a sleeping app
+
+An app asleep under `[scale] min = 0` (see [Autoscaling](/docs/autoscale/))
+has no instance to roll. `ply deploy` still writes the pointer and signals
+the parent; the parent swaps the image for the next wake and the deploy
+reports complete at once:
+
+```
+ply: deploy complete — asleep, the next wake runs /var/lib/ply/apps/web/current.img
+```
+
 ## When something restarts
 
 `ply why APP` answers before you start guessing:

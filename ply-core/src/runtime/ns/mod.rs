@@ -5,6 +5,7 @@
 //! `ply run` on Linux is in this module tree.
 
 pub mod cgroup;
+pub mod conns;
 pub mod container;
 pub mod egress;
 pub mod exec;

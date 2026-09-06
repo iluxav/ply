@@ -49,12 +49,14 @@ pub fn poll(app: &str) -> Vec<Command> {
         let _ = std::fs::remove_file(&scale);
         match text.trim().parse::<u32>() {
             _ if text.trim() == "auto" => out.push(Command::ScaleAuto),
-            Ok(n) if (1..=100).contains(&n) => out.push(Command::Scale(n)),
+            // 0 is "sleep now" for an app that may sleep; the parent says
+            // so when it may not.
+            Ok(n) if n <= 100 => out.push(Command::Scale(n)),
             _ => write_result(
                 app,
                 "scale",
                 false,
-                &format!("invalid target `{}` (want 1..=100)", text.trim()),
+                &format!("invalid target `{}` (want 0..=100)", text.trim()),
             ),
         }
     }

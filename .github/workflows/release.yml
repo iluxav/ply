@@ -72,7 +72,12 @@ jobs:
         run: |
           test -s ply-linux-x64 && test -s ply-linux-arm64 \
             || { echo "::error::a binary is missing — refusing to publish a partial release"; exit 1; }
+          # The release notes are this version's CHANGELOG entry, written by
+          # a person: the section under "## vX.Y.Z", up to the next "## ".
+          awk -v tag="${{ github.ref_name }}" \
+            '$0 ~ "^## " tag "( |$)" { p = 1; next } /^## / { if (p) exit } p' CHANGELOG.md > notes.md
+          test -s notes.md || echo "No changelog entry for ${{ github.ref_name }}." > notes.md
           gh release create "${{ github.ref_name }}" \
-            --title "${{ github.ref_name }}" --generate-notes --latest \
+            --title "${{ github.ref_name }}" --notes-file notes.md --latest \
             ply-linux-x64 ply-linux-arm64
           gh release view "${{ github.ref_name }}" --json assets --jq '.assets[].name'

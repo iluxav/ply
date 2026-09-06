@@ -82,6 +82,10 @@ pub struct RunOptions {
 /// Live wiring for a published pool, threaded through instance launches.
 struct PublishWiring {
     pool: crate::runtime::publish::Pool,
+    /// The kernel carries this port's connections (rootful DNAT): the relay
+    /// sees none of them, so the sleeper reads the rule's counter and the
+    /// instances' socket tables instead.
+    kernel: bool,
     /// The parsed spec: the host port and bind scope the parent claimed, plus
     /// the port instances serve on (rootful: on their bridge IPs; rootless:
     /// an allocated loopback port per instance instead).
@@ -208,7 +212,11 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
             ctx.manifest.package.name,
             if kernel { " (kernel dnat)" } else { "" },
         );
-        publishing.push(PublishWiring { pool, spec: *spec });
+        publishing.push(PublishWiring {
+            pool,
+            kernel,
+            spec: *spec,
+        });
     }
     // Every instance of a rootless run shares that run's ONE namespace, so
     // they cannot all bind the same port — ply hands each one its own loopback
@@ -353,30 +361,73 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
     // `[scale]`: the policy the parent evaluates every AUTOSCALE_TICK; the
     // starting count is clamped into its range. `[resources]` ranges: the
     // vertical side, with or without a `[scale]` section.
-    let mut autoscaler = match &ctx.manifest.scale {
-        Some(scale) => {
-            let has_mem = ctx
-                .manifest
-                .resources
-                .as_ref()
-                .is_some_and(|r| r.mem.is_some());
-            let policy = crate::autoscale::Policy::parse(scale, has_mem, !opts.publish.is_empty())?;
+    let mut autoscaler: Option<crate::autoscale::Horizontal> = None;
+    // `min = 0`: the bottom rung. The sleeper watches the published ports'
+    // connection counts and parks the parent — listener kept, instances
+    // gone — until the next connection.
+    let mut sleeper: Option<crate::autoscale::Sleeper> = None;
+    // The port a sleeping app wakes on, for reason lines and the marker.
+    let sleep_on: String = opts
+        .publish
+        .first()
+        .map(|p| format!(":{}", p.host_port))
+        .unwrap_or_default();
+    if let Some(scale) = &ctx.manifest.scale {
+        let has_mem = ctx
+            .manifest
+            .resources
+            .as_ref()
+            .is_some_and(|r| r.mem.is_some());
+        let policy = crate::autoscale::parse_scale(scale, has_mem, !opts.publish.is_empty())?;
+        if let Some(h) = policy.horizontal {
             eprintln!(
                 "ply: autoscale {}..{} instances on {} (target {}, cooldown {}s)",
-                policy.min,
-                policy.max,
-                policy.signal,
-                scale.target,
-                policy.cooldown.as_secs()
+                h.min,
+                h.max,
+                h.signal,
+                scale.target.as_deref().unwrap_or("?"),
+                h.cooldown.as_secs()
             );
-            Some(crate::autoscale::Horizontal::new(policy))
+            autoscaler = Some(crate::autoscale::Horizontal::new(h));
         }
-        None => None,
-    };
+        if let Some(idle) = policy.idle {
+            eprintln!(
+                "ply: sleeps after {} with no connections on {sleep_on}; wakes on the next one",
+                crate::autoscale::show_duration(idle)
+            );
+            sleeper = Some(crate::autoscale::Sleeper::new(
+                idle,
+                std::time::Instant::now(),
+            ));
+        }
+    }
+    // Asleep, every published pool holds a connection and asks for an
+    // instance instead of dropping it; awake, the same hold covers the gap
+    // before the first instance accepts.
+    let waker = sleeper.as_ref().map(|_| {
+        crate::runtime::publish::Waker::new(crate::runtime::publish::WAKE_TIMEOUT)
+    });
+    if let Some(w) = &waker {
+        for wiring in &publishing {
+            wiring.pool.wake_with(w.clone());
+        }
+    }
+    let mut asleep: Option<crate::runtime::after::AsleepGuard> = None;
+    // A wake in progress: when asked, by whom — the `wake` event is written
+    // once the instance joins its pools, with the time that took.
+    let mut waking: Option<(std::time::Instant, Option<std::net::SocketAddr>)> = None;
+    // A wake whose launch failed: try again then.
+    let mut wake_retry: Option<std::time::Instant> = None;
+    let mut conn_prev = ConnPrev::default();
     let mut vertical = VerticalCtl::from_manifest(&ctx.manifest)?;
     let initial_scale = match &autoscaler {
         Some(h) => opts.scale.max(1).clamp(h.policy().min, h.policy().max),
-        None => opts.scale.max(1),
+        // A sleep-only `[scale]` (max = 1) still caps the start: above it
+        // the count could never come down to the one instance that sleeps.
+        None => opts
+            .scale
+            .max(1)
+            .min(ctx.manifest.scale.as_ref().map(|s| s.max.max(1)).unwrap_or(u32::MAX)),
     };
     let mut last_autoscale = std::time::Instant::now();
     let mut prev_raw: std::collections::BTreeMap<u32, (std::time::Instant, crate::autoscale::Raw)> =
@@ -617,10 +668,24 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                         ) {
                             Ok(policy) => {
                                 new_ctx.egress = policy;
-                                let mut queue: Vec<u32> = instances.iter().map(|i| i.n).collect();
-                                queue.sort_unstable();
-                                roll_queue = queue;
-                                old_ctx = Some(std::mem::replace(&mut ctx, new_ctx));
+                                if let Some(guard) = asleep.as_mut() {
+                                    // Nothing to roll: the next wake runs it.
+                                    ctx = new_ctx;
+                                    old_ctx = None;
+                                    roll_queue.clear();
+                                    if let Err(e) = guard.set_image(&ctx.image.display().to_string()) {
+                                        eprintln!("ply: warning: asleep marker: {e}");
+                                    }
+                                    eprintln!(
+                                        "ply: deploy complete — asleep, the next wake runs {}",
+                                        ctx.image.display()
+                                    );
+                                } else {
+                                    let mut queue: Vec<u32> = instances.iter().map(|i| i.n).collect();
+                                    queue.sort_unstable();
+                                    roll_queue = queue;
+                                    old_ctx = Some(std::mem::replace(&mut ctx, new_ctx));
+                                }
                             }
                             Err(e) => {
                                 eprintln!("ply: deploy aborted — new image unusable: {e}")
@@ -654,6 +719,55 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
             }
             for command in crate::runtime::control::poll(&app_name) {
                 match command {
+                    crate::runtime::control::Command::Scale(0) => {
+                        // Sleep now — not a pin: the next connection wakes it,
+                        // and the operator's newest word clears an older pin.
+                        if sleeper.is_none() {
+                            crate::runtime::control::write_result(
+                                &app_name,
+                                "scale",
+                                false,
+                                &format!(
+                                    "scale.min is 1 — set [scale] min = 0 and idle = \"10m\" to let {app_name} sleep; `ply rm {app_name}` stops it"
+                                ),
+                            );
+                            continue;
+                        }
+                        if asleep.is_some() {
+                            crate::runtime::control::write_result(&app_name, "scale", true, "already asleep");
+                            continue;
+                        }
+                        if let Some(h) = autoscaler.as_mut() {
+                            h.unpin();
+                        }
+                        let sc = ScaleCtx {
+                            backend: backend.as_ref(),
+                            ctx: &ctx,
+                            opts,
+                            net: &net,
+                            publishing: &publishing,
+                            stop_signal,
+                            initial_backoff,
+                        };
+                        let current = slots.len();
+                        let reason = format!("operator: ply scale {app_name} 0");
+                        asleep = fall_asleep(
+                            &sc,
+                            &identity,
+                            &reason,
+                            asleep_marker(&identity, opts, &facts, &ctx, sleeper.as_ref()),
+                            &mut slots,
+                            &mut instances,
+                            &mut pending,
+                            &mut roll_queue,
+                        );
+                        crate::runtime::control::write_result(
+                            &app_name,
+                            "scale",
+                            asleep.is_some(),
+                            &format!("{current} -> 0 (asleep; wakes on the next connection)"),
+                        );
+                    }
                     crate::runtime::control::Command::Scale(target) => {
                         let target = target as usize;
                         let current = slots.len();
@@ -729,7 +843,14 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                         ),
                     },
                     crate::runtime::control::Command::Restart => {
-                        if roll_queue.is_empty() {
+                        if asleep.is_some() {
+                            crate::runtime::control::write_result(
+                                &app_name,
+                                "restart",
+                                true,
+                                "asleep — nothing to restart; the next wake starts fresh",
+                            );
+                        } else if roll_queue.is_empty() {
                             let mut queue: Vec<u32> = instances.iter().map(|i| i.n).collect();
                             queue.sort_unstable();
                             eprintln!("ply: rolling restart of {app_name} ({} slots)", queue.len());
@@ -785,6 +906,47 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                                 ),
                             }
                         }
+                    }
+                }
+            }
+        }
+
+        // Wake: the relay is holding a connection for an instance. A request
+        // while awake (the gap before the first instance accepts, a roll of
+        // a single instance) needs nothing — one is already on its way.
+        let asked = waker.as_ref().and_then(|w| w.take());
+        let retry_due = wake_retry.is_some_and(|at| at <= std::time::Instant::now());
+        if !shutting_down && (asked.is_some() || retry_due) && (asleep.is_some() || wake_retry.is_some()) {
+            let (at, peer) = asked.unwrap_or_else(|| (std::time::Instant::now(), None));
+            let sc = ScaleCtx {
+                backend: backend.as_ref(),
+                ctx: &ctx,
+                opts,
+                net: &net,
+                publishing: &publishing,
+                stop_signal,
+                initial_backoff,
+            };
+            asleep = None; // the marker goes: this app is starting
+            match apply_scale(&sc, 1, &mut slots, &mut instances, &mut pending, &mut roll_queue) {
+                Ok(()) => {
+                    wake_retry = None;
+                    if waking.is_none() {
+                        waking = Some((at, peer));
+                    }
+                    if let Some(sl) = sleeper.as_mut() {
+                        sl.woke(std::time::Instant::now());
+                    }
+                    eprintln!(
+                        "ply: waking {identity}: connection from {}",
+                        peer.map(|p| p.to_string()).unwrap_or_else(|| "?".into())
+                    );
+                }
+                Err(e) => {
+                    eprintln!("ply: wake of {identity} failed: {e} — retrying in {}s", initial_backoff.as_secs());
+                    wake_retry = Some(std::time::Instant::now() + initial_backoff);
+                    if waking.is_none() {
+                        waking = Some((at, peer));
                     }
                 }
             }
@@ -887,7 +1049,7 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
         }
 
         // Autoscale: sample every instance, let the policy speak, act.
-        if (autoscaler.is_some() || vertical.is_some())
+        if (autoscaler.is_some() || vertical.is_some() || sleeper.is_some())
             && !shutting_down
             && last_autoscale.elapsed() >= AUTOSCALE_TICK
         {
@@ -897,7 +1059,38 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                 .as_ref()
                 .map(|h| h.policy().cooldown)
                 .unwrap_or(std::time::Duration::from_secs(60));
-            for instance in &instances {
+            // The bottom rung: connections, not load. Read before any metric
+            // scrape so the parent's own probe is never counted as traffic.
+            if let (Some(sl), None) = (sleeper.as_mut(), asleep.as_ref()) {
+                if let Some((new_conns, open)) = connection_counts(&publishing, &instances, &mut conn_prev) {
+                    sl.observe(now, new_conns, open);
+                }
+                let pinned = autoscaler.as_ref().is_some_and(|h| h.pinned().is_some());
+                let busy = !pending.is_empty() || !roll_queue.is_empty() || old_ctx.is_some();
+                if let Some(reason) = sl.decide(slots.len() as u32, pinned, busy, now, &sleep_on) {
+                    let sc = ScaleCtx {
+                        backend: backend.as_ref(),
+                        ctx: &ctx,
+                        opts,
+                        net: &net,
+                        publishing: &publishing,
+                        stop_signal,
+                        initial_backoff,
+                    };
+                    asleep = fall_asleep(
+                        &sc,
+                        &identity,
+                        &reason,
+                        asleep_marker(&identity, opts, &facts, &ctx, sleeper.as_ref()),
+                        &mut slots,
+                        &mut instances,
+                        &mut pending,
+                        &mut roll_queue,
+                    );
+                }
+            }
+            let sampling = autoscaler.is_some() || vertical.is_some();
+            for instance in instances.iter().filter(|_| sampling) {
                 let n = instance.n;
                 let raw = platform::sample(&identity, n, instance.inner.ip());
                 let started = slots.get(&n).map(|s| s.started).unwrap_or(now);
@@ -927,7 +1120,9 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
             }
             // Slots that are gone take their history with them.
             prev_raw.retain(|n, _| slots.contains_key(n));
-            if let Some(h) = autoscaler.as_mut() {
+            // Asleep, the horizontal side has nothing to measure and nothing
+            // to say: the wake is the sleeper's, and the policy resumes at 1.
+            if let (Some(h), None) = (autoscaler.as_mut(), asleep.as_ref()) {
                 let live: Vec<u32> = slots.keys().copied().collect();
                 for n in prev_raw.keys().copied().collect::<Vec<_>>() {
                     if !live.contains(&n) {
@@ -988,10 +1183,25 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                     .ready(std::time::Duration::from_millis(100))
             {
                 instance.membership.join(instance.n);
+                if let Some((at, peer)) = waking.take() {
+                    let line = format!(
+                        "connection from {}, ready in {} ms",
+                        peer.map(|p| p.to_string()).unwrap_or_else(|| "?".into()),
+                        at.elapsed().as_millis()
+                    );
+                    eprintln!("ply: wake {identity}: {line}");
+                    crate::runtime::events::emit(&identity, "wake", &line);
+                }
             }
         }
 
-        if instances.is_empty() && pending.is_empty() {
+        // Nothing left to wait for — unless the app is asleep, which is the
+        // parent holding the port on purpose, or a wake is still owed.
+        if instances.is_empty()
+            && pending.is_empty()
+            && (asleep.is_none() || shutting_down)
+            && (wake_retry.is_none() || shutting_down)
+        {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(150));
@@ -1089,6 +1299,110 @@ fn apply_scale(
 
 /// How often the autoscaler samples and decides.
 const AUTOSCALE_TICK: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Stop the last instance and park: the marker, the tree, the line, the
+/// event. `None` when the stop failed (the app stays awake).
+#[allow(clippy::too_many_arguments)]
+fn fall_asleep(
+    sc: &ScaleCtx<'_>,
+    identity: &str,
+    reason: &str,
+    marker: crate::runtime::after::AsleepMarker,
+    slots: &mut std::collections::BTreeMap<u32, SlotInfo>,
+    instances: &mut Vec<Running>,
+    pending: &mut Vec<(u32, std::time::Instant)>,
+    roll_queue: &mut Vec<u32>,
+) -> Option<crate::runtime::after::AsleepGuard> {
+    if let Err(e) = apply_scale(sc, 0, slots, instances, pending, roll_queue) {
+        eprintln!("ply: sleep of {identity} failed: {e}");
+        return None;
+    }
+    let guard = match marker.write() {
+        Ok(g) => Some(g),
+        Err(e) => {
+            eprintln!("ply: warning: asleep marker: {e} — `ply ps` will not show the sleep");
+            None
+        }
+    };
+    if let Err(e) = params_tree::publish(identity, "state", "asleep") {
+        eprintln!("ply: warning: params tree {identity}/state: {e}");
+    }
+    eprintln!("ply: sleep {identity}: {reason} (wakes on the next connection)");
+    crate::runtime::events::emit(identity, "sleep", reason);
+    // No marker is still asleep: the loop must not exit. A guard with no
+    // file keeps the state; the file was only ever for the readers.
+    guard.or_else(|| crate::runtime::after::AsleepMarker::ghost(identity))
+}
+
+/// What the marker says: the first published port and where a client
+/// reaches it, the image the next wake runs, the idle that put it to sleep.
+fn asleep_marker(
+    identity: &str,
+    opts: &RunOptions,
+    facts: &crate::runtime::backend::Facts,
+    ctx: &AppContext,
+    sleeper: Option<&crate::autoscale::Sleeper>,
+) -> crate::runtime::after::AsleepMarker {
+    let (port, addr) = opts
+        .publish
+        .first()
+        .map(|p| (p.host_port, p.scope.connect_addr(facts.loopback).to_string()))
+        .unwrap_or((0, String::new()));
+    crate::runtime::after::AsleepMarker {
+        app: identity.to_string(),
+        pid: std::process::id() as i32,
+        since: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+        port,
+        addr,
+        image: ctx.image.display().to_string(),
+        idle_secs: sleeper.map(|s| s.idle().as_secs()).unwrap_or(0),
+    }
+}
+
+/// The connection counters as of the last tick, for deltas.
+#[derive(Default)]
+struct ConnPrev {
+    relay: u64,
+    kernel: u64,
+}
+
+/// One tick's (new connections, open connections) over every published
+/// port: the relay's counts, plus the kernel's where it carries the port.
+/// `None` when a kernel counter could not be read — a missed sample.
+fn connection_counts(
+    publishing: &[PublishWiring],
+    instances: &[Running],
+    prev: &mut ConnPrev,
+) -> Option<(u64, u64)> {
+    let mut relay = 0u64;
+    let mut kernel = 0u64;
+    let mut open = 0u64;
+    for wiring in publishing {
+        let activity = wiring.pool.activity();
+        relay += activity.accepted();
+        open += activity.open() as u64;
+        if wiring.kernel {
+            kernel += wiring.pool.mirror_accepted()?;
+            for instance in instances {
+                if let Some(pid) = instance.inner.child_pid() {
+                    open += platform::established(pid, wiring.spec.instance_port).unwrap_or(0);
+                }
+            }
+        }
+    }
+    let new_relay = relay.saturating_sub(prev.relay);
+    // A counter below its last value was recreated: what it holds is new.
+    let new_kernel = if kernel >= prev.kernel {
+        kernel - prev.kernel
+    } else {
+        kernel
+    };
+    *prev = ConnPrev { relay, kernel };
+    Some((new_relay + new_kernel, open))
+}
 
 /// The vertical side: ranges from `[resources]`, per-slot state, and the
 /// limits the parent has set (re-applied after a restart recreates the
@@ -1271,6 +1585,9 @@ mod platform {
     pub fn set_cpu(app: &str, n: u32, millicores: u64) -> Result<()> {
         crate::runtime::ns::cgroup::set_cpu(app, n, millicores)
     }
+    pub fn established(pid: i32, port: u16) -> Option<u64> {
+        crate::runtime::ns::conns::established(pid, port)
+    }
     pub fn fetch_metric(addr: std::net::SocketAddr, path: &str, name: &str) -> Option<f64> {
         match addr {
             std::net::SocketAddr::V4(a) => crate::runtime::ns::probe::fetch_metric(
@@ -1296,6 +1613,9 @@ mod platform {
     }
     pub fn set_cpu(_app: &str, _n: u32, _millicores: u64) -> Result<()> {
         Err(Error::Runtime("not supported on this platform".into()))
+    }
+    pub fn established(_pid: i32, _port: u16) -> Option<u64> {
+        None
     }
     pub fn fetch_metric(_addr: std::net::SocketAddr, _path: &str, _name: &str) -> Option<f64> {
         None

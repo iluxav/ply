@@ -76,10 +76,14 @@ release-cli:
 	[ -n "$$V" ] || V=$$(echo "$$CUR" | awk -F. '{print $$1"."$$2"."$$3+1}'); \
 	echo "$$V" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$$' || { echo "release: bad version \`$$V\`"; exit 1; }; \
 	echo "release: $$CUR -> $$V"; \
+	if grep -Eq "^## v$$V( |$$)" CHANGELOG.md; then :; \
+	elif grep -q '^## Unreleased' CHANGELOG.md; then \
+	  sed -i "s/^## Unreleased.*/## v$$V — $$(date -u +%F)/" CHANGELOG.md; \
+	else echo "release: CHANGELOG.md needs a '## Unreleased' or '## v$$V' entry — write what changed first"; exit 1; fi; \
 	$(MAKE) check; \
 	sed -i "s/^version = \".*\"/version = \"$$V\"/" Cargo.toml; \
 	cargo update --workspace >/dev/null 2>&1; \
-	git add Cargo.toml Cargo.lock; \
+	git add Cargo.toml Cargo.lock CHANGELOG.md; \
 	git commit -m "v$$V"; \
 	git push; \
 	git tag "v$$V"; \

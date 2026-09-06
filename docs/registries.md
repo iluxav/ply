@@ -119,6 +119,43 @@ every arch and version you push. The bytes still have to exist locally —
 ply hashes them itself rather than asking the registry to fetch a URL —
 and the artifact records `verified: false`.
 
+## Limits
+
+The official registry accepts pushes from any account, so every account
+has a budget. The numbers depend on the account's tier: **new** for its
+first day, **normal** after that, and **admin** for the operators named in
+the deployment. A refused push is a `429` with the reason and a
+`Retry-After`; `ply push` prints the reason.
+
+| limit | new | normal | admin |
+|---|---|---|---|
+| uploads in flight at once | 1 | 2 | 4 |
+| pushes per hour (upload, URL or publish) | 10 | 60 | 600 |
+| bytes accepted per day | 500 MB | 2 GB | 50 GB |
+| bytes stored in total | 2 GB | 10 GB | 500 GB |
+| packages per namespace | 20 | 200 | 5000 |
+| URL pushes per hour | 5 | 20 | 200 |
+| keys per account | 25 | 25 | 200 |
+
+Two more rules do not depend on the tier. An address that keeps sending
+invalid keys is told to wait after 30 failures in a minute, before any
+lookup happens. A URL push names where the bytes live, and the registry
+will not fetch from `localhost`, a `.ply` name, or any address that
+resolves to a private or link-local range.
+
+Operators tune a deployment with `PLY_LIMITS`, a JSON object keyed by tier
+holding only the fields to change:
+
+```sh
+PLY_LIMITS='{"admin":{"bytes_per_day":107374182400},"new":{"pushes_per_hour":5}}'
+```
+
+The field names are the ones in the table, in snake case
+(`concurrent_uploads`, `pushes_per_hour`, `bytes_per_day`, `stored_bytes`,
+`packages_per_namespace`, `url_pushes_per_hour`, `keys_per_account`).
+Admins are the logins in `PLY_ADMIN_LOGINS`, the same list that grants the
+official namespaces.
+
 ## Publishing your own packages
 
 Because a registry is just files, publishing is copying:

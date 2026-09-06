@@ -1,0 +1,68 @@
+name: Bug report
+description: Something ply did that it should not have, or did not do that it should.
+labels: ["bug"]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: ply version
+      description: Output of `ply --version`.
+      placeholder: ply 0.1.74
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS and kernel
+      description: Distribution and version, plus `uname -r`.
+      placeholder: Ubuntu 24.04, 6.8.0-45-generic
+    validations:
+      required: true
+  - type: dropdown
+    id: arch
+    attributes:
+      label: Architecture
+      options:
+        - x86_64
+        - arm64
+        - other (say which below)
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: How ply was run
+      options:
+        - rootless (as a regular user)
+        - rootful (as root or with sudo)
+        - both
+        - not sure
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: What you ran
+      description: The commands, in order, and the `ply.toml` if one is involved. Remove credentials and private data.
+      render: sh
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened instead
+      description: Paste ply's output. `ply why APP` and `ply logs APP` usually hold the evidence.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else
+      description: A Docker image you imported, a host that is unusual in some way, a workaround you found.
