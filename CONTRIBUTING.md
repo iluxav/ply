@@ -40,11 +40,24 @@ namespaces to the **installed** binary by path, so rootless runs must use
 `/usr/local/bin/ply`, not `target/release/ply`. Rootful runs (`sudo ply run …`)
 work from either.
 
-Layout, briefly: `ply-core` is the library (manifest, resolver, image
-format, runtime, policies); `ply-cli` is the binary; `docs/` is the site
-documentation; `bench/` holds the benchmark and live-check scripts;
-`examples/` holds runnable examples; `.github/` holds CI and the release
-workflow.
+## Repository layout
+
+| path | what it is |
+|---|---|
+| `ply-core/` | the library: manifest, resolver, image format, runtime, policies |
+| `ply-cli/` | the `ply` binary |
+| `ply-guest-init/`, `ply-vm-proto/`, `kernel/` | the experimental macOS backend: the guest init, the host↔guest protocol, and the microVM kernel keg's config |
+| `deb2pkg/`, `apk2pkg/` | tools that turn Debian and Alpine packages into ply packages (the official kegs) |
+| `docs/` | the site documentation, synced into the website at build time |
+| `examples/` | runnable examples, starting with the README's |
+| `bench/` | the ply-vs-Docker benchmark and the live-check scripts for runtime features |
+| `services/` | the sources of the official service apps (`notify`, `pg-backup`) |
+| `registry/` | metadata for packages the registry backfills |
+| `deploy/` | a generic ship-and-roll GitHub Action and the edge (Caddy) stack |
+| `scripts/` | build scripts for the base kegs, arm64, the microVM kernel, and the agent skill |
+| `skills/` | the ply skill for coding agents, published with the docs |
+| `.github/` | CI and the release workflow |
+| `action.yml`, `install.sh` | the `iluxav/ply@v1` action and the installer served at plybox.sh |
 
 ## Making a change
 
@@ -76,6 +89,16 @@ what changed, fixes, breaking changes, and known limitations. Write it under
 `## Unreleased` as you go; `make release-cli` turns that heading into the
 version and date, and the release workflow uses the entry as the release
 notes. A release without an entry is refused.
+
+## AI assistance
+
+ply is developed with AI assistance; commits written that way carry a
+`Co-Authored-By` trailer, which is why an AI co-author appears among the
+contributors. Every change, however it was written, is reviewed by a
+person and, where it touches the runtime, checked live on a real host
+before it is merged. The same applies to contributions: say in the pull
+request what wrote the code and how you verified it, and it is judged on
+the same terms.
 
 ## Security
 

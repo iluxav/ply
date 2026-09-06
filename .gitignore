@@ -31,3 +31,6 @@ registry-population.md
 /remove
 /docs/research
 /docs/superpowers
+# build artifacts that once slipped in
+*.img.tmp
+services/notify/notify

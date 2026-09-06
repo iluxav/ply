@@ -1,3 +1,10 @@
+---
+title: The ply model
+description: The one rule behind every ply command — software must be predictable — and what it decides about catalogs, sources, stacks and names.
+section: Concepts
+order: 29
+---
+
 # The ply model
 
 > The one rule: **software must be predictable.** Every choice below is
