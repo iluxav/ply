@@ -166,7 +166,9 @@ pub fn build(
             m.port
         ));
         status.image.get_or_insert_with(|| m.image.clone());
-        status.published.get_or_insert_with(|| format!("{}:{}", m.addr, m.port));
+        status
+            .published
+            .get_or_insert_with(|| format!("{}:{}", m.addr, m.port));
     }
     for s in states.iter().filter(|s| s.app == app) {
         status.instances.push(Instance {
@@ -184,10 +186,9 @@ pub fn build(
     status.instances.sort_by_key(|i| i.slot);
     if let Some(scale) = manifest.and_then(|m| m.scale.as_ref()) {
         let mut line = match (&scale.signal, &scale.target) {
-            (Some(signal), Some(target)) => format!(
-                "{}..{} on {signal} (target {target})",
-                scale.min, scale.max
-            ),
+            (Some(signal), Some(target)) => {
+                format!("{}..{} on {signal} (target {target})", scale.min, scale.max)
+            }
             _ => format!("{}..{}", scale.min, scale.max),
         };
         if let Some(idle) = &scale.idle {

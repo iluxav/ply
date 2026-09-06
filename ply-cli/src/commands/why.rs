@@ -17,8 +17,8 @@ pub fn exec(args: WhyArgs) -> Result<()> {
         .first()
         .map(|s| s.image.clone())
         .or_else(|| asleep.as_ref().map(|m| m.image.clone()));
-    let manifest = image
-        .and_then(|i| ply_core::image::read::read_manifest(std::path::Path::new(&i)).ok());
+    let manifest =
+        image.and_then(|i| ply_core::image::read::read_manifest(std::path::Path::new(&i)).ok());
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())

@@ -120,9 +120,7 @@ pub fn parse_scale(
             }
             let idle = crate::manifest::parse_duration(s)?;
             if idle < Duration::from_secs(1) {
-                return Err(Error::Manifest(format!(
-                    "scale.idle `{s}`: at least 1s"
-                )));
+                return Err(Error::Manifest(format!("scale.idle `{s}`: at least 1s")));
             }
             Some(idle)
         }
@@ -549,7 +547,14 @@ impl Sleeper {
     /// nobody pinned it, nothing is mid-flight (`busy`: a roll or a respawn),
     /// and `idle` has passed with no activity. `on` names the port for the
     /// reason line (`":8080"`).
-    pub fn decide(&self, current: u32, pinned: bool, busy: bool, now: Instant, on: &str) -> Option<String> {
+    pub fn decide(
+        &self,
+        current: u32,
+        pinned: bool,
+        busy: bool,
+        now: Instant,
+        on: &str,
+    ) -> Option<String> {
         if current != 1 || pinned || busy {
             return None;
         }

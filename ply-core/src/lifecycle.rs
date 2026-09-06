@@ -247,7 +247,9 @@ pub fn deploy(image: &Path, timeout_secs: u64) -> Result<DeployReport> {
             let switched = match &marker {
                 Some(m) => m.image == want,
                 None => state::list()?.iter().any(|s| {
-                    s.app == app && s.alive() && slot_rolled(&s.image, &want, s.started, deploy_started)
+                    s.app == app
+                        && s.alive()
+                        && slot_rolled(&s.image, &want, s.started, deploy_started)
                 }),
             };
             if switched {

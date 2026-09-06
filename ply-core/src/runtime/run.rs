@@ -404,9 +404,9 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
     // Asleep, every published pool holds a connection and asks for an
     // instance instead of dropping it; awake, the same hold covers the gap
     // before the first instance accepts.
-    let waker = sleeper.as_ref().map(|_| {
-        crate::runtime::publish::Waker::new(crate::runtime::publish::WAKE_TIMEOUT)
-    });
+    let waker = sleeper
+        .as_ref()
+        .map(|_| crate::runtime::publish::Waker::new(crate::runtime::publish::WAKE_TIMEOUT));
     if let Some(w) = &waker {
         for wiring in &publishing {
             wiring.pool.wake_with(w.clone());
@@ -424,10 +424,13 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
         Some(h) => opts.scale.max(1).clamp(h.policy().min, h.policy().max),
         // A sleep-only `[scale]` (max = 1) still caps the start: above it
         // the count could never come down to the one instance that sleeps.
-        None => opts
-            .scale
-            .max(1)
-            .min(ctx.manifest.scale.as_ref().map(|s| s.max.max(1)).unwrap_or(u32::MAX)),
+        None => opts.scale.max(1).min(
+            ctx.manifest
+                .scale
+                .as_ref()
+                .map(|s| s.max.max(1))
+                .unwrap_or(u32::MAX),
+        ),
     };
     let mut last_autoscale = std::time::Instant::now();
     let mut prev_raw: std::collections::BTreeMap<u32, (std::time::Instant, crate::autoscale::Raw)> =
@@ -673,7 +676,9 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                                     ctx = new_ctx;
                                     old_ctx = None;
                                     roll_queue.clear();
-                                    if let Err(e) = guard.set_image(&ctx.image.display().to_string()) {
+                                    if let Err(e) =
+                                        guard.set_image(&ctx.image.display().to_string())
+                                    {
                                         eprintln!("ply: warning: asleep marker: {e}");
                                     }
                                     eprintln!(
@@ -681,7 +686,8 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                                         ctx.image.display()
                                     );
                                 } else {
-                                    let mut queue: Vec<u32> = instances.iter().map(|i| i.n).collect();
+                                    let mut queue: Vec<u32> =
+                                        instances.iter().map(|i| i.n).collect();
                                     queue.sort_unstable();
                                     roll_queue = queue;
                                     old_ctx = Some(std::mem::replace(&mut ctx, new_ctx));
@@ -734,7 +740,12 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                             continue;
                         }
                         if asleep.is_some() {
-                            crate::runtime::control::write_result(&app_name, "scale", true, "already asleep");
+                            crate::runtime::control::write_result(
+                                &app_name,
+                                "scale",
+                                true,
+                                "already asleep",
+                            );
                             continue;
                         }
                         if let Some(h) = autoscaler.as_mut() {
@@ -916,7 +927,10 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
         // a single instance) needs nothing — one is already on its way.
         let asked = waker.as_ref().and_then(|w| w.take());
         let retry_due = wake_retry.is_some_and(|at| at <= std::time::Instant::now());
-        if !shutting_down && (asked.is_some() || retry_due) && (asleep.is_some() || wake_retry.is_some()) {
+        if !shutting_down
+            && (asked.is_some() || retry_due)
+            && (asleep.is_some() || wake_retry.is_some())
+        {
             let (at, peer) = asked.unwrap_or_else(|| (std::time::Instant::now(), None));
             let sc = ScaleCtx {
                 backend: backend.as_ref(),
@@ -928,7 +942,14 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                 initial_backoff,
             };
             asleep = None; // the marker goes: this app is starting
-            match apply_scale(&sc, 1, &mut slots, &mut instances, &mut pending, &mut roll_queue) {
+            match apply_scale(
+                &sc,
+                1,
+                &mut slots,
+                &mut instances,
+                &mut pending,
+                &mut roll_queue,
+            ) {
                 Ok(()) => {
                     wake_retry = None;
                     if waking.is_none() {
@@ -943,7 +964,10 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                     );
                 }
                 Err(e) => {
-                    eprintln!("ply: wake of {identity} failed: {e} — retrying in {}s", initial_backoff.as_secs());
+                    eprintln!(
+                        "ply: wake of {identity} failed: {e} — retrying in {}s",
+                        initial_backoff.as_secs()
+                    );
                     wake_retry = Some(std::time::Instant::now() + initial_backoff);
                     if waking.is_none() {
                         waking = Some((at, peer));
@@ -1062,7 +1086,9 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
             // The bottom rung: connections, not load. Read before any metric
             // scrape so the parent's own probe is never counted as traffic.
             if let (Some(sl), None) = (sleeper.as_mut(), asleep.as_ref()) {
-                if let Some((new_conns, open)) = connection_counts(&publishing, &instances, &mut conn_prev) {
+                if let Some((new_conns, open)) =
+                    connection_counts(&publishing, &instances, &mut conn_prev)
+                {
                     sl.observe(now, new_conns, open);
                 }
                 let pinned = autoscaler.as_ref().is_some_and(|h| h.pinned().is_some());
@@ -1346,7 +1372,12 @@ fn asleep_marker(
     let (port, addr) = opts
         .publish
         .first()
-        .map(|p| (p.host_port, p.scope.connect_addr(facts.loopback).to_string()))
+        .map(|p| {
+            (
+                p.host_port,
+                p.scope.connect_addr(facts.loopback).to_string(),
+            )
+        })
         .unwrap_or((0, String::new()));
     crate::runtime::after::AsleepMarker {
         app: identity.to_string(),

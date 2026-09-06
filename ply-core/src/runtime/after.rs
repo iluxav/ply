@@ -836,7 +836,10 @@ mod tests {
             idle_secs: 600,
         };
         let mut guard = marker.clone().write_in(dir.path()).unwrap();
-        assert_eq!(AsleepMarker::find_in(dir.path(), "web"), Some(marker.clone()));
+        assert_eq!(
+            AsleepMarker::find_in(dir.path(), "web"),
+            Some(marker.clone())
+        );
         assert_eq!(AsleepMarker::find_in(dir.path(), "db"), None);
         guard.set_image("/var/lib/ply/apps/web/next.img").unwrap();
         assert_eq!(
@@ -844,7 +847,10 @@ mod tests {
             "/var/lib/ply/apps/web/next.img"
         );
         drop(guard);
-        assert!(AsleepMarker::list_in(dir.path()).is_empty(), "removed on drop");
+        assert!(
+            AsleepMarker::list_in(dir.path()).is_empty(),
+            "removed on drop"
+        );
 
         let dead = AsleepMarker {
             pid: i32::MAX - 1,
@@ -855,6 +861,9 @@ mod tests {
             serde_json::to_string(&dead).unwrap(),
         )
         .unwrap();
-        assert!(AsleepMarker::find_in(dir.path(), "web").is_none(), "dead writer");
+        assert!(
+            AsleepMarker::find_in(dir.path(), "web").is_none(),
+            "dead writer"
+        );
     }
 }

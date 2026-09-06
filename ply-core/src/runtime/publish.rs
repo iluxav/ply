@@ -1226,7 +1226,10 @@ mod tests {
         let mut out = Vec::new();
         let _ = c.read_to_end(&mut out);
         assert!(out.is_empty());
-        assert!(started.elapsed() >= Duration::from_millis(150), "held until the timeout");
+        assert!(
+            started.elapsed() >= Duration::from_millis(150),
+            "held until the timeout"
+        );
         assert!(started.elapsed() < Duration::from_secs(4), "then dropped");
     }
 }

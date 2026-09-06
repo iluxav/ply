@@ -136,8 +136,12 @@ impl KernelPublish {
              flush chain {TABLE} {out}\n"
         );
         if let (Some(m), Some(d)) = (self.match_expr(), dnat_expr(backends, self.instance_port)) {
-            s.push_str(&format!("add rule {TABLE} {pre} {m} counter name \"{ctr}\" {d}\n"));
-            s.push_str(&format!("add rule {TABLE} {out} {m} counter name \"{ctr}\" {d}\n"));
+            s.push_str(&format!(
+                "add rule {TABLE} {pre} {m} counter name \"{ctr}\" {d}\n"
+            ));
+            s.push_str(&format!(
+                "add rule {TABLE} {out} {m} counter name \"{ctr}\" {d}\n"
+            ));
         }
         s
     }
@@ -327,7 +331,11 @@ pub fn gc_stale(own_port: u16) {
     let script: String = chains
         .iter()
         .map(|c| format!("delete chain {TABLE} {c}\n"))
-        .chain(counters.iter().map(|c| format!("delete counter {TABLE} {c}\n")))
+        .chain(
+            counters
+                .iter()
+                .map(|c| format!("delete counter {TABLE} {c}\n")),
+        )
         .collect();
     if let Err(e) = nft_batch(&script) {
         eprintln!("ply: warning: could not remove stale publish chains ({e})");
