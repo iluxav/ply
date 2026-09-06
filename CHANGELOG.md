@@ -5,6 +5,28 @@ breaking changes, and known limitations. Write under **Unreleased** as work
 lands; `make release-cli` turns that heading into the version and date, and
 the release workflow publishes the entry as the GitHub release notes.
 
+## Unreleased
+
+### What changed
+- The repository is ready for visitors: `CONTRIBUTING.md` (setup, the
+  required checks, how changes are reviewed, releases, AI assistance),
+  issue templates for bug reports and for feedback from trying ply, and a
+  layout table naming every top-level directory.
+- Release notes are now the matching `CHANGELOG.md` entry, written by a
+  person; `make release-cli` refuses to tag without one.
+
+### Fixes
+- `/docs/model/` was linked from the stacks guide but never rendered; the
+  page has its title now.
+- Stray build artifacts are ignored (`*.img.tmp`, the compiled `notify`).
+
+### Breaking changes
+- None.
+
+### Known limitations
+- Nothing in the binary changed; this release carries the documentation and
+  the repository files.
+
 ## v0.1.75 — 2026-09-06
 
 ### What changed
