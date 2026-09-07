@@ -5,6 +5,13 @@ breaking changes, and known limitations. Write under **Unreleased** as work
 lands; `make release-cli` turns that heading into the version and date, and
 the release workflow publishes the entry as the GitHub release notes.
 
+## Unreleased
+
+### Fixes
+- The installer on a Mac said "unsupported architecture: arm64". It now
+  says that macOS is experimental and built from source, with the link, and
+  it accepts `arm64` as a name for aarch64 on Linux.
+
 ## v0.1.77 — 2026-09-07
 
 ### Fixes
