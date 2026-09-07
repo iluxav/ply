@@ -7,6 +7,12 @@ order: 18
 
 # ply on macOS
 
+**Came here from the installer?** There is no macOS binary yet. The path
+that works today, in about a minute, is [Lima](#lima-the-zero-build-path):
+a Linux VM on the Mac in which the installer and everything else behave
+exactly as on a server. The native backend below is real but experimental
+and built from source.
+
 ply's runtime is built on Linux kernel primitives, so on a Mac each
 instance needs a Linux kernel around it. ply brings its own: the binary
 contains a **microVM backend** — one small VM per instance on Apple's
