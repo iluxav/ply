@@ -44,7 +44,7 @@ curl http://myapp.ply:3000        # rootful only
 
 `.ply` names are **rootful only** — a rootless stack gets its own network
 namespace, where members resolve each other by the same names (see
-[stacks](stacks.md)).
+[stacks](/docs/stacks/)).
 
 The names stay current. Each instance's `/etc/hosts` is a bind-mounted file
 that ply rewrites whenever an instance comes or goes, so an app that
