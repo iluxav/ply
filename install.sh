@@ -29,13 +29,24 @@ can_sudo() {
 PLY_REPO="${PLY_REPO:-iluxav/ply}"
 PLY_VERSION="${PLY_VERSION:-latest}"
 
+# The OS first: a Mac reports its CPU as `arm64`, and the message it needs
+# is about macOS, not about architectures.
+case "$(uname -s)" in
+    Linux) ;;
+    Darwin)
+        echo "ply on macOS is experimental and not shipped as a binary yet."
+        echo "It runs Linux apps in a small VM per instance on Apple Silicon; build it from source:"
+        echo "  https://plybox.sh/docs/macos/"
+        echo "On a Linux server or VM this same command installs the release."
+        exit 1 ;;
+    *) echo "error: ply runs on Linux (x86_64 and arm64); this is $(uname -s)"; exit 1 ;;
+esac
 arch=$(uname -m)
 case "$arch" in
-    x86_64)  target="x64" ;;
-    aarch64) target="arm64" ;;
-    *) echo "error: unsupported architecture: $arch (ply supports x86_64 and aarch64)"; exit 1 ;;
+    x86_64|amd64)  target="x64" ;;
+    aarch64|arm64) target="arm64" ;;
+    *) echo "error: unsupported architecture: $arch (ply supports x86_64 and arm64)"; exit 1 ;;
 esac
-[ "$(uname -s)" = "Linux" ] || { echo "error: ply is Linux-only"; exit 1; }
 
 # --- fetch (or take a local binary) -----------------------------------------
 tmp=$(mktemp -d)
