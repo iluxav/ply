@@ -34,3 +34,5 @@ registry-population.md
 # build artifacts that once slipped in
 *.img.tmp
 services/notify/notify
+launch-post.md
+qa-first-run.md

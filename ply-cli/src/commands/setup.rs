@@ -358,6 +358,16 @@ WantedBy=multi-user.target
             ),
         }
 
+        // Outbound network for rootless instances is a user-mode router;
+        // without one an app still serves, but cannot reach anything.
+        if !which("pasta") && !which("slirp4netns") {
+            println!(
+                "todo: no user-mode router — rootless instances get no outbound network (they still\n      \
+                 serve their ports and reach each other). Rootful is unaffected.\n      \
+                 fix: sudo apt install passt   (or: dnf install passt; slirp4netns also works)"
+            );
+        }
+
         if ports_applied.is_none() {
             let current: u16 = std::fs::read_to_string(PORT_START_SYSCTL)
                 .ok()

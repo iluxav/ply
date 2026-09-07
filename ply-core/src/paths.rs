@@ -37,6 +37,36 @@ fn in_initial_user_ns() -> bool {
     }
 }
 
+/// The uid this process has OUTSIDE any user namespace it sits in: the one
+/// its files are owned by, and the one a sibling process on the host
+/// (`ply ps`) computes paths from. Inside a namespace `geteuid()` says 0,
+/// and a path built from it — `/tmp/ply-0` — is one nothing else can find.
+pub fn host_uid() -> u32 {
+    let euid = nix::unistd::geteuid().as_raw();
+    match std::fs::read_to_string("/proc/self/uid_map") {
+        Ok(map) => outer_uid(&map, euid),
+        Err(_) => euid,
+    }
+}
+
+/// `uid_map` lines are `inner outer count`; translate `euid` through the
+/// entry that contains it. An id outside every entry maps to itself.
+fn outer_uid(map: &str, euid: u32) -> u32 {
+    for line in map.lines() {
+        let f: Vec<u64> = line
+            .split_whitespace()
+            .filter_map(|x| x.parse().ok())
+            .collect();
+        if let [inner, outer, count] = f[..] {
+            let e = euid as u64;
+            if e >= inner && e < inner + count {
+                return (outer + (e - inner)) as u32;
+            }
+        }
+    }
+    euid
+}
+
 /// Ephemeral state (instances, state files). tmpfs either way.
 pub fn run_dir() -> PathBuf {
     if is_root() {
@@ -44,7 +74,7 @@ pub fn run_dir() -> PathBuf {
     } else if let Ok(xdg) = std::env::var("XDG_RUNTIME_DIR") {
         PathBuf::from(xdg).join("ply")
     } else {
-        PathBuf::from(format!("/tmp/ply-{}", nix::unistd::geteuid()))
+        PathBuf::from(format!("/tmp/ply-{}", host_uid()))
     }
 }
 
@@ -57,7 +87,7 @@ pub fn data_dir() -> PathBuf {
     } else if let Ok(home) = std::env::var("HOME") {
         PathBuf::from(home).join(".local/share/ply")
     } else {
-        PathBuf::from(format!("/tmp/ply-{}-data", nix::unistd::geteuid()))
+        PathBuf::from(format!("/tmp/ply-{}-data", host_uid()))
     }
 }
 
@@ -94,4 +124,21 @@ pub fn force_remove_dir_all(path: &std::path::Path) -> std::io::Result<()> {
     }
     heal(path);
     std::fs::remove_dir_all(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The rootless parent lives in a user namespace where it is uid 0;
+    /// the state directory it writes must be the one `ply ps` — outside,
+    /// uid 1000 — reads. Seen on a fresh droplet as an app that `ply ps`
+    /// could not see while it served.
+    #[test]
+    fn paths_are_built_from_the_uid_the_host_sees() {
+        assert_eq!(outer_uid("         0       1000          1\n", 0), 1000);
+        assert_eq!(outer_uid("0 1000 1\n1 100000 65536\n", 70), 100069);
+        assert_eq!(outer_uid("0 0 4294967295\n", 1000), 1000);
+        assert_eq!(outer_uid("garbage\n", 1000), 1000);
+    }
 }

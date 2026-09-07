@@ -339,6 +339,15 @@ fn hold_inner(pipe: &mut std::fs::File, go: OwnedFd) -> Result<()> {
     }
     nix::sched::unshare(CloneFlags::CLONE_NEWNET)
         .map_err(|e| Error::Runtime(format!("unshare net: {e}")))?;
+    // Our namespace, our rules. The privileged-port floor is a property of
+    // the network namespace and its owner may lower it, so an app that
+    // binds :80 (nginx, caddy, an imported image) works rootless here with
+    // no change to the host. `/proc/sys/net` answers for the caller's own
+    // namespace. Best effort: a kernel that refuses leaves the floor at
+    // 1024 and the app's own bind error says so.
+    if !crate::paths::is_root() {
+        let _ = std::fs::write("/proc/sys/net/ipv4/ip_unprivileged_port_start", "0");
+    }
     loopback_up()
 }
 

@@ -80,13 +80,38 @@ pub(crate) fn sanitize_name(raw: &str) -> String {
     }
 }
 
+/// The file `node` should run: what `npm start` runs when the start script
+/// is a plain `node <file>`, else `main`, else the conventional name. A
+/// project whose start script is `nodemon` or `next start` is not a file;
+/// `main` (or the fallback) stands, and the person edits the line.
 fn node_main(dir: &Path) -> String {
-    std::fs::read_to_string(dir.join("package.json"))
+    let pkg = std::fs::read_to_string(dir.join("package.json"))
         .ok()
-        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
-        .and_then(|v| v.get("main").and_then(|m| m.as_str()).map(str::to_string))
-        .filter(|m| !m.is_empty())
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
+    let start = pkg
+        .as_ref()
+        .and_then(|v| v.pointer("/scripts/start").and_then(|s| s.as_str()))
+        .and_then(node_start_file);
+    start
+        .or_else(|| {
+            pkg.as_ref()
+                .and_then(|v| v.get("main").and_then(|m| m.as_str()).map(str::to_string))
+                .filter(|m| !m.is_empty())
+        })
         .unwrap_or_else(|| "server.js".to_string())
+}
+
+/// `node index.js` → `index.js`; `node --enable-source-maps dist/app.js` →
+/// `dist/app.js`; anything else (`nodemon`, `next start`) → None.
+fn node_start_file(script: &str) -> Option<String> {
+    let mut words = script.split_whitespace();
+    if words.next()? != "node" {
+        return None;
+    }
+    words
+        .find(|w| !w.starts_with('-'))
+        .filter(|w| w.ends_with(".js") || w.ends_with(".mjs") || w.ends_with(".cjs"))
+        .map(str::to_string)
 }
 
 fn has_py_files(dir: &Path) -> bool {
@@ -331,6 +356,48 @@ mod tests {
         assert_eq!(d.runtime, Some(("node".into(), "24".into())));
         assert_eq!(d.entrypoint, vec!["node", "dist/index.js"]);
         assert_eq!(d.port, Some(3000));
+    }
+
+    /// What `npm start` runs is the truest answer: a project with
+    /// `"start": "node index.js"` and no `main` got `server.js` on a fresh
+    /// droplet, and the first `ply run` failed to find it.
+    #[test]
+    fn a_plain_node_start_script_names_the_entrypoint() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"x","scripts":{"start":"node index.js"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            detect(dir.path(), &latest()).entrypoint,
+            vec!["node", "index.js"]
+        );
+        assert_eq!(
+            node_start_file("node --enable-source-maps dist/app.js"),
+            Some("dist/app.js".into())
+        );
+        assert_eq!(node_start_file("nodemon index.js"), None);
+        assert_eq!(node_start_file("next start"), None);
+        // start beats main; a non-file start leaves main in charge
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"main":"lib.js","scripts":{"start":"node bin/www.js"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            detect(dir.path(), &latest()).entrypoint,
+            vec!["node", "bin/www.js"]
+        );
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"main":"lib.js","scripts":{"start":"next start"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            detect(dir.path(), &latest()).entrypoint,
+            vec!["node", "lib.js"]
+        );
     }
 
     #[test]

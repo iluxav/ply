@@ -184,6 +184,27 @@ impl Backend for NsBackend {
                     eprintln!("ply: warning: {gap}");
                 }
             }
+            // With a network of its own the run lowers the privileged-port
+            // floor itself (netns.rs). On the host's network the floor is
+            // the host's, and a declared port under it fails with EACCES —
+            // say so before the app prints its own bind error and exits.
+            let own_network = opts.network.is_some();
+            if let (false, Some(port)) = (
+                own_network,
+                manifest.ports.values().copied().filter(|p| *p < 1024).min(),
+            ) {
+                let floor: u16 =
+                    std::fs::read_to_string("/proc/sys/net/ipv4/ip_unprivileged_port_start")
+                        .ok()
+                        .and_then(|v| v.trim().parse().ok())
+                        .unwrap_or(1024);
+                if port < floor {
+                    eprintln!(
+                        "ply: warning: this app binds :{port}, and rootless instances cannot bind ports below {floor} on this host — \
+                         if it fails with \"permission denied\", run `sudo ply setup --unprivileged-ports` once, or run it rootful"
+                    );
+                }
+            }
         }
 
         match rootless_scale_guard(

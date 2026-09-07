@@ -25,7 +25,7 @@ Install Ply:
 curl -fsSL https://plybox.sh/install.sh | sh
 ```
 
-The installer uses `~/.local/bin` for a regular user or `/usr/local/bin` when run as root. Follow its PATH instructions. If it requests host preparation, run `sudo ply setup` once; this prepares host facilities needed by the runtime, including networking and storage.
+The installer uses `~/.local/bin` for a regular user or `/usr/local/bin` when run as root or with sudo. Follow its PATH instructions. If it requests host preparation, run `sudo ply setup` once; this prepares host facilities needed by the runtime, including networking and storage, and prints a short to-do list for rootless use on this host, such as installing `passt` so rootless apps have outbound network. The example below needs none of the to-dos.
 
 Create a directory containing a page to serve:
 

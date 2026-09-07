@@ -5,6 +5,28 @@ breaking changes, and known limitations. Write under **Unreleased** as work
 lands; `make release-cli` turns that heading into the version and date, and
 the release workflow publishes the entry as the GitHub release notes.
 
+## Unreleased
+
+### Fixes
+- Rootless: `ply ps`, `ply why` and `ply deploy` could not see an app started
+  from a session without `XDG_RUNTIME_DIR` (a bare `su`, cron, some CI): the
+  parent, inside its user namespace, built its state path from uid 0 and
+  wrote to `/tmp/ply-0`. Paths now use the uid the host sees.
+- The installer tried `sudo` for any user on a host that has `sudo`, and
+  stopped with an error for a user not allowed to use it. Such a user now
+  gets `~/.local/bin`, as documented; a sudoer with a password is asked once.
+- `ply init` reads `scripts.start` from `package.json` (`node index.js`)
+  before falling back to `main` or `server.js`.
+- Rootless apps can bind ports below 1024. The privileged-port floor is a
+  property of the network namespace and ply owns the one it creates, so it
+  lowers the floor there; an imported `nginx` now serves on :80 rootless
+  with no change to the host. On the host's network (no user-mode router)
+  the floor is the host's, and ply says so before the app's own bind error.
+- `ply setup` reports a missing user-mode router (`passt`/`slirp4netns`),
+  without which rootless instances have no outbound network.
+- `ply push` of a version the registry already holds, byte for byte, says
+  "already published — unchanged" instead of "published".
+
 ## v0.1.76 — 2026-09-06
 
 ### What changed

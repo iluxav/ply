@@ -523,7 +523,14 @@ pub fn push(args: crate::cli::PushArgs) -> Result<()> {
     }
 
     let (name, version) = (&plan.record.name, &plan.record.version);
-    println!("published {owner}/{name}@{version}");
+    // 201 is new; 200 is the registry saying it already had exactly this
+    // (same manifest, same bytes) — say so, rather than "published" as if
+    // something changed.
+    if status == 200 {
+        println!("already published {owner}/{name}@{version} — unchanged");
+    } else {
+        println!("published {owner}/{name}@{version}");
+    }
     println!(
         "  {}/{owner}/{name}/{name}-{version}.toml",
         registry_base(&body, &owner, name, plan.upload)

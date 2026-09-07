@@ -13,6 +13,19 @@
 
 set -eu
 
+# May this user actually use sudo? `sudo -n` answers without a prompt; when
+# it wants a password and there is a terminal, ask once (`sudo -v` caches
+# the credential for the install below). A user who is not in sudoers is
+# refused by both and gets the ~/.local/bin install instead of an error.
+can_sudo() {
+    sudo -n true 2>/dev/null && return 0
+    # a terminal we can actually read from — `-e /dev/tty` is true even
+    # where opening it fails (cron, a bare `su`, CI)
+    ( : </dev/tty ) 2>/dev/null || return 1
+    echo "installing to /usr/local/bin needs your password (Ctrl-C installs to ~/.local/bin instead)"
+    sudo -v </dev/tty 2>/dev/null
+}
+
 PLY_REPO="${PLY_REPO:-iluxav/ply}"
 PLY_VERSION="${PLY_VERSION:-latest}"
 
@@ -49,8 +62,8 @@ if [ "$(id -u)" = "0" ]; then
     install -m 755 "$tmp/ply" /usr/local/bin/ply
     echo "installed /usr/local/bin/ply ($(/usr/local/bin/ply --version))"
     /usr/local/bin/ply setup
-elif command -v sudo >/dev/null 2>&1 && { sudo -n true 2>/dev/null || [ -e /dev/tty ]; }; then
-    echo "installing to /usr/local/bin (sudo may prompt for your password)"
+elif command -v sudo >/dev/null 2>&1 && can_sudo; then
+    echo "installing to /usr/local/bin"
     sudo install -m 755 "$tmp/ply" /usr/local/bin/ply
     if [ -f "$HOME/.local/bin/ply" ]; then
         rm -f "$HOME/.local/bin/ply"
