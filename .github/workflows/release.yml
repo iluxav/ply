@@ -50,7 +50,50 @@ jobs:
           path: ${{ matrix.artifact }}
           retention-days: 1
 
-  # The release is created ONCE, already holding both binaries.
+  # The Apple Silicon binary: built natively (GitHub's macOS runners are
+  # arm64), then signed with the hypervisor entitlement. The signature is
+  # not optional: hv_vm_create checks com.apple.security.hypervisor at the
+  # CALL, so an unsigned ply installs, runs, resolves the image, and fails
+  # the moment it would boot a VM. Ad-hoc (`-s -`) is enough for the
+  # entitlement, and for `curl | sh`: curl sets no quarantine flag, so
+  # Gatekeeper never asks for a Developer ID. (A browser download would; that
+  # is the day notarization becomes worth paying for.)
+  #
+  # Signed on a COPY, never in place: cargo re-uplifts target/…/release/ply
+  # from deps/ on its next run and strips the signature with it. The Mach-O
+  # carries the signature inside the file, so it survives the artifact zip.
+  build-darwin:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: tag matches crate version
+        run: |
+          crate="v$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "ply-cli") | .version')"
+          test "$crate" = "${GITHUB_REF_NAME}" \
+            || { echo "::error::tag ${GITHUB_REF_NAME} != Cargo.toml version ${crate} — bump [workspace.package] version before tagging"; exit 1; }
+      - run: rustup target add aarch64-apple-darwin
+      - name: build
+        run: |
+          cargo build --release --target aarch64-apple-darwin -p ply-cli
+          cp target/aarch64-apple-darwin/release/ply ply-darwin-arm64
+      - name: sign with the hypervisor entitlement
+        run: |
+          cat > hv.entitlements <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict><key>com.apple.security.hypervisor</key><true/></dict></plist>
+          PLIST
+          codesign --entitlements hv.entitlements --force -s - ply-darwin-arm64
+          codesign -d --entitlements - ply-darwin-arm64 2>&1 | grep -q hypervisor \
+            || { echo "::error::ply-darwin-arm64 carries no hypervisor entitlement — ply run would fail at hv_vm_create"; exit 1; }
+          ./ply-darwin-arm64 --version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ply-darwin-arm64
+          path: ply-darwin-arm64
+          retention-days: 1
+
+  # The release is created ONCE, already holding all three binaries.
   #
   # It used to be created up-front by `make release`, which made it `latest`
   # the instant it existed — so `releases/latest/download/…` 404'd for the
@@ -59,7 +102,7 @@ jobs:
   # this workflow never ran to publish it. Building first and creating the
   # release with its assets attached has neither failure mode.
   publish:
-    needs: build
+    needs: [build, build-darwin]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -70,7 +113,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          test -s ply-linux-x64 && test -s ply-linux-arm64 \
+          test -s ply-linux-x64 && test -s ply-linux-arm64 && test -s ply-darwin-arm64 \
             || { echo "::error::a binary is missing — refusing to publish a partial release"; exit 1; }
           # The release notes are this version's CHANGELOG entry, written by
           # a person: the section under "## vX.Y.Z", up to the next "## ".
@@ -79,5 +122,5 @@ jobs:
           test -s notes.md || echo "No changelog entry for ${{ github.ref_name }}." > notes.md
           gh release create "${{ github.ref_name }}" \
             --title "${{ github.ref_name }}" --notes-file notes.md --latest \
-            ply-linux-x64 ply-linux-arm64
+            ply-linux-x64 ply-linux-arm64 ply-darwin-arm64
           gh release view "${{ github.ref_name }}" --json assets --jq '.assets[].name'

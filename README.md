@@ -6,7 +6,7 @@ Package your app with explicit, versioned dependencies. Build an image, copy it 
 
 [Website](https://plybox.sh/) · [Documentation](https://plybox.sh/docs/) · [Releases](https://github.com/iluxav/ply/releases) · [Report an issue](https://github.com/iluxav/ply/issues)
 
-**Status:** pre-1.0. The CLI and image format may change. Linux x86_64 and arm64 are the primary targets; the native Apple Silicon backend is experimental and currently requires building from source. See the [macOS guide](https://plybox.sh/docs/macos/) for setup and feature limitations.
+**Status:** pre-1.0. The CLI and image format may change. Linux x86_64 and arm64 are the primary targets; the native Apple Silicon backend is experimental — the same installer installs it, each instance runs in its own microVM. See the [macOS guide](https://plybox.sh/docs/macos/) for what it does not do yet.
 
 ## Why ply?
 

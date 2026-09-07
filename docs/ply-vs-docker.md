@@ -65,7 +65,7 @@ Both runtimes publish ports with kernel DNAT, so neither spends CPU on the reque
 
 **Maturity and battle-testing.** Fifteen years of production hardening, CVE response process, an enormous body of operational knowledge, answers on every search page. ply is pre-1.0 with one design team's test coverage.
 
-**Platform reach.** Docker Desktop covers macOS and Windows with prebuilt installers. ply runs natively on Apple Silicon through its [built-in microVM backend](/docs/macos/) — one small VM per instance, no resident VM product — but today that is build-from-source, `ply exec` and egress enforcement have not reached it, and Windows means WSL2.
+**Platform reach.** Docker Desktop covers macOS and Windows with prebuilt installers. ply runs natively on Apple Silicon through its [built-in microVM backend](/docs/macos/) — one small VM per instance, no resident VM product, installed by the same curl line — but it is experimental: `ply exec` and egress enforcement have not reached it, Intel Macs need Lima, and Windows means WSL2.
 
 **Orchestration on-ramps.** Multi-service dev is covered — `ply up` starts a `[stack]` the way compose does — and scaling on one host is built in, but Docker's images carry to Kubernetes when you outgrow a host. ply deliberately stops at one host: if you need overlay networks, service discovery across hosts, or a scheduler placing work on many machines, ply's answer is "that's not this tool."
 

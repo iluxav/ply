@@ -1,61 +1,57 @@
 ---
 title: ply on macOS
-description: Native ply run on Apple Silicon — one microVM per instance on Hypervisor.framework, built into the binary — and Lima as the zero-build path.
+description: Native ply run on Apple Silicon — one microVM per instance on Hypervisor.framework, built into the binary, installed by the same curl line as on Linux — and Lima as the alternative.
 section: Guides
 order: 18
 ---
 
 # ply on macOS
 
-**Came here from the installer?** There is no macOS binary yet. The path
-that works today, in about a minute, is [Lima](#lima-the-zero-build-path):
-a Linux VM on the Mac in which the installer and everything else behave
-exactly as on a server. The native backend below is real but experimental
-and built from source.
+On an Apple Silicon Mac, the installer installs ply:
+
+```sh
+curl -fsSL https://plybox.sh/install.sh | sh
+```
 
 ply's runtime is built on Linux kernel primitives, so on a Mac each
 instance needs a Linux kernel around it. ply brings its own: the binary
 contains a **microVM backend** — one small VM per instance on Apple's
 Hypervisor.framework, the same `.img` files, the same commands. No
 Docker-Desktop-style VM product to install or babysit; nothing resident
-between runs.
+between runs. The backend is experimental: what it does not do yet is
+[listed below](#what-is-not-there-yet).
 
-Two ways to run it today:
+Two ways to run it:
 
 | | native microVM | Lima |
 |---|---|---|
 | what runs | `ply` on the Mac, one microVM per instance | `ply` inside a Linux VM |
-| install | build from source (`make install-mac`), Apple Silicon | `brew install lima`, prebuilt binaries |
+| install | the installer, Apple Silicon | `brew install lima`, then the installer inside |
 | ports, names, internet | published on the Mac; `<name>.ply` and outbound via ply's own switch | forwarded by Lima |
 | `ply up` stacks | yes | yes |
 | `ply exec` | not yet | yes |
 | egress contract | not enforced yet | audit and enforce, as on Linux |
+| Intel Mac | no | yes |
 
 ## Native: the built-in microVM
 
-**Requirements.** Apple Silicon (M1 or later), Hypervisor.framework
-available (`sysctl kern.hv_support` prints `1`), a Rust toolchain. The
-binary must carry the `com.apple.security.hypervisor` entitlement, which
-`make install-mac` signs in; a prebuilt, signed macOS release is not
-published yet, so this path is build-from-source for now.
-
-```sh
-git clone https://github.com/iluxav/ply && cd ply
-make install-mac                        # builds, signs, installs to /usr/local/bin
-                                        # (MAC_PREFIX=~/.local/bin to change)
-```
+**Requirements.** Apple Silicon (M1 or later) and Hypervisor.framework
+(`sysctl kern.hv_support` prints `1`; it does on every Mac that is not
+itself a VM). The installer puts the release binary in `/usr/local/bin`
+(or `~/.local/bin` without sudo) and checks that it carries the
+`com.apple.security.hypervisor` entitlement — the release is signed with
+it, because `hv_vm_create` refuses a binary without it, at the call, with
+an error that names nothing. There is no `ply setup` on a Mac: nothing on
+the host needs preparing.
 
 **The kernel.** Each microVM boots ply's own arm64 kernel and initramfs,
-pinned per binary (`ply/microvm-kernel@6.12.0`). Until that keg is
-published to the registry, build it once — on any aarch64 Linux, which is
-what a Lima VM is for — and point ply at the output:
+pinned per binary (`ply/microvm-kernel@6.12.0`), fetched from the
+registry the first time a microVM boots and kept in the store like any
+package. `ply self-update` brings a new pin with a new binary; no
+`ply.lock` ever mentions it, so a lockfile written on a Mac is
+byte-identical to one written on Linux.
 
-```sh
-lima bash -lc 'OUT=$HOME/microvm-build sh ~/ply/scripts/build-microvm-kernel.sh'
-export PLY_MICROVM_KERNEL=~/microvm-build   # the directory with microvm-kernel.img + initramfs.cpio
-```
-
-**Daily use** is then the Linux experience, on the Mac:
+**Daily use** is the Linux experience, on the Mac:
 
 ```sh
 ply build .                             # → myapp-0.1.0-linux-arm64.img
@@ -71,7 +67,9 @@ internet. Ports publish on the Mac through the parent, exit codes and
 signals cross the boundary, `ply ps` and `ply stats` read the same state
 files.
 
-**What is not there yet**, said plainly:
+### What is not there yet
+
+Said plainly:
 
 - `ply exec` into a microVM (a console channel into the guest is v2).
 - The [egress contract](/docs/security/#egress-the-contract): the microVM
@@ -84,10 +82,23 @@ files.
 - Images are `linux-arm64`; build for your servers' architecture in CI
   (the [GitHub Action](/docs/registries/) does x64 for free).
 
-## Lima: the zero-build path
+### Building it yourself
+
+For work on the backend: `make install-mac` builds the release binary,
+signs it with the entitlement and installs it (`MAC_PREFIX=~/.local/bin`
+to change where). Signing happens on the installed copy, never on
+`target/release/ply`: cargo re-uplifts that path on its next run and
+silently strips the signature. `make mac-test` boots the integration
+suite. A kernel other than the pinned keg — a local build from
+`scripts/build-microvm-kernel.sh`, run in Lima — is
+`PLY_MICROVM_KERNEL=<dir with microvm-kernel.img + initramfs.cpio>`.
+
+## Lima: the other path
 
 [Lima](https://lima-vm.io) runs a Linux VM with your home directory
-shared and guest ports forwarded, so ply inside it feels close to native:
+shared and guest ports forwarded, so ply inside it feels close to native
+— and it is the path on an Intel Mac, and the one with `ply exec` and
+egress enforcement today:
 
 ```sh
 brew install lima
@@ -98,8 +109,8 @@ cd ~/code/myapp && lima ply build . && lima ply run myapp-0.1.0-linux-arm64.img
 
 Everything on the Linux pages applies inside it, including `ply exec`,
 egress enforcement (rootful) and autoscaling. `limactl stop default`
-frees the VM's memory. Lima is also where you build the microVM kernel
-above, so the two paths are not either/or.
+frees the VM's memory. The two paths are not either/or: both use the same
+images and the same registry.
 
 ## Windows
 
@@ -110,7 +121,15 @@ WSL2 is a real Linux kernel: ply runs in it directly, no extra tooling.
 The native backend is complete for running and wiring apps and is covered
 by an integration suite on Apple Silicon (`make mac-test`): disks, exit
 codes, stdout, published ports, `.ply` names, outbound through the switch,
-signals, stacks. What makes it the default rather than the from-source
-path is publishing the kernel keg and a signed macOS release binary; then
-`ply exec` and egress. The design that got here is `docs/ply-vm.md` in the
-repo.
+signals, stacks. It ships as a signed release binary, installed by the
+installer, with its kernel in the registry. Next are `ply exec` and
+egress enforcement in the VM. The design that got here is `docs/ply-vm.md`
+in the repo.
+
+**Signing, for the curious.** The release is signed ad-hoc with the
+hypervisor entitlement, which is what Hypervisor.framework checks. It is
+not notarized: a binary fetched by `curl` carries no quarantine flag, so
+Gatekeeper never asks. A binary downloaded through a browser from the
+GitHub release page does get the flag and macOS refuses to run it until
+the flag is cleared (`xattr -d com.apple.quarantine ply`); use the
+installer.

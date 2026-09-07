@@ -7,10 +7,20 @@ the release workflow publishes the entry as the GitHub release notes.
 
 ## Unreleased
 
+### What changed
+- ply installs on Apple Silicon Macs: `curl -fsSL https://plybox.sh/install.sh | sh`
+  installs the release binary (`ply-darwin-arm64`, signed with the
+  hypervisor entitlement, so `ply run` can create VMs), skips the
+  server-only `ply setup` and wizard, and checks the entitlement and
+  Hypervisor.framework after installing. An Intel Mac is told to use Lima.
+  The first `ply run` fetches the kernel keg `ply/microvm-kernel@6.12.0`
+  from the registry. The backend remains experimental; see the macOS guide
+  for what it does not do yet (`ply exec`, egress enforcement, resource
+  limits).
+- `ply self-update` on a Mac downloads the macOS binary.
+
 ### Fixes
-- The installer on a Mac said "unsupported architecture: arm64". It now
-  says that macOS is experimental and built from source, with the link, and
-  it accepts `arm64` as a name for aarch64 on Linux.
+- The installer accepts `arm64` as a name for aarch64 on Linux.
 
 ## v0.1.77 — 2026-09-07
 

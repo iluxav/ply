@@ -6,6 +6,9 @@
 #                      ~/.local/bin/ply shadow copy is removed).
 # As user, no sudo   → ~/.local/bin/ply, prints the one-time
 #                      `sudo ply setup` hint only if this host needs it.
+# On a Mac           → the Apple Silicon binary, same locations; no host
+#                      setup (each instance boots its own small VM) and no
+#                      wizard (the edge and the dashboard are server things).
 #
 # Overrides: PLY_VERSION (default: latest), PLY_REPO, PLY_BINARY (install a
 # local file instead of downloading — used by CI and development).
@@ -29,17 +32,20 @@ can_sudo() {
 PLY_REPO="${PLY_REPO:-iluxav/ply}"
 PLY_VERSION="${PLY_VERSION:-latest}"
 
-# The OS first: a Mac reports its CPU as `arm64`, and the message it needs
-# is about macOS, not about architectures.
+# The OS first: a Mac reports its CPU as `arm64`, and what an Intel Mac
+# needs to hear is about macOS, not about architectures. The release carries
+# `ply-<os>-<arch>`; `os` here is `uname -s` lowercased, which is also what
+# `ply self-update` asks for.
 case "$(uname -s)" in
-    Linux) ;;
+    Linux) os=linux ;;
     Darwin)
-        echo "ply on macOS is experimental and not shipped as a binary yet."
-        echo "It runs Linux apps in a small VM per instance on Apple Silicon; build it from source:"
-        echo "  https://plybox.sh/docs/macos/"
-        echo "On a Linux server or VM this same command installs the release."
-        exit 1 ;;
-    *) echo "error: ply runs on Linux (x86_64 and arm64); this is $(uname -s)"; exit 1 ;;
+        os=darwin
+        if [ "$(uname -m)" != "arm64" ]; then
+            echo "error: ply on macOS needs Apple Silicon (M1 or later); this Mac is $(uname -m)."
+            echo "On an Intel Mac, run ply inside a Linux VM: https://plybox.sh/docs/macos/"
+            exit 1
+        fi ;;
+    *) echo "error: ply runs on Linux and macOS (Apple Silicon); this is $(uname -s)"; exit 1 ;;
 esac
 arch=$(uname -m)
 case "$arch" in
@@ -56,9 +62,9 @@ if [ -n "${PLY_BINARY:-}" ]; then
     cp "$PLY_BINARY" "$tmp/ply"
 else
     if [ "$PLY_VERSION" = "latest" ]; then
-        url="https://github.com/$PLY_REPO/releases/latest/download/ply-linux-$target"
+        url="https://github.com/$PLY_REPO/releases/latest/download/ply-$os-$target"
     else
-        url="https://github.com/$PLY_REPO/releases/download/$PLY_VERSION/ply-linux-$target"
+        url="https://github.com/$PLY_REPO/releases/download/$PLY_VERSION/ply-$os-$target"
     fi
     echo "downloading $url"
     curl -fsSL -o "$tmp/ply" "$url"
@@ -69,19 +75,25 @@ chmod 755 "$tmp/ply"
 # One copy, system-wide, whenever possible: two ply binaries on one host is
 # how an AppArmor profile ends up naming one while PATH runs the other.
 # ~/.local/bin is the no-privileges fallback only.
+# `ply setup` is host preparation for the Linux runtime (subuid ranges,
+# AppArmor, the bridge); a Mac has none of that to prepare, and `ply setup`
+# there says so and exits 1 — so it is not called. `install -d`: a fresh Mac
+# has no /usr/local/bin until something creates it.
 if [ "$(id -u)" = "0" ]; then
+    install -d /usr/local/bin
     install -m 755 "$tmp/ply" /usr/local/bin/ply
     echo "installed /usr/local/bin/ply ($(/usr/local/bin/ply --version))"
-    /usr/local/bin/ply setup
+    if [ "$os" = linux ]; then /usr/local/bin/ply setup; fi
 elif command -v sudo >/dev/null 2>&1 && can_sudo; then
     echo "installing to /usr/local/bin"
+    sudo install -d /usr/local/bin
     sudo install -m 755 "$tmp/ply" /usr/local/bin/ply
     if [ -f "$HOME/.local/bin/ply" ]; then
         rm -f "$HOME/.local/bin/ply"
         echo "removed $HOME/.local/bin/ply (a shadow copy from an earlier user-mode install)"
     fi
     echo "installed /usr/local/bin/ply ($(/usr/local/bin/ply --version))"
-    sudo /usr/local/bin/ply setup
+    if [ "$os" = linux ]; then sudo /usr/local/bin/ply setup; fi
 else
     mkdir -p "$HOME/.local/bin"
     install -m 755 "$tmp/ply" "$HOME/.local/bin/ply"
@@ -108,6 +120,28 @@ fi
 #   curl … | PLY_FLEET=git@github.com:you/infra.git PLY_FLEET_HOST=web-1 sh
 PLY_BIN=/usr/local/bin/ply
 [ -x "$PLY_BIN" ] || PLY_BIN="$HOME/.local/bin/ply"
+
+# --- macOS: done here -------------------------------------------------------
+# The wizard below is for servers (systemd units, Caddy, a dashboard on
+# :7070); a Mac gets a note about what it just installed instead.
+#
+# The release binary is signed with com.apple.security.hypervisor, and the
+# signature lives inside the file, so the copy above kept it. Check anyway:
+# without it, hv_vm_create fails with an error that says nothing about
+# signing, and nobody would connect that failure to this download.
+if [ "$os" = darwin ]; then
+    if ! codesign -d --entitlements - "$PLY_BIN" 2>&1 | grep -q hypervisor; then
+        echo "! this binary carries no hypervisor entitlement; ply run will fail to create a VM."
+        echo "  https://plybox.sh/docs/macos/"
+    fi
+    if [ "$(sysctl -n kern.hv_support 2>/dev/null)" != "1" ]; then
+        echo "! Hypervisor.framework is not available here (sysctl kern.hv_support); ply run needs it."
+    fi
+    echo ""
+    echo "ply on macOS boots one small VM per instance; the first \`ply run\` fetches the"
+    echo "kernel it needs (ply/microvm-kernel). Guide: https://plybox.sh/docs/macos/"
+    exit 0
+fi
 
 is_root_like() { [ "$(id -u)" = "0" ] || { command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; }; }
 as_root() { if [ "$(id -u)" = "0" ]; then "$@"; else sudo "$@"; fi; }
