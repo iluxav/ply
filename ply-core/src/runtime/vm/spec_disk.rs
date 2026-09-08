@@ -13,7 +13,7 @@
 //! The contract, in one place, is on [`volume_devs`].
 
 use std::net::Ipv4Addr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use ply_vm_proto::{encode_spec_disk, NetSpec, ParamsTree, SpecDisk, UserSpec, VolumeSpec};
 
@@ -191,6 +191,29 @@ pub fn params_seed(app: &str, peers: &[String]) -> ParamsTree {
 /// parameters: they are the switch's own constants, read from
 /// [`switch::PREFIX_LEN`] and [`switch::GATEWAY`] here, so the address the
 /// guest is told to use and the network it is told to use cannot disagree.
+/// `InstanceSpec.binds` split two ways: the declared volumes, which become
+/// disks, and everything else — a `ply.dev.toml` link, a `--link` — which
+/// becomes a 9p share of the host directory itself.
+///
+/// The split is by the container path against `volume_targets`, which the
+/// supervisor fills with exactly the declared volumes' paths. Not by host
+/// path: a link that happens to point under the volumes directory is still
+/// a link, and a heuristic on the host path would have made it a disk.
+/// `(host directory, container path)` — one entry of `InstanceSpec.binds`.
+pub type Bind = (PathBuf, String);
+
+pub fn partition(spec: &InstanceSpec) -> (Vec<&Bind>, Vec<&Bind>) {
+    spec.binds
+        .iter()
+        .partition(|(_, target)| spec.volume_targets.contains(target))
+}
+
+/// The 9p mount tag of the `i`th share. Short and fixed: the guest mounts
+/// by it, the VMM announces it, and neither has to know the host path.
+pub fn share_tag(i: usize) -> String {
+    format!("share{i}")
+}
+
 pub fn build(
     spec: &InstanceSpec,
     volume_devs: &[String],
@@ -199,6 +222,17 @@ pub fn build(
     address: Option<Ipv4Addr>,
 ) -> SpecDisk {
     let layer_count = spec.images.len();
+    let (volumes, links) = partition(spec);
+    // The host's clock, as late as possible: the guest sets its own from
+    // this the moment it reads the disk, so every millisecond between here
+    // and there is error the guest carries for its whole life.
+    let clock = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|d| ply_vm_proto::ClockSpec {
+            secs: d.as_secs() as i64,
+            nanos: d.subsec_nanos(),
+        });
     SpecDisk {
         entrypoint: spec.entrypoint.clone(),
         workdir: spec.cwd.to_string_lossy().into_owned(),
@@ -216,8 +250,7 @@ pub fn build(
             prefix_len: switch::PREFIX_LEN,
             gateway: switch::GATEWAY.to_string(),
         }),
-        volumes: spec
-            .binds
+        volumes: volumes
             .iter()
             .enumerate()
             .map(|(i, (_, path))| VolumeSpec {
@@ -228,6 +261,15 @@ pub fn build(
                     .unwrap_or_else(|| device_name(layer_count + i)),
             })
             .collect(),
+        shares: links
+            .iter()
+            .enumerate()
+            .map(|(i, (_, path))| ply_vm_proto::ShareSpec {
+                tag: share_tag(i),
+                path: path.clone(),
+            })
+            .collect(),
+        clock,
         // Keyed by `hostname`, because that is the name the guest matches
         // its own node by when it seeds `/run/ply/self`; `run.rs` sets
         // `hostname = app` and publishes under the same name.
@@ -337,6 +379,39 @@ mod tests {
             volume_targets: paths,
             ..instance_spec(2)
         }
+    }
+
+    #[test]
+    fn a_link_becomes_a_share_and_a_declared_volume_stays_a_disk() {
+        let mut spec = instance_spec_with_volumes(vec!["/var/lib/postgresql/data".into()]);
+        // A `ply.dev.toml` link: the developer's own directory, not a volume.
+        spec.binds.push((
+            PathBuf::from("/Users/dev/app/src"),
+            "/opt/postgres/src".into(),
+        ));
+        let disk = build(&spec, &["/dev/vdc".into()], None, &[], None);
+        assert_eq!(disk.volumes.len(), 1, "only the declared volume is a disk");
+        assert_eq!(disk.volumes[0].path, "/var/lib/postgresql/data");
+        assert_eq!(disk.shares.len(), 1, "the link is a share");
+        assert_eq!(disk.shares[0].tag, "share0");
+        assert_eq!(disk.shares[0].path, "/opt/postgres/src");
+        let (volumes, links) = partition(&spec);
+        assert_eq!(volumes.len(), 1);
+        assert_eq!(links[0].0, PathBuf::from("/Users/dev/app/src"));
+    }
+
+    #[test]
+    fn the_disk_carries_the_hosts_clock() {
+        let disk = build(&instance_spec(1), &[], None, &[], None);
+        let clock = disk.clock.expect("a clock is always written");
+        // Sometime after 2026 and not in the future: the point is that the
+        // guest will not start in 1970.
+        assert!(clock.secs > 1_767_225_600, "{}", clock.secs);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        assert!(clock.secs <= now);
     }
 
     #[test]

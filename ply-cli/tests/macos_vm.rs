@@ -960,3 +960,295 @@ after = ["alpha"]
         "discovery_env must hand a stack member its peer's in-network address:\n{output}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The four things a developer hit first on the Mac backend, each fixed by
+// one piece of the runtime: the guest clock (the spec disk carries the
+// host's), `--scale` (one worker process per VM), links (virtio-9p shares),
+// and `ply deploy` (a real child pid to walk up from).
+
+/// A microVM has no RTC. Without the clock in the spec disk the guest's
+/// date is 1970 and every TLS handshake fails "certificate not yet valid".
+#[test]
+fn the_guest_clock_is_the_hosts() {
+    let Some(kernel) = kernel() else { return };
+    let scratch = Scratch::new("clock");
+    let image = build_app(
+        &scratch,
+        r#"
+[package]
+name = "plytest-clock"
+version = "0.1.0"
+entrypoint = ["/bin/sh", "-c", "echo GUEST-EPOCH $(date +%s)"]
+
+[dependencies]
+debian = "13.6"
+"#,
+    );
+    let host = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let run = run_image(&scratch, &kernel, &image);
+    let guest: i64 = run
+        .stdout
+        .lines()
+        .find_map(|l| l.strip_prefix("GUEST-EPOCH "))
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or_else(|| panic!("the guest printed no epoch; it said:\n{}", run.stdout));
+    assert!(
+        (guest - host).abs() < 60,
+        "guest clock {guest} is not the host's {host} (stderr:\n{})",
+        run.stderr
+    );
+    assert!(
+        run.stderr.contains("clock: set to"),
+        "the guest init must report setting the clock:\n{}",
+        run.stderr
+    );
+}
+
+/// Hypervisor.framework allows one VM per process, so before the worker
+/// process existed the second instance of `--scale 2` died at
+/// `hv_vm_create`. Now each instance is its own process, and the published
+/// pool balances across both.
+#[test]
+fn two_instances_scale_behind_one_published_port() {
+    use std::io::Read;
+    let Some(kernel) = kernel() else { return };
+    let scratch = Scratch::new("scale");
+    let image = build_app(
+        &scratch,
+        r#"
+[package]
+name = "plytest-scale"
+version = "0.1.0"
+entrypoint = [
+  "/usr/bin/perl", "-MIO::Socket::INET", "-e",
+  "$|=1; my $s = IO::Socket::INET->new(LocalAddr=>'0.0.0.0', LocalPort=>7777, Listen=>8, ReuseAddr=>1) or die $!; print \"listening\n\"; while (my $c = $s->accept) { print $c \"instance at \" . $c->sockhost . \"\n\"; close $c }",
+]
+
+[dependencies]
+debian = "13.6"
+
+[health]
+port = 7777
+"#,
+    );
+    let port = free_host_port();
+    let mut run = Background::start(
+        &scratch,
+        &kernel,
+        &image,
+        &[
+            "--scale",
+            "2",
+            "--publish",
+            &format!("127.0.0.1:{port}:7777"),
+        ],
+    );
+    let ask = || -> Option<String> {
+        let mut conn = std::net::TcpStream::connect_timeout(
+            &([127, 0, 0, 1], port).into(),
+            std::time::Duration::from_secs(1),
+        )
+        .ok()?;
+        conn.set_read_timeout(Some(std::time::Duration::from_secs(3)))
+            .ok()?;
+        let mut got = String::new();
+        conn.read_to_string(&mut got).ok()?;
+        (!got.is_empty()).then_some(got.trim().to_string())
+    };
+    // Both instances must be seated: the pool adds each as it passes the
+    // health gate, so keep asking until two distinct machines have answered.
+    let seen = within(
+        "two distinct instances answered on the published port",
+        90,
+        || run.output(),
+        || {
+            let mut seen = std::collections::BTreeSet::new();
+            for _ in 0..10 {
+                if let Some(answer) = ask() {
+                    seen.insert(answer);
+                }
+            }
+            (seen.len() >= 2).then_some(seen)
+        },
+    );
+    assert!(
+        seen.contains("instance at 10.77.0.2") && seen.contains("instance at 10.77.0.3"),
+        "two machines on the switch, two addresses: {seen:?}"
+    );
+    let (code, took) = run
+        .signal_and_wait("INT", std::time::Duration::from_secs(15))
+        .expect("a scaled run stops on SIGINT");
+    assert!(
+        took < std::time::Duration::from_secs(8),
+        "both workers must be asked politely and go promptly, not be SIGKILLed after the \
+         grace window (took {took:?}, code {code}):\n{}",
+        run.output()
+    );
+}
+
+/// `ply.dev.toml` links are the developer's own tree, shared live: an edit
+/// on the Mac is what the next read in the guest sees. The share is a 9p
+/// mount of the host directory, not a copy — `src/` is deliberately NOT in
+/// the image, so the only way the guest can read it is through the share.
+#[test]
+fn a_link_is_shared_live_into_the_guest() {
+    use std::io::Read;
+    let Some(kernel) = kernel() else { return };
+    let scratch = Scratch::new("link");
+    let dir = scratch.app_dir();
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(dir.join("src/message.txt"), "version one\n").unwrap();
+    std::fs::write(
+        dir.join("serve.pl"),
+        r#"$|=1; use IO::Socket::INET; my $s = IO::Socket::INET->new(LocalAddr=>'0.0.0.0', LocalPort=>7777, Listen=>8, ReuseAddr=>1) or die $!; print "listening\n"; while (my $c = $s->accept) { my $body; if (open(my $f, "<", "src/message.txt")) { local $/; $body = <$f>; close $f; } else { $body = "no src/message.txt: $!\n"; } print $c $body; close $c }"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("ply.toml"),
+        r#"
+[package]
+name = "plytest-link"
+version = "0.1.0"
+entrypoint = ["/usr/bin/perl", "serve.pl"]
+include = ["serve.pl"]
+
+[dependencies]
+debian = "13.6"
+"#,
+    )
+    .unwrap();
+    std::fs::write(dir.join("ply.dev.toml"), "links = [\"./src:src\"]\n").unwrap();
+    let port = free_host_port();
+    // `ply run DIR`: the form the dev overlay applies to.
+    let run = Background::start(
+        &scratch,
+        &kernel,
+        &dir,
+        &["--publish", &format!("127.0.0.1:{port}:7777")],
+    );
+    let read = || -> Option<String> {
+        let mut conn = std::net::TcpStream::connect_timeout(
+            &([127, 0, 0, 1], port).into(),
+            std::time::Duration::from_secs(1),
+        )
+        .ok()?;
+        conn.set_read_timeout(Some(std::time::Duration::from_secs(3)))
+            .ok()?;
+        let mut got = String::new();
+        conn.read_to_string(&mut got).ok()?;
+        (!got.is_empty()).then_some(got)
+    };
+    let first = within(
+        "the guest served the linked file",
+        60,
+        || run.output(),
+        read,
+    );
+    assert_eq!(first.trim(), "version one", "run said:\n{}", run.output());
+    std::fs::write(dir.join("src/message.txt"), "version two\n").unwrap();
+    let second = within(
+        "the guest saw the edit",
+        10,
+        || run.output(),
+        || read().filter(|s| s.trim() == "version two"),
+    );
+    assert_eq!(second.trim(), "version two");
+    assert!(
+        run.output()
+            .contains("share /opt/plytest-link/src <- share0 (9p)"),
+        "the guest init must report the 9p mount:\n{}",
+        run.output()
+    );
+}
+
+/// `ply deploy` finds a run parent by walking up from an instance's pid.
+/// A microVM instance used to record the parent's own pid, so the walk
+/// found the shell and deploy said "no running instances". With a worker
+/// process per VM the walk works, the roll is gated on `[health]`, and
+/// "deploy complete" is printed only once the new instance answers.
+#[test]
+fn deploy_rolls_a_microvm_instance_to_a_new_image() {
+    use std::io::Read;
+    let Some(kernel) = kernel() else { return };
+    let scratch = Scratch::new("deploy");
+    // Not `format!`: the perl one-liner is full of braces.
+    let manifest = |greeting: &str| {
+        r#"
+[package]
+name = "plytest-deploy"
+version = "0.1.0"
+entrypoint = [
+  "/usr/bin/perl", "-MIO::Socket::INET", "-e",
+  "$|=1; my $s = IO::Socket::INET->new(LocalAddr=>'0.0.0.0', LocalPort=>7777, Listen=>8, ReuseAddr=>1) or die $!; print \"listening\n\"; while (my $c = $s->accept) { print $c \"GREETING\n\"; close $c }",
+]
+
+[dependencies]
+debian = "13.6"
+
+[health]
+port = 7777
+"#
+        .replace("GREETING", greeting)
+    };
+    let image = build_app(&scratch, &manifest("release one"));
+    let port = free_host_port();
+    let mut run = Background::start(
+        &scratch,
+        &kernel,
+        &image,
+        &["--publish", &format!("127.0.0.1:{port}:7777")],
+    );
+    let read = || -> Option<String> {
+        let mut conn = std::net::TcpStream::connect_timeout(
+            &([127, 0, 0, 1], port).into(),
+            std::time::Duration::from_secs(1),
+        )
+        .ok()?;
+        conn.set_read_timeout(Some(std::time::Duration::from_secs(3)))
+            .ok()?;
+        let mut got = String::new();
+        conn.read_to_string(&mut got).ok()?;
+        (!got.is_empty()).then_some(got.trim().to_string())
+    };
+    let first = within("the first release answered", 60, || run.output(), read);
+    assert_eq!(first, "release one");
+
+    // The same path, new bytes: what a deploy ships.
+    let image_again = build_app(&scratch, &manifest("release two"));
+    assert_eq!(image_again, image);
+    let out = Command::new(ply())
+        .arg("deploy")
+        .arg(&image)
+        .env("PLY_MICROVM_KERNEL", &kernel)
+        .env("PLY_DATA_DIR", scratch.data_dir())
+        .output()
+        .expect("run ply deploy");
+    let report =
+        String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success() && report.contains("deploy complete"),
+        "ply deploy failed:\n{report}\nthe run said:\n{}",
+        run.output()
+    );
+    // "complete" means answering: the very next request is the new release.
+    assert_eq!(
+        read().as_deref(),
+        Some("release two"),
+        "the run said:\n{}",
+        run.output()
+    );
+    // …and the rolled instance is a child the stop handler can reach.
+    let (code, took) = run
+        .signal_and_wait("INT", std::time::Duration::from_secs(15))
+        .expect("the rolled run stops on SIGINT");
+    assert!(
+        took < std::time::Duration::from_secs(8),
+        "the rolled instance must be signalled, not SIGKILLed after the grace window \
+         (took {took:?}, code {code}):\n{}",
+        run.output()
+    );
+}

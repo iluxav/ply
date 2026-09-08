@@ -49,7 +49,7 @@
 # `cargo run -p ply-cli`).
 set -eu
 
-KVER="${KVER:-6.12.0}"
+KVER="${KVER:-6.12.109}"
 E2FSVER="${E2FSVER:-1.47.4}"
 OUT="${OUT:-out}"
 JOBS="${JOBS:-$(nproc 2>/dev/null || echo 4)}"
@@ -61,7 +61,7 @@ JOBS="${JOBS:-$(nproc 2>/dev/null || echo 4)}"
 # https://mirrors.edge.kernel.org/pub/linux/kernel/people/tytso/e2fsprogs/v<v>/sha256sums.asc
 # When bumping KVER or E2FSVER, the digest must be bumped with it in the same
 # edit -- the build fails loudly rather than silently using a new tarball.
-KSHA256="${KSHA256:-b1a2562be56e42afb3f8489d4c2a7ac472ac23098f1ef1c1e40da601f54625eb}"
+KSHA256="${KSHA256:-5484e552a334e15019f4aeba89e5b58f04651cf2f4e24e04de9f152f1c38e3fa}"
 E2FSSHA256="${E2FSSHA256:-fd5bf388cbdbe006a3d3b318d983b2948382440acc85a87f1e7d108653e8db0b}"
 
 die() { echo "error: $*" >&2; exit 1; }
@@ -301,7 +301,8 @@ CONFIG_POSIX_TIMERS CONFIG_FILE_LOCKING CONFIG_SYSVIPC CONFIG_INOTIFY_USER
 CONFIG_ADVISE_SYSCALLS CONFIG_RSEQ CONFIG_AIO CONFIG_IO_URING
 CONFIG_MEMBARRIER CONFIG_FHANDLE CONFIG_SECCOMP
 CONFIG_TMPFS_XATTR CONFIG_SQUASHFS_XATTR CONFIG_OVERLAY_FS_REDIRECT_DIR
-CONFIG_BUG CONFIG_KALLSYMS CONFIG_PRINTK_TIME"
+CONFIG_BUG CONFIG_KALLSYMS CONFIG_PRINTK_TIME
+CONFIG_NET_9P CONFIG_NET_9P_VIRTIO CONFIG_9P_FS"
 
 missing=""
 # Unquoted on purpose: kconfig symbol names cannot contain whitespace, so

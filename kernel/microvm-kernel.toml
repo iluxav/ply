@@ -25,10 +25,10 @@
 
 [package]
 name = "microvm-kernel"
-version = "6.12.0"
+version = "6.12.109"
 owner = "ply"
 description = "Linux 6.12 microVM kernel and guest init — the runtime ply boots inside a macOS microVM"
 # The kernel Image and the static e2fsprogs in the initramfs are both
 # GPL-2.0; ply-guest-init, the third component, is MIT like the rest of ply.
 license = "GPL-2.0"
-homepage = "https://github.com/iluxa/ply"
+homepage = "https://github.com/iluxav/ply"

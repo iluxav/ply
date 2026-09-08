@@ -28,7 +28,7 @@ use applevisor::prelude::*;
 use vm_fdt::FdtWriter;
 
 use super::switch::FrameSink;
-use super::{blk, console, net, pl011};
+use super::{blk, console, net, p9dev, pl011};
 
 /// Guest RAM starts here; the kernel Image, the DTB and the initramfs all
 /// live inside it at the offsets below.
@@ -375,6 +375,15 @@ pub struct NetSpec {
     pub downlink: mpsc::Receiver<Vec<u8>>,
 }
 
+/// One host directory to project into the guest over virtio-9p, announced
+/// under `tag` and reported as owned by `uid:gid`.
+pub struct ShareSpec {
+    pub tag: String,
+    pub root: PathBuf,
+    pub uid: u32,
+    pub gid: u32,
+}
+
 /// Everything one microVM needs to exist.
 pub struct MachineConfig {
     pub kernel: PathBuf,
@@ -383,6 +392,9 @@ pub struct MachineConfig {
     pub disks: Vec<DiskSpec>,
     pub mem_bytes: u64,
     pub net: Option<NetSpec>,
+    /// After the NIC, in this order; the guest mounts each by its tag, so
+    /// the position is not a contract the way the disks' is.
+    pub shares: Vec<ShareSpec>,
 }
 
 /// The kernel cmdline, fixed and short: everything an instance differs by
@@ -622,6 +634,11 @@ impl Running {
         self.control.send(line);
     }
 
+    /// The host → guest half, for a thread that outlives this borrow.
+    pub fn control_handle(&self) -> console::ControlHandle {
+        self.control.clone()
+    }
+
     /// Is the vCPU still running the guest?
     pub fn running(&self) -> bool {
         !self.stopped.load(Ordering::Relaxed)
@@ -687,10 +704,19 @@ pub fn boot(cfg: MachineConfig) -> std::result::Result<Running, String> {
             net.downlink,
         )));
     }
+    let share_count = cfg.shares.len();
+    for share in &cfg.shares {
+        devices.push(Box::new(p9dev::VirtioP9::new(
+            &share.tag,
+            &share.root,
+            share.uid,
+            share.gid,
+        )?));
+    }
     if devices.len() > MAX_DEVICES {
         return Err(format!(
-            "this instance needs {} virtio devices ({disk_count} disks, two consoles, an rng \
-             and a NIC) and the machine has room for {MAX_DEVICES}",
+            "this instance needs {} virtio devices ({disk_count} disks, two consoles, an rng, \
+             a NIC and {share_count} shares) and the machine has room for {MAX_DEVICES}",
             devices.len()
         ));
     }

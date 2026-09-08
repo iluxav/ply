@@ -126,6 +126,9 @@ fn effective_egress(
 }
 
 pub fn run(opts: &RunOptions) -> Result<i32> {
+    // A supervisor, not a CLI: a hung-up socket is an `EPIPE` to handle,
+    // never a signal to die of. See `ignore_sigpipe`.
+    crate::ignore_sigpipe();
     let backend = crate::runtime::backend::default_backend()?;
     if let Err(reason) = backend.capability() {
         return Err(Error::Runtime(reason));
@@ -987,6 +990,7 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                 stop_instance(old_instance, stop_signal);
 
                 let restarts = slots.get(&slot).map(|s| s.restarts).unwrap_or(0);
+                let sig_idx = slots.get(&slot).map(|s| s.sig_idx);
                 let outcome = launch_instance(
                     backend.as_ref(),
                     &ctx,
@@ -997,6 +1001,14 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                     &publishing,
                 )
                 .and_then(|mut instance| {
+                    // Reachable by the signal handler from the moment it
+                    // exists, not from the moment it is healthy: a stop
+                    // request that lands inside the health gate must reach
+                    // the new child, or it is never asked and only SIGKILL
+                    // ends it — ten seconds later, without its exit code.
+                    if let Some(idx) = sig_idx {
+                        update_child(idx, instance.inner.child_pid().unwrap_or(0));
+                    }
                     if wait_healthy(&ctx, &instance) {
                         // Healthy means accepting: seat it now rather than a
                         // loop turn later, so the roll never runs one short.

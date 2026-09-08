@@ -169,6 +169,40 @@ pub struct SpecDisk {
     /// How many of the leading disks are read-only image layers, in overlay
     /// order (top first). Everything after them is a volume or the spec disk.
     pub layer_count: usize,
+    /// The host's wall clock at the moment the disk was written.
+    ///
+    /// A microVM has no RTC and no NTP: without this, the guest's clock
+    /// starts at 1970 and every TLS handshake fails with "certificate not
+    /// yet valid". The guest sets `CLOCK_REALTIME` from it before it does
+    /// anything else, and the tens of milliseconds between the write and
+    /// the read are the whole error. `None` — a disk from an older host —
+    /// leaves the clock alone.
+    #[serde(default)]
+    pub clock: Option<ClockSpec>,
+    /// Host directories projected into the guest over virtio-9p: a
+    /// `ply.dev.toml` link, the source tree a developer edits on the Mac.
+    /// Each is mounted at `path` by its `tag`. Empty for every guest that
+    /// has none, and for a disk from an older host.
+    #[serde(default)]
+    pub shares: Vec<ShareSpec>,
+}
+
+/// A point in time as `CLOCK_REALTIME` counts it: seconds and nanoseconds
+/// since the Unix epoch. Two integers rather than one, because a
+/// nanosecond count since 1970 overflows an i64 in 2262 and a JSON float
+/// loses the nanoseconds long before that.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClockSpec {
+    pub secs: i64,
+    pub nanos: u32,
+}
+
+/// One shared host directory: the 9p mount tag the VMM announced it under,
+/// and where it belongs inside the guest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShareSpec {
+    pub tag: String,
+    pub path: String,
 }
 
 /// The guest's own network configuration, decided by the parent.
@@ -475,6 +509,14 @@ mod tests {
             }],
             params_seed: vec![("db".into(), vec![("state".into(), "starting".into())])],
             layer_count: 2,
+            clock: Some(ClockSpec {
+                secs: 1_757_000_000,
+                nanos: 5,
+            }),
+            shares: vec![ShareSpec {
+                tag: "share0".into(),
+                path: "/opt/app/src".into(),
+            }],
         }
     }
 
@@ -530,6 +572,34 @@ mod tests {
             0,
             "virtio-blk hands the guest whole sectors"
         );
+    }
+
+    #[test]
+    fn a_disk_from_a_host_without_a_clock_or_shares_still_decodes() {
+        // The compatibility rule in `SpecDisk`'s doc: every field added
+        // after v1 defaults, so an older host's disk boots in a newer guest.
+        // The guest then leaves the clock alone and mounts nothing extra.
+        let json =
+            r#"{"entrypoint":["/bin/true"],"workdir":"/","env":[],"hostname":"h","layer_count":1}"#;
+        let mut bytes = SPEC_MAGIC.to_vec();
+        bytes.extend_from_slice(&(json.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(json.as_bytes());
+        let spec = decode_spec_disk(&bytes).expect("a v1 disk decodes");
+        assert_eq!(spec.clock, None);
+        assert!(spec.shares.is_empty());
+        // …and the new fields round-trip when present.
+        let mut spec = spec;
+        spec.clock = Some(ClockSpec {
+            secs: 1_800_000_000,
+            nanos: 42,
+        });
+        spec.shares = vec![ShareSpec {
+            tag: "share0".into(),
+            path: "/opt/app/src".into(),
+        }];
+        let again = decode_spec_disk(&encode_spec_disk(&spec).unwrap()).unwrap();
+        assert_eq!(again.clock, spec.clock);
+        assert_eq!(again.shares, spec.shares);
     }
 
     #[test]

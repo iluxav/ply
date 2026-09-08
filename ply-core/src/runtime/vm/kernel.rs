@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use crate::error::{Error, Result};
 
 /// The keg this build boots. Bump it with the binary, never per app.
-pub const MICROVM_KERNEL: &str = "ply/microvm-kernel@6.12.0";
+pub const MICROVM_KERNEL: &str = "ply/microvm-kernel@6.12.109";
 
 /// Escape hatch for kernel development: a filesystem path (a keg's `boot/`
 /// directory, or a raw arm64 `Image`), or a registry ref to fetch instead of

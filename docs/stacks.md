@@ -354,10 +354,13 @@ members' real ports mean the same thing here as there. What is still local
 is a published port that has to dodge whatever the machine already runs,
 and building the checkout next door instead of pulling a release.
 
-Put those local truths in `stack.dev.toml`, beside the stack file:
+Put those local truths in the overlay beside the stack file, named after
+it: `stack.dev.toml` next to `stack.toml`, `ply.dev.toml` next to a
+`ply.toml` that carries `[stack]` (both are gitignored by the repo's own
+`.gitignore`):
 
 ```toml
-# stack.dev.toml   (add it to .gitignore)
+# stack.dev.toml   (or ply.dev.toml, beside a ply.toml stack)
 [[app]]
 name    = "db"                      # WHICH member — matched by name
 publish = ["internal:5433:5432"]    # the container still serves 5432; only

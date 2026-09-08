@@ -9,6 +9,7 @@
 //! loop touch Hypervisor.framework, and only those are gated.
 
 pub mod kernel;
+pub mod p9;
 pub mod spec_disk;
 pub mod switch;
 
@@ -21,7 +22,11 @@ mod machine;
 #[cfg(target_os = "macos")]
 mod net;
 #[cfg(target_os = "macos")]
+mod p9dev;
+#[cfg(target_os = "macos")]
 mod pl011;
+#[cfg(target_os = "macos")]
+pub mod worker;
 
 #[cfg(target_os = "macos")]
 use std::net::Ipv4Addr;
@@ -33,9 +38,14 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 #[cfg(target_os = "macos")]
+use std::io::{BufRead, Write};
+#[cfg(target_os = "macos")]
+use std::os::unix::net::{UnixListener, UnixStream};
+
+#[cfg(target_os = "macos")]
 use nix::sys::signal::Signal;
 #[cfg(target_os = "macos")]
-use ply_vm_proto::{GuestLine, HostLine, PARENT_OWNED};
+use ply_vm_proto::{host_line, parse_guest_line, GuestLine, HostLine, PARENT_OWNED};
 
 #[cfg(target_os = "macos")]
 use super::backend::{Backend, Facts, Instance, InstanceSpec, Launched, NetworkFacts, Record};
@@ -302,36 +312,193 @@ impl Backend for VmBackend {
                 read_only: true,
             })
             .collect();
-        for (i, (host_dir, target)) in spec.binds.iter().enumerate() {
+        // Declared volumes are disks; links are shares of the host directory
+        // itself, over 9p, so an edit on the Mac is what the guest reads.
+        let (volumes, links) = spec_disk::partition(spec);
+        for (i, (host_dir, _target)) in volumes.iter().enumerate() {
             disks.push(machine::DiskSpec {
-                path: volume_disk(&spec.app, i, host_dir, target)?,
+                path: volume_disk(&spec.app, i, host_dir)?,
                 read_only: false,
             });
         }
+        let (uid, gid) = spec
+            .run_user
+            .as_ref()
+            .map(|u| (u.uid, u.gid))
+            .unwrap_or((0, 0));
+        let shares: Vec<machine::ShareSpec> = links
+            .iter()
+            .enumerate()
+            .map(|(i, (host_dir, _target))| machine::ShareSpec {
+                tag: spec_disk::share_tag(i),
+                root: host_dir.clone(),
+                uid,
+                gid,
+            })
+            .collect();
         // The names the guest will be told, from the contract's own function
         // rather than composed here: two spellings of `/dev/vdX` that can
         // drift is exactly the failure mode `volume_devs` exists to prevent.
-        let devs = spec_disk::volume_devs(spec.images.len(), spec.binds.len());
+        let devs = spec_disk::volume_devs(spec.images.len(), volumes.len());
 
-        // --- the network: an address, and a card to reach it on -----------
-        // Addressed by SLOT — `<app>.<n>` — because two instances of one app
-        // are two machines and cannot share an address; slots start at 1 and
-        // an instance that is restarted into the same slot comes back on the
-        // address its peers already know. `<app>` is then an alias onto the
-        // first of them, so `<app>.ply` answers (`Names::alias`).
-        let link = match self.net() {
-            Some(net) => Some(
-                net.attach(&format!("{}.{}", spec.app, spec.n), &spec.app)
-                    .map_err(|e| {
-                        Error::Runtime(format!("{}: joining the run's network: {e}", spec.app))
-                    })?,
-            ),
-            None => None,
+        // --- the worker: one process, one VM ------------------------------
+        // Hypervisor.framework allows one VM per process, so every instance
+        // gets a process of its own (`worker`). What follows is the link:
+        // the parent listens, the worker connects and joins the switch, and
+        // only then does the parent know the address to put in the spec
+        // disk — after which it tells the worker to boot.
+        let socket_path = spec.instance_dir.join(worker::CONTROL_SOCKET);
+        let _ = std::fs::remove_file(&socket_path);
+        let listener = UnixListener::bind(&socket_path).map_err(|e| {
+            Error::Runtime(format!(
+                "{}: listening for the instance's worker at {}: {e}",
+                spec.app,
+                socket_path.display()
+            ))
+        })?;
+        listener
+            .set_nonblocking(true)
+            .map_err(|e| Error::Runtime(format!("{}: the worker listener: {e}", spec.app)))?;
+
+        let spec_img = spec.instance_dir.join("spec.img");
+        let mut worker_disks: Vec<(PathBuf, bool)> = disks
+            .iter()
+            .map(|d| (d.path.clone(), d.read_only))
+            .collect();
+        worker_disks.push((spec_img.clone(), true));
+        let worker_spec = worker::WorkerSpec {
+            app: spec.app.clone(),
+            kernel: self.kernel.image.clone(),
+            initramfs: self.kernel.initramfs.clone(),
+            disks: worker_disks,
+            mem_mib: MEMORY_MIB,
+            // Addressed by SLOT — `<app>.<n>` — because two instances of one
+            // app are two machines and cannot share an address; slots start
+            // at 1 and an instance restarted into the same slot comes back
+            // on the address its peers already know. `<app>` is then an
+            // alias onto the first of them, so `<app>.ply` answers.
+            net: self.net().and_then(|net| {
+                net.socket().map(|socket| worker::WorkerNet {
+                    socket: socket.to_path_buf(),
+                    slot: format!("{}.{}", spec.app, spec.n),
+                    alias: spec.app.clone(),
+                })
+            }),
+            shares: shares
+                .iter()
+                .map(|s| worker::WorkerShare {
+                    tag: s.tag.clone(),
+                    root: s.root.clone(),
+                    uid: s.uid,
+                    gid: s.gid,
+                })
+                .collect(),
         };
-        let ip = link.as_ref().map(|l| l.ip);
+        let worker_json = spec.instance_dir.join(worker::SPEC_FILE);
+        std::fs::write(
+            &worker_json,
+            serde_json::to_vec_pretty(&worker_spec).map_err(|e| {
+                Error::Runtime(format!("{}: encoding the worker spec: {e}", spec.app))
+            })?,
+        )
+        .map_err(|source| Error::Io {
+            path: worker_json.clone(),
+            source,
+        })?;
+
+        let exe = std::env::current_exe().map_err(|e| {
+            Error::Runtime(format!(
+                "{}: locating the ply binary for the worker: {e}",
+                spec.app
+            ))
+        })?;
+        let mut child = std::process::Command::new(&exe)
+            .arg(worker::SUBCOMMAND)
+            .arg(&spec.instance_dir)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::inherit())
+            .spawn()
+            .map_err(|e| {
+                Error::Runtime(format!("{}: spawning the microVM worker: {e}", spec.app))
+            })?;
+
+        // Everything from here to `record` kills the worker on failure: an
+        // instance that never got its state file must not outlive the
+        // error that describes it.
+        let launched = (|| -> Result<(UnixStream, Option<Ipv4Addr>)> {
+            let deadline = std::time::Instant::now() + READY_TIMEOUT;
+            let stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        if let Ok(Some(status)) = child.try_wait() {
+                            return Err(Error::Runtime(format!(
+                                "{}: the microVM worker exited ({status}) before it connected",
+                                spec.app
+                            )));
+                        }
+                        if std::time::Instant::now() >= deadline {
+                            return Err(Error::Runtime(format!(
+                                "{}: the microVM worker did not connect within {}s",
+                                spec.app,
+                                READY_TIMEOUT.as_secs()
+                            )));
+                        }
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(e) => {
+                        return Err(Error::Runtime(format!(
+                            "{}: accepting the worker's connection: {e}",
+                            spec.app
+                        )))
+                    }
+                }
+            };
+            stream
+                .set_nonblocking(false)
+                .map_err(|e| Error::Runtime(format!("{}: the worker link: {e}", spec.app)))?;
+            let mut line = String::new();
+            std::io::BufReader::new(
+                stream
+                    .try_clone()
+                    .map_err(|e| Error::Runtime(format!("{}: the worker link: {e}", spec.app)))?,
+            )
+            .read_line(&mut line)
+            .map_err(|e| {
+                Error::Runtime(format!("{}: reading the worker's address: {e}", spec.app))
+            })?;
+            let ip = match line.trim().strip_prefix("attached ") {
+                Some("none") => None,
+                Some(addr) => Some(addr.parse::<Ipv4Addr>().map_err(|_| {
+                    Error::Runtime(format!(
+                        "{}: the worker reported an address that is not IPv4: {line:?}",
+                        spec.app
+                    ))
+                })?),
+                None => {
+                    return Err(Error::Runtime(format!(
+                        "{}: the worker said {line:?} where `attached <ip>` was expected",
+                        spec.app
+                    )))
+                }
+            };
+            Ok((stream, ip))
+        })();
+        let (mut stream, ip) = match launched {
+            Ok(v) => v,
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(e);
+            }
+        };
+        drop(listener);
+        let _ = std::fs::remove_file(&socket_path);
+
         // The guest's resolver is the switch, always: it is the only thing
         // on that network that can reach one.
-        let dns = link.as_ref().map(|l| l.gateway.to_string());
+        let dns = ip.map(|_| switch::GATEWAY.to_string());
 
         // Where this instance's siblings are, so its `/etc/hosts` can name
         // them. A peer with no address on the switch gets NO LINE — never a
@@ -359,45 +526,68 @@ impl Backend for VmBackend {
             }
         }
 
-        let spec_img = spec.instance_dir.join("spec.img");
-        spec_disk::write(&spec_img, &spec_disk::build(spec, &devs, dns, &peers, ip))?;
-        disks.push(machine::DiskSpec {
-            path: spec_img,
-            read_only: true,
-        });
+        // --- the spec disk, then the go-ahead -----------------------------
+        let booted = (|| -> Result<()> {
+            spec_disk::write(&spec_img, &spec_disk::build(spec, &devs, dns, &peers, ip))?;
+            stream
+                .write_all(b"boot\n")
+                .and_then(|_| stream.flush())
+                .map_err(|e| {
+                    Error::Runtime(format!("{}: telling the worker to boot: {e}", spec.app))
+                })
+        })();
+        if let Err(e) = booted {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(e);
+        }
 
-        // --- boot ---------------------------------------------------------
-        let mut running = machine::boot(machine::MachineConfig {
-            kernel: self.kernel.image.clone(),
-            initramfs: self.kernel.initramfs.clone(),
-            disks,
-            mem_bytes: MEMORY_MIB * 1024 * 1024,
-            net: link.map(|l| machine::NetSpec {
-                mac: l.mac.0,
-                uplink: l.tx,
-                downlink: l.rx,
-            }),
-        })
-        .map_err(Error::Runtime)?;
-        let output = running
-            .take_stdout()
-            .ok_or_else(|| Error::Runtime("the machine has no console reader".into()))?;
-        let lines = running
-            .take_control()
-            .ok_or_else(|| Error::Runtime("the machine has no control channel".into()))?;
+        // Guest lines arrive over the link as text; a reader turns them back
+        // into `GuestLine`s so the ready wait and the pump are the same code
+        // they were when the VM lived in this process.
+        let (tx, lines) = std::sync::mpsc::channel::<GuestLine>();
+        {
+            let reader = stream
+                .try_clone()
+                .map_err(|e| Error::Runtime(format!("{}: the worker link: {e}", spec.app)))?;
+            std::thread::Builder::new()
+                .name("ply-vm-link".into())
+                .spawn(move || {
+                    let mut reader = std::io::BufReader::new(reader);
+                    let mut line = String::new();
+                    loop {
+                        line.clear();
+                        match reader.read_line(&mut line) {
+                            Ok(0) | Err(_) => break,
+                            Ok(_) => {
+                                if let Some(guest) = parse_guest_line(&line) {
+                                    if tx.send(guest).is_err() {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                })
+                .map_err(|e| Error::Runtime(format!("spawning the link reader: {e}")))?;
+        }
 
         // --- wait for the guest to say it is up ---------------------------
         let exit = Arc::new(Mutex::new(None));
-        wait_for_ready(&spec.app, &lines, &exit)?;
+        if let Err(e) = wait_for_ready(&spec.app, &lines, &exit) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(e);
+        }
 
         // --- the state file, while nothing can race it --------------------
-        // The PARENT's pid, per the spec: there is no child process to name,
-        // and `ply stop` and `state::reap_stale` both want the process that
-        // actually owns this VM. The address is the instance's own on the
-        // switch — loopback only for an instance that has no network card,
-        // where it is as true as anything else would be.
+        // The WORKER's pid: it is a real child, the process `ply stop`
+        // signals and `ply deploy` walks up from to find this parent. The
+        // address is the instance's own on the switch — loopback only for
+        // an instance that has no network card, where it is as true as
+        // anything else would be.
         let ip = ip.unwrap_or(Ipv4Addr::LOCALHOST);
-        record(std::process::id() as i32, ip)?;
+        record(child.id() as i32, ip)?;
 
         let app = spec.app.clone();
         let pump_exit = exit.clone();
@@ -406,12 +596,16 @@ impl Backend for VmBackend {
             .spawn(move || pump_control(&app, lines, &pump_exit))
             .map_err(|e| Error::Runtime(format!("spawning the control reader: {e}")))?;
 
+        let output = child
+            .stdout
+            .take()
+            .ok_or_else(|| Error::Runtime("the worker has no stdout".into()))?;
         Ok(Launched {
             instance: Box::new(VmInstance {
                 ip,
                 net: self.net().cloned(),
-                machine: running,
-                exit,
+                child,
+                control: Mutex::new(stream),
                 ended: None,
                 _guard: guard,
             }),
@@ -547,33 +741,21 @@ fn poisoned<T>(_: std::sync::PoisonError<T>) -> Error {
 /// per-instance/shared split, the empty-volume warning — is shared between
 /// the two backends rather than reinvented here.
 #[cfg(target_os = "macos")]
-fn volume_disk(
-    app: &str,
-    index: usize,
-    host_dir: &std::path::Path,
-    target: &str,
-) -> Result<PathBuf> {
+fn volume_disk(app: &str, index: usize, host_dir: &std::path::Path) -> Result<PathBuf> {
     /// Sparse, so the file costs what the guest actually writes. A volume
     /// cannot grow under a running guest, so this is also the ceiling.
     const VOLUME_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 
-    // A `--link` names a directory in the user's own tree, and there is no
-    // way to project that into a VM. Give it a disk of its own rather than
-    // writing a disk image into the user's source directory, and say so —
-    // silently starting the app on an empty directory where its code should
-    // be is the failure this message exists to prevent.
+    // Only declared volumes reach here (links are 9p shares), and a declared
+    // volume's host directory is ply's own. A host directory anywhere else
+    // would mean a disk image written into a user's tree, so it gets one
+    // under the volumes directory instead.
     let dir = if host_dir.starts_with(crate::paths::volumes_dir()) {
         host_dir.to_path_buf()
     } else {
-        eprintln!(
-            "ply: warning: {} is not shared into a microVM — {target} gets an empty writable \
-             disk instead (host directories need a shared-filesystem transport, which the \
-             microVM runtime does not have)",
-            host_dir.display()
-        );
         crate::paths::volumes_dir()
             .join(app)
-            .join(format!("link.{index}"))
+            .join(format!("volume.{index}"))
     };
     std::fs::create_dir_all(&dir).map_err(|source| Error::Io {
         path: dir.clone(),
@@ -593,29 +775,28 @@ fn volume_disk(
     Ok(path)
 }
 
-/// One instance as the macOS backend runs it: a microVM on threads inside
-/// this process.
+/// One instance as the macOS backend runs it: a microVM in a worker
+/// process of its own.
 ///
-/// `pid()` is the PARENT's pid — the spec's choice, and the right one: it is
-/// what `ply stop` signals and what `state::reap_stale` tests for liveness,
-/// and after a `kill -9` of the parent that test correctly says "dead".
-/// `child_pid()` is therefore `None`, which is why the supervisor's main
-/// loop must send the stop signal itself: a signal HANDLER cannot, there
-/// being no process to `kill`.
+/// `pid()` and `child_pid()` are both the worker's: it is a real child, so
+/// the supervisor's signal handler can `kill` it (the worker forwards the
+/// signal into the guest by name), `ply stop` can signal it, and
+/// `ply deploy` can walk up from it to this parent. SIGKILL alone takes the
+/// machine down with the process, which is what SIGKILL means.
 ///
-/// Field order is the drop order and it matters: the machine goes first
-/// (which destroys the VM — Hypervisor.framework allows one per process),
-/// then the guard removes the instance directory and the spec disk with its
-/// composed secrets.
+/// Field order is the drop order and it matters: the child goes first
+/// (killed if it is somehow still there — no VM outlives its instance),
+/// then the guard removes the instance directory and the spec disk with
+/// its composed secrets.
 #[cfg(target_os = "macos")]
 pub(crate) struct VmInstance {
     ip: Ipv4Addr,
     /// How anything on the Mac reaches this instance. `None` is an instance
     /// with no network card.
     net: Option<switch::Net>,
-    machine: machine::Running,
-    /// Written by the control pump the moment `{"exit":N}` arrives.
-    exit: Arc<Mutex<Option<i32>>>,
+    child: std::process::Child,
+    /// The link to the worker: host control lines go down it.
+    control: Mutex<UnixStream>,
     /// Sticky, like `NsInstance::ended`: once known, always the same answer.
     ended: Option<i32>,
     _guard: InstanceGuard,
@@ -633,13 +814,20 @@ fn signal_name(sig: Signal) -> String {
 }
 
 #[cfg(target_os = "macos")]
+impl VmInstance {
+    fn worker(&self) -> nix::unistd::Pid {
+        nix::unistd::Pid::from_raw(self.child.id() as i32)
+    }
+}
+
+#[cfg(target_os = "macos")]
 impl Instance for VmInstance {
     fn pid(&self) -> i32 {
-        std::process::id() as i32
+        self.child.id() as i32
     }
 
     fn child_pid(&self) -> Option<i32> {
-        None
+        Some(self.child.id() as i32)
     }
 
     fn ip(&self) -> Ipv4Addr {
@@ -647,57 +835,56 @@ impl Instance for VmInstance {
     }
 
     fn alive(&self) -> bool {
-        self.ended.is_none() && self.machine.running()
+        self.ended.is_none() && nix::sys::signal::kill(self.worker(), None).is_ok()
     }
 
-    /// # The polite stop does not reach a VM yet, and the hole is not here
-    ///
-    /// `run.rs`'s SIGTERM/SIGINT handler stops instances by `kill`ing
-    /// `child_pid()`, which is `None` for a microVM, so today a `^C` on
-    /// `ply run` waits out the grace window and then escalates to SIGKILL —
-    /// exit 255 instead of the app's own code. That is the supervisor hole
-    /// the plan's Task 10 owns ("the main loop must send the stop signal
-    /// itself; the signal HANDLER cannot").
-    ///
-    /// The transport underneath is not the problem and has been verified end
-    /// to end: `{"signal":"TERM"}` written here reaches `/dev/hvc1`, the
-    /// guest init forwards SIGTERM to the entrypoint, the app's own handler
-    /// runs, and `ply run` exits with the app's code.
+    /// A polite signal goes down the link as `{"signal":"TERM"}`, which the
+    /// guest init forwards to the app; if the link is gone the worker gets
+    /// the signal itself and forwards it the same way. SIGKILL is the one
+    /// thing that must not be polite: it ends the worker, and the VM with it.
     fn signal(&self, sig: Signal) -> Result<()> {
-        match sig {
-            // There is no process to kill, so the machine itself goes.
-            Signal::SIGKILL => {
-                self.machine.shutdown();
-                Ok(())
-            }
-            // The polite request: the guest init forwards it to the app,
-            // which gets the same signal it would get under namespaces.
-            other => {
-                self.machine.send_control(&HostLine::Signal {
-                    name: signal_name(other),
-                });
-                Ok(())
-            }
+        if sig == Signal::SIGKILL {
+            let _ = nix::sys::signal::kill(self.worker(), Signal::SIGKILL);
+            return Ok(());
         }
+        let line = host_line(&HostLine::Signal {
+            name: signal_name(sig),
+        });
+        let sent = match self.control.lock() {
+            Ok(mut stream) => stream
+                .write_all(line.as_bytes())
+                .and_then(|_| stream.flush())
+                .is_ok(),
+            Err(_) => false,
+        };
+        if !sent {
+            let _ = nix::sys::signal::kill(self.worker(), sig);
+        }
+        Ok(())
     }
 
     fn try_wait(&mut self) -> Result<Option<i32>> {
         if let Some(code) = self.ended {
             return Ok(Some(code));
         }
-        if let Some(code) = *self.exit.lock().map_err(poisoned)? {
-            self.ended = Some(code);
-            return Ok(self.ended);
+        match self.child.try_wait() {
+            Ok(Some(status)) => {
+                use std::os::unix::process::ExitStatusExt;
+                // The worker exits with the guest's own code; a worker that
+                // died of a signal is `128 + n`, as a namespace child would
+                // be; anything else is 255, what a supervisor calls "gone".
+                let code = status
+                    .code()
+                    .or_else(|| status.signal().map(|n| 128 + n))
+                    .unwrap_or(255);
+                self.ended = Some(code);
+                Ok(self.ended)
+            }
+            Ok(None) => Ok(None),
+            Err(e) => Err(Error::Runtime(format!(
+                "waiting for the microVM worker: {e}"
+            ))),
         }
-        // `{"exit":N}` is the app's own status. A machine that stopped
-        // without one died some other way — a guest panic, a torn-down VM, a
-        // kernel that never reached the entrypoint — and 255 is what a
-        // supervisor calls that.
-        if !self.machine.running() {
-            self.ended = Some(255);
-            return Ok(self.ended);
-        }
-        Ok(None)
     }
 
     /// The health gate and the `--after` probes, through the switch.
@@ -729,6 +916,19 @@ impl Instance for VmInstance {
             None => {
                 crate::runtime::publish::connector_for(std::net::SocketAddr::from((self.ip, port)))
             }
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for VmInstance {
+    fn drop(&mut self) {
+        // A worker that is still there when its instance is dropped is a VM
+        // nobody will ever stop. Not the polite path — that is
+        // `stop_with_patience`'s, and it has already run by now.
+        if matches!(self.child.try_wait(), Ok(None)) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
         }
     }
 }

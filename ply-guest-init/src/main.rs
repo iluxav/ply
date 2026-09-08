@@ -476,6 +476,12 @@ mod boot {
         ));
         // Deliberately NOT the env: it carries the composed secrets.
 
+        // --- 2a. the clock -----------------------------------------------
+        // Before the network, before anything that could look at a
+        // timestamp: a microVM has no RTC, so until this line the guest's
+        // wall clock says 1970 and every TLS certificate is "not yet valid".
+        set_clock(&spec);
+
         // --- 1a. the network ---------------------------------------------
         // Before the overlay rather than after, and deliberately: bringing
         // an interface up is instant, and doing it first means the app's own
@@ -489,6 +495,11 @@ mod boot {
         // --- 3. volumes, by name from the spec disk, never by position ----
         for volume in &spec.volumes {
             prepare_volume(volume, &spec);
+        }
+
+        // --- 3a. shared host directories, over virtio-9p ------------------
+        for share in &spec.shares {
+            mount_share(share, &spec);
         }
 
         // --- 4. /etc/hosts, hostname, /etc/resolv.conf -------------------
@@ -560,6 +571,77 @@ mod boot {
     /// up. It IS loud: the line below is on the kernel console, which is
     /// `ply run`'s own stderr, so "published port never answered" has an
     /// explanation three lines above it rather than none.
+    /// Set `CLOCK_REALTIME` from the host's clock as the spec disk carried
+    /// it. The disk was written moments before the VM booted, so the error
+    /// is the boot time itself — tens of milliseconds — and the guest's
+    /// clock then runs at the host's rate from there.
+    ///
+    /// A spec with no clock (an older host) is left alone, and a refused
+    /// `clock_settime` is a warning, not a failure: an app with the wrong
+    /// date can still run, and the message says why its certificates fail.
+    fn set_clock(spec: &SpecDisk) {
+        let Some(clock) = &spec.clock else {
+            log("no clock in the spec disk: the guest's wall clock starts at 1970");
+            return;
+        };
+        // The guest is aarch64 musl, where `time_t` is `i64`; the field types
+        // are left to inference so the deprecated alias is never named.
+        let ts = libc::timespec {
+            tv_sec: clock.secs as _,
+            tv_nsec: clock.nanos as _,
+        };
+        // SAFETY: `ts` is a live, fully initialised timespec.
+        if unsafe { libc::clock_settime(libc::CLOCK_REALTIME, &ts) } != 0 {
+            log(&format!(
+                "warning: clock_settime({}): {} — the guest's date is wrong and TLS will \
+                 refuse every certificate as not yet valid",
+                clock.secs,
+                std::io::Error::last_os_error()
+            ));
+            return;
+        }
+        log(&format!("clock: set to {} from the host", clock.secs));
+    }
+
+    /// Mount one shared host directory by its 9p tag.
+    ///
+    /// `cache=none`, deliberately: the whole point of a share is that an
+    /// edit on the host is what the next read in the guest sees, and any
+    /// guest-side cache is a window in which it is not. The cost is a 9p
+    /// round trip per read, which for a source tree is nothing.
+    ///
+    /// A share that will not mount is fatal, like a volume that will not:
+    /// the app would otherwise start on an empty directory where its code
+    /// should be, which is precisely the silent failure the host refused to
+    /// produce when it warned about links before shares existed.
+    fn mount_share(share: &ply_vm_proto::ShareSpec, spec: &SpecDisk) {
+        if !share.path.starts_with('/') {
+            fail(&format!(
+                "share {:?} is not an absolute path — the spec disk is malformed",
+                share.path
+            ));
+        }
+        let target = format!("{NEWROOT}{}", share.path);
+        if !mkdir_p(&target) {
+            fail(&format!(
+                "share {}: cannot create its mount point",
+                share.path
+            ));
+        }
+        let options = "trans=virtio,version=9p2000.L,msize=262144,cache=none";
+        if !mount(&share.tag, &target, "9p", 0, options) {
+            fail(&format!(
+                "share {} (tag {}): mount 9p failed: {} — this kernel has no 9p over virtio, \
+                 or the VMM attached no device for it",
+                share.path,
+                share.tag,
+                std::io::Error::last_os_error()
+            ));
+        }
+        let _ = spec;
+        log(&format!("share {} <- {} (9p)", share.path, share.tag));
+    }
+
     fn configure_network(spec: &SpecDisk) {
         let Some(net) = &spec.net else {
             log("no network in the spec disk: this instance has no NIC");

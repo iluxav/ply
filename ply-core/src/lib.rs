@@ -44,3 +44,16 @@ pub fn restore_default_sigpipe() {
         nix::libc::signal(nix::libc::SIGPIPE, nix::libc::SIG_DFL);
     }
 }
+
+/// The opposite, for the processes that must outlive a closed pipe: a run
+/// parent, a `ply up`, a microVM worker. They write to sockets whose other
+/// end can go away at any moment — a readiness probe that dropped its
+/// connection before the app's greeting arrived, a worker that died — and
+/// with the CLI default a single such write kills the supervisor (exit 141)
+/// and every instance with it. Ignored, the write returns `EPIPE`, which
+/// every writer here already treats as "they hung up".
+pub fn ignore_sigpipe() {
+    unsafe {
+        nix::libc::signal(nix::libc::SIGPIPE, nix::libc::SIG_IGN);
+    }
+}

@@ -120,6 +120,8 @@ mod tests {
             volumes: vec![],
             params_seed: vec![],
             layer_count: 1,
+            clock: None,
+            shares: Vec::new(),
         }
     }
 

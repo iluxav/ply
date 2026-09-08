@@ -29,6 +29,8 @@ Two ways to run it:
 | install | the installer, Apple Silicon | `brew install lima`, then the installer inside |
 | ports, names, internet | published on the Mac; `<name>.ply` and outbound via ply's own switch | forwarded by Lima |
 | `ply up` stacks | yes | yes |
+| `--scale`, `ply deploy` | yes | yes |
+| `ply.dev.toml` links (live source) | yes, over virtio-9p | yes |
 | `ply exec` | not yet | yes |
 | egress contract | not enforced yet | audit and enforce, as on Linux |
 | Intel Mac | no | yes |
@@ -45,7 +47,7 @@ an error that names nothing. There is no `ply setup` on a Mac: nothing on
 the host needs preparing.
 
 **The kernel.** Each microVM boots ply's own arm64 kernel and initramfs,
-pinned per binary (`ply/microvm-kernel@6.12.0`), fetched from the
+pinned per binary (`ply/microvm-kernel@6.12.109`), fetched from the
 registry the first time a microVM boots and kept in the store like any
 package. `ply self-update` brings a new pin with a new binary; no
 `ply.lock` ever mentions it, so a lockfile written on a Mac is
@@ -60,12 +62,20 @@ curl localhost:3000
 ply up                                  # a stack: one microVM per member, wired over the switch
 ```
 
-Each instance gets its own microVM with the image's layers attached as
-block devices; the `ply run` parent owns a userspace switch that gives
-members their `<name>.ply` addresses, answers DNS, and NATs to the
-internet. Ports publish on the Mac through the parent, exit codes and
-signals cross the boundary, `ply ps` and `ply stats` read the same state
-files.
+Each instance gets its own microVM, in a worker process of its own, with
+the image's layers attached as block devices; the `ply run` parent owns a
+userspace switch that gives members their `<name>.ply` addresses, answers
+DNS, and NATs to the internet. Ports publish on the Mac through the
+parent, exit codes and signals cross the boundary, `--scale` boots one
+machine per instance, `ply deploy` rolls them, and `ply ps` shows each
+worker's pid. The guest's clock is set from the Mac's at boot, so TLS and
+timestamps are right.
+
+**Live source.** A [`ply.dev.toml`](/docs/stacks/#plydevtoml-the-dev-overlay)
+link is shared into the microVM over virtio-9p, uncached: an edit on the
+Mac is what the next read inside the guest sees, so `tsx watch`,
+`nodemon` and friends work as they do on Linux. The shared tree appears
+owned by the app's user.
 
 ### What is not there yet
 
@@ -121,9 +131,9 @@ WSL2 is a real Linux kernel: ply runs in it directly, no extra tooling.
 The native backend is complete for running and wiring apps and is covered
 by an integration suite on Apple Silicon (`make mac-test`): disks, exit
 codes, stdout, published ports, `.ply` names, outbound through the switch,
-signals, stacks. It ships as a signed release binary, installed by the
-installer, with its kernel in the registry. Next are `ply exec` and
-egress enforcement in the VM. The design that got here is `docs/ply-vm.md`
+signals, stacks, the clock, `--scale`, links, `ply deploy`. It ships as a
+signed release binary, installed by the installer, with its kernel in the
+registry. Next are `ply exec` and egress enforcement in the VM. The design that got here is `docs/ply-vm.md`
 in the repo.
 
 **Signing, for the curious.** The release is signed ad-hoc with the

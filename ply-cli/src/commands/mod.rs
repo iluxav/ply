@@ -56,6 +56,7 @@ pub fn dispatch(command: Command) -> Result<()> {
         Command::Proxy(args) => lb::proxy(args),
         Command::Setup(args) => setup::exec(args),
         Command::SelfUpdate(args) => self_update::exec(args),
+        Command::VmWorker(args) => vm_worker(args),
         Command::Login => account::login(),
         Command::Whoami => account::whoami(),
         Command::Key(cmd) => match cmd {
@@ -78,4 +79,16 @@ pub fn dispatch(command: Command) -> Result<()> {
         Command::Audit(args) => lifecycle::audit(args),
         Command::Outdated(args) => lifecycle::outdated(args),
     }
+}
+
+/// `ply __vm-worker DIR`: the process behind one microVM instance. It never
+/// returns — the process's exit code is the guest's.
+#[cfg(target_os = "macos")]
+fn vm_worker(args: crate::cli::VmWorkerArgs) -> anyhow::Result<()> {
+    std::process::exit(ply_core::runtime::vm::worker::run(&args.instance_dir))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn vm_worker(_args: crate::cli::VmWorkerArgs) -> anyhow::Result<()> {
+    anyhow::bail!("the microVM worker exists only on macOS")
 }

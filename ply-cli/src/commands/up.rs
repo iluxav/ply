@@ -315,6 +315,9 @@ fn render_plan(
 }
 
 pub fn exec(args: UpArgs) -> Result<()> {
+    // `ply up` owns the stack's switch on macOS and supervises its members
+    // everywhere: a hung-up socket must not end the whole stack.
+    ply_core::ignore_sigpipe();
     let (stack, members, lock_dir) = load_up_stack(&args)?;
     let selected = stack::select(&stack, &members)?;
 

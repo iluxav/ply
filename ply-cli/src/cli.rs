@@ -149,6 +149,11 @@ pub enum Command {
     Setup(SetupArgs),
     /// Update ply itself to the newest release
     SelfUpdate(SelfUpdateArgs),
+
+    /// One microVM in a process of its own — spawned by `ply run` on macOS,
+    /// never by a person.
+    #[command(name = "__vm-worker", hide = true)]
+    VmWorker(VmWorkerArgs),
     /// Log in to the registry (GitHub device flow — your namespace is your login)
     Login,
     /// Show who you are logged in as
@@ -1038,6 +1043,13 @@ pub struct PushArgs {
     /// nothing
     #[arg(long)]
     pub dry_run: bool,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct VmWorkerArgs {
+    /// The instance directory the parent prepared (`worker.json`, the
+    /// control socket, the spec disk).
+    pub instance_dir: std::path::PathBuf,
 }
 
 #[derive(clap::Args, Debug)]

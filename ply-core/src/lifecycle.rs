@@ -279,7 +279,9 @@ pub fn deploy(image: &Path, timeout_secs: u64) -> Result<DeployReport> {
                 continue;
             }
             let name = format!("{}.{}", instance.app, instance.n);
-            if slot_rolled(&instance.image, &want, instance.started, deploy_started) {
+            if slot_rolled(&instance.image, &want, instance.started, deploy_started)
+                && answering(&instance)
+            {
                 rolled.insert(name);
             } else {
                 all = false;
@@ -313,7 +315,44 @@ fn slot_rolled(instance_image: &str, want: &str, started: u64, deploy_started: u
     instance_image == want && started + 1 >= deploy_started
 }
 
+/// A rolled slot is one that ANSWERS on the new image, not one that has
+/// merely been launched on it. The parent writes the state file at launch,
+/// before its own health gate, so a watcher that stopped at the state file
+/// printed "deploy complete" while the new instance was still booting — and
+/// the first request after it found nothing listening. An app with no
+/// `[health] port` has nothing to ask, and its launch is its answer.
+fn answering(s: &state::InstanceState) -> bool {
+    match s.health_port {
+        Some(port) => crate::runtime::after::probe(s.ip, port, s.network.as_deref()).is_ok(),
+        None => true,
+    }
+}
+
 /// Parent pid from /proc/<pid>/stat (field 4, after the comm parens).
+#[cfg(target_os = "macos")]
+fn parent_pid(pid: i32) -> Option<i32> {
+    use nix::libc;
+    // `proc_pidinfo(PROC_PIDTBSDINFO)`: the BSD answer to `/proc/<pid>/stat`.
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    // SAFETY: `info` is live and `size` is its exact size; the kernel
+    // writes at most `size` bytes into it and reports how many it did.
+    let got = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            &mut info as *mut _ as *mut libc::c_void,
+            size,
+        )
+    };
+    if got != size {
+        return None;
+    }
+    Some(info.pbi_ppid as i32)
+}
+
+#[cfg(not(target_os = "macos"))]
 fn parent_pid(pid: i32) -> Option<i32> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     stat.rsplit_once(')')?

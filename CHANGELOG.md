@@ -5,6 +5,51 @@ breaking changes, and known limitations. Write under **Unreleased** as work
 lands; `make release-cli` turns that heading into the version and date, and
 the release workflow publishes the entry as the GitHub release notes.
 
+## Unreleased
+
+### What changed
+- **macOS: every microVM runs in a process of its own.** `ply run` spawns
+  one worker per instance and keeps the switch, the published ports and
+  the state for itself. That is what lets `--scale N` boot N microVMs
+  (Hypervisor.framework allows one VM per process; the second used to die
+  at `hv_vm_create`), gives `ply deploy` a real child pid to find the run
+  parent from (it used to answer "no running instances" on a Mac), and
+  makes `ply ps` show a pid that `kill` reaches.
+- **macOS: `ply.dev.toml` links are shared live.** A linked host directory
+  is served into the guest over virtio-9p, so an edit on the Mac is what
+  the next read in the guest sees. Before, a link became an empty disk
+  with a warning.
+- **macOS: the guest clock is the host's.** The spec disk carries the
+  host's wall clock and the guest init sets it before anything else. Until
+  now a microVM started in 1970 and every HTTPS connection failed with
+  "certificate not yet valid".
+- The kernel keg is `ply/microvm-kernel@6.12.109`: Linux 6.12.109 with
+  9p over virtio, and the guest init that sets the clock and mounts shares.
+  The binary pins it; the first `ply run` fetches it.
+- `ply deploy` reports a slot as rolled only once the new instance answers
+  on its `[health] port`, not when its state file appears. "deploy
+  complete" used to print while the new instance was still booting, and
+  the next request found nothing listening.
+
+### Fixes
+- macOS: a `ply run` parent died of SIGPIPE (exit 141) the moment its
+  readiness probe reached an app that speaks first on a connection — a
+  greeting on accept, a database banner: the app answered into a probe
+  connection the parent had already dropped, and the switch's write raised
+  the signal the CLI leaves at its Unix default for `ply … | head`. The
+  run supervisor, `ply up` and the microVM worker now ignore SIGPIPE, so a
+  hung-up socket is the `EPIPE` they already handle.
+- A stop signal that reached a `ply run` parent during a rolling deploy's
+  health gate never reached the new instance: its pid was registered with
+  the signal handler only after the gate, so it was SIGKILLed ten seconds
+  later without its exit code. The pid is registered at launch.
+- The stacks guide named the overlay for a stack `stack.dev.toml`; it is
+  `<stack file>.dev.toml`, so a `ply.toml` stack reads `ply.dev.toml`.
+
+### Known limitations
+- macOS: `ply exec`, egress enforcement, `[resources]` limits and
+  autoscale samples are still missing in the microVM backend.
+
 ## v0.1.78 — 2026-09-07
 
 ### What changed
