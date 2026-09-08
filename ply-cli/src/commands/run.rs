@@ -152,7 +152,7 @@ pub fn exec(args: RunArgs) -> Result<()> {
                     bail!(
                         "{} has no ply.toml, and nothing in it looks like a project ply knows \
                          (package.json, go.mod, requirements.txt, Cargo.toml, Gemfile, deno.json, \
-                         a bun lockfile) — {hint}",
+                         a bun lockfile, an index.ts) — {hint}",
                         dir.display()
                     );
                 }

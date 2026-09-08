@@ -142,6 +142,59 @@ pub(crate) fn sanitize_name(raw: &str) -> String {
     }
 }
 
+/// The parsed `package.json`, if there is one that parses.
+fn package_json(dir: &Path) -> Option<serde_json::Value> {
+    std::fs::read_to_string(dir.join("package.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+}
+
+/// Does this `package.json` belong to a Bun project? Bun shares the file
+/// with Node, so the signal has to be Bun's own: a start script that
+/// invokes `bun`, or `packageManager` naming it.
+fn package_json_is_bun(pkg: &serde_json::Value) -> bool {
+    let start = pkg
+        .pointer("/scripts/start")
+        .and_then(|s| s.as_str())
+        .unwrap_or("");
+    let manager = pkg
+        .get("packageManager")
+        .and_then(|s| s.as_str())
+        .unwrap_or("");
+    start.split_whitespace().next() == Some("bun") || manager.starts_with("bun@")
+}
+
+/// The file a Bun start script runs: `bun run src/index.ts` and
+/// `bun src/index.ts` both name it; `bun run start` and `bun --hot x.ts`
+/// resolve to the first non-flag word after `run`, if any.
+fn bun_start_file(pkg: &serde_json::Value) -> Option<String> {
+    let start = pkg.pointer("/scripts/start")?.as_str()?;
+    let mut words = start.split_whitespace();
+    if words.next()? != "bun" {
+        return None;
+    }
+    let mut rest: Vec<&str> = words.filter(|w| !w.starts_with('-')).collect();
+    if rest.first() == Some(&"run") {
+        rest.remove(0);
+    }
+    rest.first()
+        .filter(|w| w.contains('.'))
+        .map(|w| w.to_string())
+}
+
+/// The TypeScript file a project with no manifest of its own is run from.
+fn ts_entry(dir: &Path) -> Option<&'static str> {
+    [
+        "index.ts",
+        "main.ts",
+        "server.ts",
+        "src/index.ts",
+        "src/main.ts",
+    ]
+    .into_iter()
+    .find(|f| dir.join(f).is_file())
+}
+
 /// The file `node` should run: what `npm start` runs when the start script
 /// is a plain `node <file>`, else `main`, else the conventional name. A
 /// project whose start script is `nodemon` or `next start` is not a file;
@@ -212,6 +265,36 @@ pub(crate) fn detect(dir: &Path, latest: &Latest) -> Defaults {
     let runtime = |pkg: &str| Some((pkg.to_string(), latest.range(pkg)));
     let has = |f: &str| dir.join(f).is_file();
 
+    // Bun shares package.json with Node, so Bun's own files decide first:
+    // a lockfile or a bunfig, then a package.json that itself says `bun`.
+    if has("bun.lockb") || has("bun.lock") || has("bunfig.toml") {
+        let main = package_json(dir)
+            .as_ref()
+            .and_then(bun_start_file)
+            .or_else(|| ts_entry(dir).map(str::to_string))
+            .unwrap_or_else(|| "index.ts".into());
+        return Defaults {
+            name,
+            entrypoint: vec!["bun".into(), "run".into(), main],
+            runtime: runtime("bun"),
+            port: Some(3000),
+            evidence: Some("a bun lockfile"),
+            env: Vec::new(),
+        };
+    }
+    if let Some(pkg) = package_json(dir).filter(package_json_is_bun) {
+        let main = bun_start_file(&pkg)
+            .or_else(|| ts_entry(dir).map(str::to_string))
+            .unwrap_or_else(|| "index.ts".into());
+        return Defaults {
+            name,
+            entrypoint: vec!["bun".into(), "run".into(), main],
+            runtime: runtime("bun"),
+            port: Some(3000),
+            evidence: Some("a package.json whose start script is bun"),
+            env: Vec::new(),
+        };
+    }
     if has("package.json") {
         // Next, Nuxt and friends all serve on 3000 by default, as does the
         // plain `http` server every tutorial writes; nothing to detect.
@@ -225,7 +308,7 @@ pub(crate) fn detect(dir: &Path, latest: &Latest) -> Defaults {
         };
     }
     if has("deno.json") || has("deno.jsonc") {
-        let main = ["main.ts", "server.ts", "mod.ts", "main.js"]
+        let main = ["main.ts", "server.ts", "mod.ts", "index.ts", "main.js"]
             .into_iter()
             .find(|f| has(f))
             .unwrap_or("main.ts");
@@ -238,17 +321,16 @@ pub(crate) fn detect(dir: &Path, latest: &Latest) -> Defaults {
             env: Vec::new(),
         };
     }
-    if has("bun.lockb") || has("bun.lock") || has("bunfig.toml") {
-        let main = ["index.ts", "server.ts", "index.js"]
-            .into_iter()
-            .find(|f| has(f))
-            .unwrap_or("index.ts");
+    // TypeScript with no package.json and no deno.json: Bun runs it with
+    // no setup at all, so Bun it is — said out loud in the printed
+    // manifest, so a Deno project learns to carry its deno.json.
+    if let Some(main) = ts_entry(dir) {
         return Defaults {
             name,
             entrypoint: vec!["bun".into(), "run".into(), main.into()],
             runtime: runtime("bun"),
             port: Some(3000),
-            evidence: Some("a bun lockfile"),
+            evidence: Some("a TypeScript entry file and no package.json"),
             env: Vec::new(),
         };
     }
@@ -754,6 +836,59 @@ mod tests {
             assert_eq!(d.entrypoint, *entrypoint, "{file}");
             assert!(d.evidence.is_some(), "{file}");
         }
+    }
+
+    #[test]
+    fn bun_is_told_apart_from_node_by_its_own_signals() {
+        // A package.json whose start script is bun: Bun, entrypoint from it.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"scripts":{"start":"bun run src/index.ts"}}"#,
+        )
+        .unwrap();
+        let d = detect(dir.path(), &latest());
+        assert_eq!(d.runtime.as_ref().map(|(n, _)| n.as_str()), Some("bun"));
+        assert_eq!(d.entrypoint, vec!["bun", "run", "src/index.ts"]);
+        // `packageManager` says so too, with the entry file found on disk.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"packageManager":"bun@1.4.2"}"#,
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("server.ts"), "").unwrap();
+        let d = detect(dir.path(), &latest());
+        assert_eq!(d.entrypoint, vec!["bun", "run", "server.ts"]);
+        // A lockfile beats everything, and a plain package.json is still Node.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("package.json"), r#"{"main":"app.js"}"#).unwrap();
+        std::fs::write(dir.path().join("index.ts"), "").unwrap();
+        assert_eq!(
+            detect(dir.path(), &latest()).entrypoint,
+            vec!["node", "app.js"]
+        );
+        std::fs::write(dir.path().join("bun.lock"), "").unwrap();
+        assert_eq!(
+            detect(dir.path(), &latest()).entrypoint,
+            vec!["bun", "run", "index.ts"]
+        );
+    }
+
+    #[test]
+    fn a_lone_typescript_file_runs_on_bun_unless_deno_says_otherwise() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("index.ts"), "").unwrap();
+        let d = detect(dir.path(), &latest());
+        assert_eq!(d.entrypoint, vec!["bun", "run", "index.ts"]);
+        assert_eq!(
+            d.evidence,
+            Some("a TypeScript entry file and no package.json")
+        );
+        std::fs::write(dir.path().join("deno.json"), "{}").unwrap();
+        let d = detect(dir.path(), &latest());
+        assert_eq!(d.runtime.as_ref().map(|(n, _)| n.as_str()), Some("deno"));
+        assert_eq!(d.entrypoint, vec!["deno", "run", "-A", "index.ts"]);
     }
 
     #[test]

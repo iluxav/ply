@@ -5,6 +5,17 @@ breaking changes, and known limitations. Write under **Unreleased** as work
 lands; `make release-cli` turns that heading into the version and date, and
 the release workflow publishes the entry as the GitHub release notes.
 
+## Unreleased
+
+### Fixes
+- The detector told Bun from Node only by a lockfile, so a Bun project
+  with a package.json ran on Node, and a one-file Bun script with no
+  dependencies was not recognised at all. It now reads the package.json
+  (a start script that invokes `bun`, or `packageManager = bun@…`), and a
+  lone `index.ts`, `main.ts` or `server.ts` with no package.json and no
+  deno.json runs on Bun, which needs no setup for TypeScript — the printed
+  manifest says so, so a Deno project learns to carry its deno.json.
+
 ## v0.1.81 — 2026-09-08
 
 ### What changed
