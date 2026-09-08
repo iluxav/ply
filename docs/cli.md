@@ -143,7 +143,8 @@ no members = everything. `run =` members pin version + digest in the stack
 [Stacks & local dev](/docs/stacks/).
 
 ```sh
-ply ps [--json]
+ply ps [--json]                   # ADDRESS is what callers can dial: the published
+                                  # address, or `-` for a rootless instance nobody can reach
 ply stats [APP|APP.N] [--json] [--sample-ms MS]
 ply exec APP[.N] CMD…
 ply logs [APP[.N]] [-f] [-n LINES]
@@ -197,6 +198,29 @@ ply reconcile                      # converge systemd units to
                                    # a deployment is a file (root)
 ply rm APP [--volumes]             # volumes kept unless --volumes
 ply gc                             # drop store entries nothing references
+ply backup now|ls APP              # a service's own backup contract, driven through
+                                   # `ply exec` (see Backups): dump now, or list dumps
+ply restore APP [NAME|latest] --to DB | --replace
+                                   # a dump beside the live data, or over it
+```
+
+`ply reconcile` run by hand is one pass, and says so; the watcher that
+keeps converging (a touched file deploys, a deleted one retires its app
+within a minute) is a timer and path unit that `sudo ply setup --edge`
+installs.
+
+## Secrets
+
+```sh
+ply secret ls [-C DIR | --deployments STACK]      # names only, never values
+ply secret set MEMBER.PARAM [-C DIR | --deployments STACK]
+                                   # an external secret's value (stdin), before `ply up`
+ply secret hostkey                 # this host's sealing key (public half); made on first use;
+                                   # `sudo` for the key root's apps use
+ply secret seal KEY=VALUE… [--for HOSTKEY] [--env]
+                                   # KEY = "enc:v1:…" lines for [env] (or KEY=… with --env);
+                                   # a VALUE of `-` reads stdin. Opens only on that host,
+                                   # at launch, in the run parent (see Sealed secrets)
 ```
 
 ## Images
@@ -253,7 +277,10 @@ inert package. See [Making packages](/docs/packages/).
 ply systemd IMAGE [--scale N] [--publish [ADDR:]P[:IP]] [-e K=V] [--env-file F]
                   [--after APP]… [--user]
                                   # emit a unit file (supervision = systemd);
-                                  # --user = ~/.config/systemd/user, for rootless
+                                  # --user = ~/.config/systemd/user, for rootless.
+                                  # The unit runs a current.img link beside IMAGE,
+                                  # which `ply deploy` re-points — so a restart or
+                                  # reboot comes back on the deployed version
 ply proxy [APP]... [--format caddy|nginx|haproxy] [--watch] [--out FILE]
                                   # emit reverse-proxy config; no APP = every
                                   # running app. Backends are the published

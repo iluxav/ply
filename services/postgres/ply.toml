@@ -17,7 +17,7 @@
 
 [package]
 name = "postgres"
-version = "17.10.8"
+version = "17.10.9"
 owner = "ply"
 description = "PostgreSQL relational database (docker-library env contract)"
 license = "PostgreSQL"
@@ -29,7 +29,7 @@ entrypoint = ["./run.sh"]
 # SIGINT is the fast shutdown — disconnect clients, checkpoint, exit — and is
 # what the docker-library image asks for too.
 stop_signal = "SIGINT"
-include = ["run.sh", "restore.sh", "cacert.pem"]
+include = ["run.sh", "backup.sh", "restore.sh", "cacert.pem"]
 base = "debian@13"
 
 [dependencies]

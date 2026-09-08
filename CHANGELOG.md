@@ -5,6 +5,26 @@ breaking changes, and known limitations. Write under **Unreleased** as work
 lands; `make release-cli` turns that heading into the version and date, and
 the release workflow publishes the entry as the GitHub release notes.
 
+## Unreleased
+
+### What changed
+- **Backups, driven.** The registry's Postgres already dumped itself on a
+  schedule to any rclone target and restored into an empty volume; nobody
+  could find it and nothing drove it. Now: `ply backup now db`, `ply
+  backup ls db`, `ply restore db --to check` (beside the live data) and
+  `ply restore db --replace` (over it: connections terminated, the
+  database recreated, the dump loaded), all through `ply exec` with the
+  instance's own environment — so the destination and its sealed
+  credentials are set once, on the service. `backup.sh` is the one unit of
+  work the schedule and the verb share; each run writes its outcome to
+  `/run/ply/self/backup`. A Backups guide covers the S3 credentials, the
+  egress allowance, the disaster path and how to prove a backup before it
+  is needed. `ply/postgres@17.10.9`.
+- The CLI reference now lists `ply secret` (it never did), the new
+  `hostkey` and `seal`, the `current.img` behaviour of `ply systemd`, and
+  what `ply ps`'s ADDRESS column means; the docs index links the Sealed
+  secrets and Backups guides; the agent skill teaches both.
+
 ## v0.1.86 — 2026-09-08
 
 ### What changed

@@ -30,6 +30,9 @@ quoted (`"boost1.84" = "1.84"`).
 
 ## [env]
 
+A value `enc:v1:…` is sealed (`ply secret seal`): ciphertext in the file,
+opened by the run parent on the one host it was sealed for.
+
 Composed after package contributions, before `-e` / `--env-file`. Last wins.
 
 ## [ports]

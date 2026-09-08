@@ -2,6 +2,7 @@
 
 mod account;
 mod add;
+mod backup;
 mod build;
 mod control;
 mod craft;
@@ -78,6 +79,11 @@ pub fn dispatch(command: Command) -> Result<()> {
             crate::cli::SecretCommand::Hostkey => secret::exec_hostkey(),
             crate::cli::SecretCommand::Seal(args) => secret::exec_seal(&args),
         },
+        Command::Backup(cmd) => match cmd {
+            crate::cli::BackupCommand::Now(args) => backup::now(&args),
+            crate::cli::BackupCommand::Ls(args) => backup::ls(&args),
+        },
+        Command::Restore(args) => backup::restore(&args),
         Command::Audit(args) => lifecycle::audit(args),
         Command::Outdated(args) => lifecycle::outdated(args),
     }

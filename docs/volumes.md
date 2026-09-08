@@ -58,7 +58,8 @@ user = "postgres:70:70"       # name:uid:gid
 ## What ply doesn't do
 
 No volume drivers, no NFS/cloud volumes, no snapshots, no cross-host
-replication. The host manages storage (mount your NFS/EBS wherever you
+replication of raw volumes. A database backs *itself* up on a schedule
+([Backups](/docs/backups/)); for everything else the host manages storage (mount your NFS/EBS wherever you
 like); ply bind-mounts paths. Snapshots are the filesystem's job.
 
 ## Dev mode is the same mechanism

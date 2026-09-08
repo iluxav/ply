@@ -133,7 +133,9 @@ must be TOML-quoted (`"boost1.84" = "1.84"`) — a bare dotted key means a
 nested table in TOML.
 
 **`[env]`** — composed after package contributions, before CLI overrides
-(`-e`, `--env-file`); last wins.
+(`-e`, `--env-file`); last wins. A value of the form `enc:v1:…` is a
+[sealed secret](/docs/secrets/): committed as ciphertext, opened by the
+run parent on the one host it was sealed for.
 
 **`[params]`** — named values other apps interpolate with `{app.param}`,
 and this manifest's own `[env]` can reference with bare `{param}`. Secrets,

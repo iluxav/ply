@@ -53,6 +53,8 @@ process, and your app runs as an ordinary child process. `Ctrl-C` stops it.
 - [Dashboard](/docs/dashboard/) — the optional web UI, terminal into containers included
 - [Autoscaling](/docs/autoscale/) — `[scale]` in the manifest; the run parent grows, shrinks and resizes, no orchestrator
 - [Security & rootless](/docs/security/) — namespaces, seccomp, cgroups, and the egress contract: what an app may reach, enforced and audited
+- [Sealed secrets](/docs/secrets/) — secrets in the repo as ciphertext, opened only on the host, at launch, in memory
+- [Backups](/docs/backups/) — a database that dumps itself to S3 on a schedule, and comes back from it
 - [Dependencies & lockfiles](/docs/dependencies/) — how resolution works
 - [Registries & publishing](/docs/registries/) — shipping images anywhere
 - [ply vs Docker](/docs/ply-vs-docker/) — an honest comparison

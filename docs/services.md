@@ -74,6 +74,14 @@ ply systemd postgres-17.10.0-linux-x64.img -e POSTGRES_PASSWORD=… --publish in
 ply run api.img --after postgres      # waits for health, learns the address
 ```
 
+## Backups
+
+The Postgres image backs itself up: set `BACKUP_DEST` to an rclone target
+and it dumps on a schedule, prunes, and restores into an empty volume from
+`BACKUP_RESTORE`; `ply backup now|ls db` and `ply restore db --to X |
+--replace` drive it. The whole story, credentials and the disaster path
+included, is the [Backups](/docs/backups/) guide.
+
 ## The escape hatch: docker://
 
 Anything the registry doesn't publish, Docker Hub has:

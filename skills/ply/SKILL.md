@@ -176,7 +176,26 @@ sudo systemctl enable --now ply-myapp
 
 Rootless apps need a **user** unit instead — `ply systemd --user` — plus
 `sudo loginctl enable-linger $USER`, or everything stops at logout and
-nothing starts at boot.
+nothing starts at boot. The unit runs a `current.img` link beside the
+image, which every `ply deploy` re-points, so a restart or a reboot comes
+back on the deployed version.
+
+## Secrets and backups
+
+Never write a password into a manifest or a deployment file in the clear.
+Seal it for the host instead: `sudo ply secret hostkey` on the server
+prints its key; `ply secret seal DATABASE_URL=… --for <key>` anywhere
+prints `DATABASE_URL = "enc:v1:…"`, which goes in `[env]` (manifest,
+deployment file, or stack member) and can be committed. It opens only on
+that host, at launch, in the run parent; the log names the variable, never
+the value. Or keep a root-only `--env-file`.
+
+The registry's Postgres backs itself up: give it `BACKUP_DEST=:s3:bucket/prefix`
+and rclone's `RCLONE_S3_*` credentials (sealed), allow the destination in
+its egress, and it dumps on `BACKUP_INTERVAL`, keeps `BACKUP_KEEP_DAYS`, and
+restores into an empty volume from `BACKUP_RESTORE=latest`. `ply backup
+now db`, `ply backup ls db`, `ply restore db --to check` (beside the live
+data) or `--replace` (over it) drive that through `ply exec`.
 
 ## Using Docker images
 

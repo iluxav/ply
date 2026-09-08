@@ -137,6 +137,16 @@ pub fn exec(target: &str, cmd: &[String]) -> Result<i32> {
         .filter(|s| !s.is_empty())
         .filter_map(|s| CString::new(s.to_vec()).ok())
         .collect();
+    // And the app's identity, read here for the same reason. "Inside the
+    // instance" has to mean the same thing for a command as for the
+    // entrypoint: a `[package] user = postgres:70:70` service writes its
+    // volume as uid 70, and a command that ran as uid 0 with no
+    // capabilities could not even write the directory the app's own
+    // backups go to — measured, on `ply backup now`, as "permission denied"
+    // where the scheduled dump beside it succeeded.
+    let identity = std::fs::read_to_string(format!("/proc/{app_pid}/status"))
+        .ok()
+        .and_then(|status| parse_ids(&status));
     if !same_ns("ipc") {
         join(&ipc, CloneFlags::CLONE_NEWIPC, "ipc")?;
     }
@@ -151,7 +161,7 @@ pub fn exec(target: &str, cmd: &[String]) -> Result<i32> {
     // Fork so the child is actually inside the pid namespace.
     match unsafe { nix::unistd::fork() }.map_err(|e| Error::Runtime(format!("fork: {e}")))? {
         ForkResult::Child => {
-            let code = child_exec(&instance, cmd, env);
+            let code = child_exec(&instance, cmd, env, identity);
             std::process::exit(code);
         }
         ForkResult::Parent { child } => loop {
@@ -166,10 +176,54 @@ pub fn exec(target: &str, cmd: &[String]) -> Result<i32> {
     }
 }
 
-fn child_exec(instance: &InstanceState, cmd: &[String], env: Vec<CString>) -> i32 {
-    // Same clamps as the app itself — an exec'd shell is not a side door.
+/// The real uid and gid from a `/proc/<pid>/status` text, as the reader's
+/// user namespace sees them.
+fn parse_ids(status: &str) -> Option<(u32, u32)> {
+    let field = |key: &str| -> Option<u32> {
+        status
+            .lines()
+            .find_map(|l| l.strip_prefix(key))?
+            .split_whitespace()
+            .next()?
+            .parse()
+            .ok()
+    };
+    Some((field("Uid:")?, field("Gid:")?))
+}
+
+fn child_exec(
+    instance: &InstanceState,
+    cmd: &[String],
+    env: Vec<CString>,
+    identity: Option<(u32, u32)>,
+) -> i32 {
+    // Same clamps as the app itself — an exec'd shell is not a side door —
+    // in the same order as container.rs: the bounding-set drop first (it
+    // needs CAP_SETPCAP, and permitted caps survive it so setuid still
+    // works), then the app's own identity, then no_new_privs and seccomp.
+    if let Err(e) = crate::runtime::ns::security::drop_capabilities(&[]) {
+        eprintln!("ply exec: {e}");
+        return 126;
+    }
+    if let Some((uid, gid)) = identity {
+        let (me_uid, me_gid) = (
+            nix::unistd::getuid().as_raw(),
+            nix::unistd::getgid().as_raw(),
+        );
+        if (uid, gid) != (me_uid, me_gid) {
+            let switch = || -> nix::Result<()> {
+                nix::unistd::setgroups(&[nix::unistd::Gid::from_raw(gid)])?;
+                nix::unistd::setgid(nix::unistd::Gid::from_raw(gid))?;
+                nix::unistd::setuid(nix::unistd::Uid::from_raw(uid))?;
+                Ok(())
+            };
+            if let Err(e) = switch() {
+                eprintln!("ply exec: cannot run as the app's user {uid}:{gid}: {e}");
+                return 126;
+            }
+        }
+    }
     let clamps = || -> Result<()> {
-        crate::runtime::ns::security::drop_capabilities(&[])?;
         crate::runtime::ns::security::no_new_privs()?;
         crate::runtime::ns::security::apply_seccomp()
     };
@@ -207,6 +261,13 @@ mod tests {
     /// yet lives in its own netns — so `NS_GET_USERNS` on that netns names
     /// the namespace we are already in. `setns(CLONE_NEWUSER)` onto your own
     /// user namespace is EINVAL, so exec must recognise and skip it.
+    #[test]
+    fn the_apps_identity_is_read_from_its_status() {
+        let status = "Name:\tpostgres\nUmask:\t0022\nState:\tS (sleeping)\nUid:\t70\t70\t70\t70\nGid:\t70\t70\t70\t70\n";
+        assert_eq!(parse_ids(status), Some((70, 70)));
+        assert_eq!(parse_ids("Name:\tx\n"), None);
+    }
+
     #[test]
     fn own_user_namespace_is_recognised() {
         let ours = std::fs::File::open("/proc/self/ns/user").unwrap();

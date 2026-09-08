@@ -26,6 +26,10 @@ ply run IMAGE [--scale N]
 ply ps [--json]
 ply stats [APP|APP.N] [--json]
 ply exec APP[.N] CMD...
+ply backup now|ls APP              # a service's self-backup contract (postgres): dump now / list dumps
+ply restore APP [NAME|latest] --to DB | --replace
+ply secret hostkey                 # this host's sealing key; sudo for root's
+ply secret seal KEY=VALUE... [--for HOSTKEY] [--env]   # KEY = "enc:v1:…" for [env]
 ply egress APP [--follow] [--blocked] [--json]          # the outbound audit log as a table
 ply why APP [--json]                                    # exits, blocked traffic, changes — with evidence
 ```

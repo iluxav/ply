@@ -68,7 +68,7 @@ Rollback = pin the spec: `version = "1.4.2"` (registry/github lanes) or
 
 ## Cautions
 
-- Secrets never go in the spec if avoidable: use `env_file = "/root/x.env"`
+- Secrets go in the spec only sealed (`KEY = "enc:v1:…"` from `ply secret seal … --for <host key>`, which opens only on that host at launch), or in an `env_file = "/root/x.env"`
   or `token_file = ".keys/<name>.token"` (relative = under the
   deployments dir; you create the key file, 0600).
 - One deployment per app name — two specs resolving to the same inner app

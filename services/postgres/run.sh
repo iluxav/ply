@@ -98,18 +98,13 @@ if [ -n "${BACKUP_DEST:-}" ]; then
   (
     i=0; until $PGBIN/pg_isready -h "$SOCK" -q || [ $i -ge 60 ]; do i=$((i+1)); sleep 1; done
     while :; do
-      name="${POSTGRES_DB:-$PGUSER}-$(date -u +%Y%m%d-%H%M%S).sql.gz"
-      # dump to a file first: a known-size upload is one plain PUT, which
-      # every S3 implementation accepts (R2 501s rclone's streaming mode)
-      tmp="/tmp/.backup.sql.gz"
-      if $PGBIN/pg_dump -h "$SOCK" -U "$PGUSER" "${POSTGRES_DB:-$PGUSER}" | gzip > "$tmp" \
-         && rclone copyto "$tmp" "$BACKUP_DEST/$name"; then
-        rclone delete --min-age "${BACKUP_KEEP_DAYS:-14}d" "$BACKUP_DEST" 2>/dev/null || true
-        echo "postgres: backup ok ($name); next in ${BACKUP_INTERVAL:-86400}s"
+      # backup.sh is the unit of work — the same script `ply backup now`
+      # runs — so a scheduled dump and a manual one cannot drift apart.
+      if sh "$(dirname "$0")/backup.sh"; then
+        echo "postgres: next backup in ${BACKUP_INTERVAL:-86400}s"
       else
-        echo "postgres: backup FAILED ($name); retrying in ${BACKUP_INTERVAL:-86400}s"
+        echo "postgres: backup FAILED; retrying in ${BACKUP_INTERVAL:-86400}s"
       fi
-      rm -f "$tmp"
       sleep "${BACKUP_INTERVAL:-86400}"
     done
   ) &

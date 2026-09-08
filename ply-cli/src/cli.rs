@@ -205,6 +205,23 @@ pub enum Command {
     #[command(subcommand)]
     Secret(SecretCommand),
 
+    /// Back up a service now, or list what it has backed up
+    ///
+    /// Drives the service's own backup contract through `ply exec`: a
+    /// service that ships `backup.sh` and reads `BACKUP_DEST` (the
+    /// registry's postgres does) dumps itself on a schedule; this runs one
+    /// now, or lists the dumps at the destination.
+    #[command(subcommand)]
+    Backup(BackupCommand),
+    /// Restore a service from one of its backups
+    ///
+    /// `--to NAME` restores beside the live data, into a database of that
+    /// name, to look at yesterday next to today. `--replace` restores OVER
+    /// the live database: connections are terminated, it is recreated, and
+    /// what the app wrote since the dump is gone — which is what a restore
+    /// means. One of the two is required.
+    Restore(RestoreArgs),
+
     /// Report shared volumes, deprecated runtimes, and other risk surface
     Audit(AuditArgs),
 
@@ -823,6 +840,40 @@ pub struct RmArgs {
 
 #[derive(Args)]
 pub struct AuditArgs {}
+
+#[derive(Subcommand)]
+pub enum BackupCommand {
+    /// Dump and upload now, outside the schedule
+    Now(BackupTarget),
+    /// List the dumps at the service's BACKUP_DEST, oldest first
+    Ls(BackupTarget),
+}
+
+#[derive(Args)]
+pub struct BackupTarget {
+    /// The service (or service.<n>)
+    #[arg(value_name = "APP")]
+    pub app: String,
+}
+
+#[derive(Args)]
+pub struct RestoreArgs {
+    /// The service (or service.<n>)
+    #[arg(value_name = "APP")]
+    pub app: String,
+
+    /// Which dump, as `ply backup ls` names it; default: the latest
+    #[arg(value_name = "NAME", default_value = "latest")]
+    pub name: String,
+
+    /// Restore into this database, beside the live one (created if missing)
+    #[arg(long, value_name = "DB", conflicts_with = "replace")]
+    pub to: Option<String>,
+
+    /// Restore over the live database (connections terminated, data since the dump lost)
+    #[arg(long)]
+    pub replace: bool,
+}
 
 #[derive(Subcommand)]
 pub enum KeyCommand {
