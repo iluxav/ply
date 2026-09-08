@@ -36,3 +36,13 @@ registry-population.md
 services/notify/notify
 launch-post.md
 qa-first-run.md
+
+# a stack run in place: minted secrets (`ply up` writes <stack dir>/.ply/secrets/)
+.ply/
+
+# per-machine overlays (docs/stacks.md): a laptop's ports and checkouts, never committed
+ply.dev.toml
+stack.dev.toml
+
+# macOS Finder metadata
+.DS_Store

@@ -1,0 +1,31 @@
+[package]
+name = "guestbook"
+version = "0.1.0"
+base = "debian@13"
+entrypoint = ["python3", "server.py"]
+include = ["server.py"]
+
+[dependencies]
+# The public registry has no Python yet, so these two come from `local`:
+# kegs converted from Debian with the repo's deb2pkg — see README.md.
+# Once they are published, drop `source = "local"` and the [sources] alias.
+python3 = { source = "local", version = "3.13" }
+python3-psycopg2 = { source = "local", version = "2.9.10" }   # exact: its keg path is spelled out in [env] below
+
+[env]
+# A dependency is its own keg under /opt/<name>-<version>; python3 only
+# searches its own prefix, so psycopg2 is put on the path here. The version
+# is pinned exactly above, so this path cannot drift from the lock.
+PYTHONPATH = "/opt/python3-psycopg2-2.9.10/usr/lib/python3/dist-packages"
+PYTHONUNBUFFERED = "1"
+
+[ports]
+web = 8000
+
+[health]
+port = 8000                       # gates `ply up`, `ply deploy` and --after on this app
+grace = "15s"
+
+[sources]
+default = "https://registry.plybox.sh/ply/{package}"
+local = "file://../../out/pkgs/{package}"        # relative to where `ply up` runs: this example's directory
