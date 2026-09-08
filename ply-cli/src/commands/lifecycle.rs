@@ -53,12 +53,18 @@ pub fn deploy(args: crate::cli::DeployArgs) -> Result<()> {
     for name in &report.rolled {
         println!("rolled {name}");
     }
+    for link in &report.relinked {
+        println!("{} -> {}", link.display(), args.image.display());
+    }
     if report.complete {
         println!(
             "deploy complete: {} instance(s) of {} on the new image",
             report.rolled.len(),
             report.app
         );
+        for note in &report.notes {
+            eprintln!("note: {note}");
+        }
         Ok(())
     } else {
         bail!(
@@ -98,9 +104,20 @@ pub fn systemd(args: SystemdArgs) -> Result<()> {
     for app in &args.after {
         flags.extend(["--after".into(), app.clone()]);
     }
+    // The unit runs the app from a `current.img` link beside the image, not
+    // from the image's own path: `ply deploy` re-points the link, so a unit
+    // restart or a reboot comes back on the version that was deployed.
+    let image = lifecycle::stable_image_link(&args.image)?;
+    if image != std::path::absolute(&args.image).unwrap_or_default() {
+        eprintln!(
+            "ply: the unit runs {} (a link to {}); `ply deploy` keeps it pointed at the deployed image",
+            image.display(),
+            args.image.display()
+        );
+    }
     print!(
         "{}",
-        lifecycle::systemd_unit(&args.image, &flags, &args.after, args.user)?
+        lifecycle::systemd_unit(&image, &flags, &args.after, args.user)?
     );
     Ok(())
 }

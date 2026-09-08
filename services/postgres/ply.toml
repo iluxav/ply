@@ -17,7 +17,7 @@
 
 [package]
 name = "postgres"
-version = "17.10.7"
+version = "17.10.8"
 owner = "ply"
 description = "PostgreSQL relational database (docker-library env contract)"
 license = "PostgreSQL"
@@ -74,6 +74,11 @@ password = { secret = true }                                        # minted per
 url      = "postgres://{user}:{password}@{host}:{port}/{database}"  # computed — interpolates others
 
 [env]                                  # the provider configures ITSELF from the same namespace
+# The server's socket is in /tmp (run.sh: no /var/run/postgresql on a
+# read-only rootfs). libpq looks in /var/run/postgresql, so `ply exec
+# postgres psql` failed on the first thing anyone types after the database
+# comes up. Exec'd commands inherit this env, so this is the fix.
+PGHOST = "/tmp"
 POSTGRES_USER     = "{user}"
 POSTGRES_DB       = "{database}"
 POSTGRES_PASSWORD = "{password}"

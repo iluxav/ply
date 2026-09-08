@@ -208,12 +208,22 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
             .flatten()
             .map(|mirror| pool.mirror(mirror))
             .is_some();
+        // `0.0.0.0` means every interface, and a newcomer does not read it
+        // that way — on a VPS a bare `--publish 5432` is the database on the
+        // internet on day one. The address was always printed; now the
+        // consequence is.
+        let public = spec.scope.bind_addr(facts.loopback).is_unspecified();
         eprintln!(
-            "ply: publishing {}:{} → {} pool{}",
+            "ply: publishing {}:{} → {} pool{}{}",
             spec.scope.bind_addr(facts.loopback),
             spec.host_port,
             ctx.manifest.package.name,
             if kernel { " (kernel dnat)" } else { "" },
+            if public {
+                " — public, every interface (127.0.0.1:PORT or internal:PORT keeps it private)"
+            } else {
+                ""
+            },
         );
         publishing.push(PublishWiring {
             pool,
@@ -254,6 +264,15 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                 );
             }
         }
+    }
+
+    // Rootless, every instance shares this run's one namespace. With the
+    // instance port pinned (`--publish 8081:8000`) no per-instance PORT is
+    // handed out, so all of them bind 8000: the second exits 98 and
+    // restarts forever, and `ply deploy` reports "1 instance(s)" with no
+    // hint why. There is no working configuration here, so refuse.
+    if let Some(reason) = rootless_scale_collision(!net.alone, opts.scale, opts.publish.first()) {
+        return Err(Error::Runtime(reason));
     }
 
     // --after: block until the named conditions hold. Placed after
@@ -1699,6 +1718,28 @@ fn stop_instance(mut instance: Running, stop_signal: Signal) {
 
 /// The deploy health gate. With [health] port: TCP connect within grace.
 /// Without: the process just has to be alive after a short settle.
+/// Why a rootless `--scale N` with an explicit instance port cannot work,
+/// or `None` when the run is fine. Pure, so the rule is testable without a
+/// namespace.
+fn rootless_scale_collision(
+    shared_namespace: bool,
+    scale: u32,
+    first: Option<&crate::runtime::publish::Publish>,
+) -> Option<String> {
+    let first = first?;
+    if !shared_namespace || scale <= 1 || !first.instance_port_explicit {
+        return None;
+    }
+    Some(format!(
+        "rootless --scale {scale}: all {scale} instances share this run's network namespace, and \
+         `--publish {host}:{inst}` pins every one of them to port {inst} — they would collide (the \
+         second exits 98 and restarts forever). Publish the host port alone (`--publish {host}`) so \
+         each instance is handed its own PORT, or run rootful.",
+        host = first.host_port,
+        inst = first.instance_port,
+    ))
+}
+
 fn wait_healthy(ctx: &AppContext, instance: &Running) -> bool {
     let (port, grace) = match &ctx.manifest.health {
         Some(health) => (
@@ -1778,6 +1819,9 @@ pub struct AppContext {
     pub entrypoint: Vec<String>,
     pub env: Vec<(String, String)>,
     pub image: PathBuf,
+    /// The path this app was started with, absolute but with symlinks left
+    /// alone — see `InstanceState::launch_path`.
+    pub launch_path: PathBuf,
     pub dep_images: Vec<PathBuf>,
     /// The effective egress contract for this version of the app, decided by
     /// the supervisor right after the manifest is read (see
@@ -2000,6 +2044,7 @@ fn prepare_app(
         // symlinks resolved: instance state must record the file that is
         // actually running, not a pointer that may move under it
         image: std::fs::canonicalize(image).unwrap_or_else(|_| image.to_path_buf()),
+        launch_path: std::path::absolute(image).unwrap_or_else(|_| image.to_path_buf()),
         dep_images,
         manifest,
         // Decided by the caller, which knows the override and the host's
@@ -2580,6 +2625,7 @@ fn launch_instance(
             ip,
             ports: manifest.ports.clone(),
             image: ctx.image.display().to_string(),
+            launch_path: Some(ctx.launch_path.display().to_string()),
             started,
             restarts,
             // Rootless --publish moves the app: ply injects a per-instance
@@ -2760,6 +2806,24 @@ mod health_port_tests {
             (Some(injected), Some(_)) => Some(injected),
             (_, declared) => declared,
         }
+    }
+
+    #[test]
+    fn rootless_scale_with_a_pinned_instance_port_is_refused_and_says_what_to_do() {
+        use super::rootless_scale_collision;
+        use crate::runtime::publish::parse_publish;
+        let pinned = parse_publish("127.0.0.1:8081:8000").unwrap();
+        let free = parse_publish("8081").unwrap();
+        // The collision case, with the fix spelled out.
+        let why = rootless_scale_collision(true, 2, Some(&pinned)).expect("refused");
+        assert!(why.contains("--publish 8081`"), "{why}");
+        assert!(why.contains("8000"), "{why}");
+        // Everything else is fine: one instance, a free instance port, a
+        // rootful run with real per-instance addresses, nothing published.
+        assert!(rootless_scale_collision(true, 1, Some(&pinned)).is_none());
+        assert!(rootless_scale_collision(true, 3, Some(&free)).is_none());
+        assert!(rootless_scale_collision(false, 3, Some(&pinned)).is_none());
+        assert!(rootless_scale_collision(true, 3, None).is_none());
     }
 
     #[test]

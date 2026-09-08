@@ -8,7 +8,9 @@ order: 14.5
 # Deployments & CD
 
 A deployment is a TOML file in `/var/lib/ply/deployments/`. Drop one in and
-the app runs; edit it and the app converges; delete it and the app stops.
+the app runs; edit it and the app converges; delete it and the app stops —
+once the watcher is installed (`sudo ply setup --edge` puts in a timer and
+a path unit). `ply reconcile` run by hand is one pass, and says so.
 systemd's inotify watches the directory, a oneshot `ply reconcile` does the
 converging, and a timer re-runs it once a minute so *follow-latest*
 deployments update themselves. There is no daemon, no agent, no webhook

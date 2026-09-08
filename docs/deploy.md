@@ -141,6 +141,13 @@ ply systemd myapp.img --scale 4 --publish 80:3000 \
 sudo systemctl enable --now ply-myapp
 ```
 
+The unit does not name the image file: `ply systemd` makes a `current.img`
+link beside it and the unit runs that. Every later `ply deploy` re-points
+the link after its roll succeeds, so a unit restart or a reboot comes back
+on the version you deployed — not on the file the unit was written with.
+`ply deploy` says when it re-pointed a link, and notes when an app was
+started from a plain path that a restart would revert to.
+
 ## Continuous deployment
 
 The page above is the push side: `ply deploy` rolls whatever you hand it,

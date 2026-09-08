@@ -219,7 +219,9 @@ The two modes differ in who picks the instance-side port:
   single namespace fighting for that port, so ply gives each its own loopback
   port and injects it as `PORT`, **overriding manifest and `-e` values** — a
   bare `--publish 3100` always lines up, provided the app honors `PORT`. Pin
-  the port with `--publish 3100:3000` to opt out of the injection entirely.
+  the port with `--publish 3100:3000` to opt out of the injection entirely —
+  with `--scale` above one, ply refuses that form, because the instances
+  share one namespace and would all bind 3000.
 - **Rootful** — instances bind whatever the app decides on their bridge
   IPs; tell the parent where the backends are with `HOST:INSTANCE`
   (`--publish 80:3000` for an app serving :3000), or align the app with

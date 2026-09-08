@@ -233,11 +233,18 @@ pub fn build(opts: &BuildOptions) -> Result<BuildOutcome> {
         )));
     }
     if include.is_empty() {
-        eprintln!(
-            "ply: packing {packed_files} files ({}) — no `include` in ply.toml, so everything in {} ships",
-            human_bytes(packed_bytes),
-            opts.dir.display()
-        );
+        if packed_files == 0 {
+            eprintln!(
+                "ply: packing nothing — {} holds only ply.toml (no `include`, so anything added later ships)",
+                opts.dir.display()
+            );
+        } else {
+            eprintln!(
+                "ply: packing {packed_files} files ({}) — no `include` in ply.toml, so everything in {} ships",
+                human_bytes(packed_bytes),
+                opts.dir.display()
+            );
+        }
     }
 
     let prefix = if manifest.package.is_base() {

@@ -196,6 +196,19 @@ pub fn exec(args: crate::cli::ReconcileArgs) -> Result<()> {
     if changed_units {
         run("systemctl", &["daemon-reload"])?;
     }
+    // This was one pass. The docs promise that a touched file deploys and a
+    // deleted one retires its app "within a minute" — that is the watcher
+    // unit's promise, and a plain install has no watcher. Say so here,
+    // where the person who just ran this by hand is looking; the audit
+    // found a removed deployment still serving after 100 s for exactly
+    // this reason.
+    if !Path::new(UNIT_DIR).join("ply-reconcile.timer").exists() {
+        eprintln!(
+            "ply: one reconcile pass done — nothing keeps converging until the watcher is \
+             installed: `sudo ply setup --edge` (then a touched deployment file deploys and a \
+             deleted one retires its app within a minute)"
+        );
+    }
     Ok(())
 }
 

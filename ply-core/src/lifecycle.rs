@@ -1,7 +1,7 @@
 //! Day-2 verbs: gc, rm, sync, systemd emit, audit, outdated.
 
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::apps::{self, AppRecord};
 use crate::error::{Error, Result};
@@ -146,6 +146,109 @@ pub struct DeployReport {
     pub parents: usize,
     pub rolled: Vec<String>,
     pub complete: bool,
+    /// `current.img` links the app was started from, now pointing at the
+    /// deployed image — so whatever restarts the app brings this version
+    /// back, not the one the link used to name.
+    pub relinked: Vec<PathBuf>,
+    /// Launch paths that are NOT such links and name a different image: a
+    /// restart of that run would revert the deploy, and the person should
+    /// hear it now rather than after the reboot.
+    pub notes: Vec<String>,
+}
+
+/// The path a supervised app should be started from: a `current.img` link
+/// beside the image, pointing at it. `ply systemd` emits this path into
+/// the unit and `ply deploy` re-points the link after a successful roll —
+/// so a unit restart, or a reboot, comes back on the version that was
+/// deployed, not the file the unit was written with.
+///
+/// Measured before this existed: deploy v2 to both instances, `systemctl
+/// restart`, and the next answer was v1. The DigitalOcean guide avoided it
+/// only because its CI action shipped to a `current.img` by hand.
+///
+/// An image already named `current.img` is returned as is; a directory
+/// that cannot take the link falls back to the literal path, which is the
+/// old behaviour and still runs.
+pub fn stable_image_link(image: &Path) -> Result<PathBuf> {
+    let abs = std::path::absolute(image).map_err(|source| Error::Io {
+        path: image.to_path_buf(),
+        source,
+    })?;
+    if abs.file_name() == Some(std::ffi::OsStr::new(STABLE_LINK)) {
+        return Ok(abs);
+    }
+    let link = abs
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(STABLE_LINK);
+    match point_link(&link, &abs) {
+        Ok(()) => Ok(link),
+        Err(_) => Ok(abs),
+    }
+}
+
+pub const STABLE_LINK: &str = "current.img";
+
+/// Point `link` at `target`, atomically: a fresh link renamed over the old
+/// one, so a unit starting at that instant sees one image or the other and
+/// never a missing file.
+fn point_link(link: &Path, target: &Path) -> std::io::Result<()> {
+    let tmp = link.with_file_name(format!(".{STABLE_LINK}.{}", std::process::id()));
+    let _ = std::fs::remove_file(&tmp);
+    std::os::unix::fs::symlink(target, &tmp)?;
+    std::fs::rename(&tmp, link)
+}
+
+/// Is this path a `current.img` link?
+fn is_stable_link(path: &Path) -> bool {
+    path.file_name() == Some(std::ffi::OsStr::new(STABLE_LINK))
+        && path
+            .symlink_metadata()
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false)
+}
+
+/// After a roll: every `current.img` link the app was started from now
+/// names the deployed image; every other absolute launch path that names a
+/// different image becomes a note. Relative launch paths are a foreground
+/// `ply run` in some other directory — nothing restarts those, and this
+/// process cannot resolve them anyway.
+fn relink_after_roll(
+    app: &str,
+    launch_images: &BTreeSet<String>,
+    deployed: &Path,
+) -> (Vec<PathBuf>, Vec<String>) {
+    let mut relinked = Vec::new();
+    let mut notes = Vec::new();
+    for launched in launch_images {
+        let path = Path::new(launched);
+        if !path.is_absolute() {
+            continue;
+        }
+        let resolved = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        if resolved == deployed {
+            continue;
+        }
+        if is_stable_link(path) {
+            match point_link(path, deployed) {
+                Ok(()) => relinked.push(path.to_path_buf()),
+                Err(e) => notes.push(format!(
+                    "could not point {} at the deployed image ({e}) — a restart of {app} would \
+                     bring back {}",
+                    path.display(),
+                    resolved.display()
+                )),
+            }
+        } else {
+            notes.push(format!(
+                "{app} was started from {launched}, and whatever restarts it — a systemd unit, a \
+                 reboot — would bring that version back, not this one. Start it from a `current.img` \
+                 link instead: `ply systemd <image>` emits one, and `ply deploy` keeps it pointed at \
+                 the deployed image"
+            ));
+        }
+    }
+    (relinked, notes)
 }
 
 pub fn deploy(image: &Path, timeout_secs: u64) -> Result<DeployReport> {
@@ -166,10 +269,20 @@ pub fn deploy(image: &Path, timeout_secs: u64) -> Result<DeployReport> {
         }
     }
 
-    // Find the app's run parents.
+    // Find the app's run parents — and what they were started from, which
+    // is what a restart would bring back (see `relink_after_roll`).
     let mut parents: BTreeSet<i32> = BTreeSet::new();
+    let mut launch_images: BTreeSet<String> = BTreeSet::new();
     for instance in state::list()? {
         if instance.app == app && instance.alive() {
+            // The path it was STARTED with: a `current.img` link stays a
+            // link here, where `image` has it resolved away.
+            launch_images.insert(
+                instance
+                    .launch_path
+                    .clone()
+                    .unwrap_or_else(|| instance.image.clone()),
+            );
             if let Some(ppid) = parent_pid(instance.pid) {
                 if ppid > 1 {
                     parents.insert(ppid);
@@ -253,11 +366,14 @@ pub fn deploy(image: &Path, timeout_secs: u64) -> Result<DeployReport> {
                 }),
             };
             if switched {
+                let (relinked, notes) = relink_after_roll(&app, &launch_images, &image_abs);
                 return Ok(DeployReport {
                     app,
                     parents: 1,
                     rolled: vec![format!("(asleep — the next wake runs {want})")],
                     complete: true,
+                    relinked,
+                    notes,
                 });
             }
             if std::time::Instant::now() >= deadline {
@@ -266,6 +382,8 @@ pub fn deploy(image: &Path, timeout_secs: u64) -> Result<DeployReport> {
                     parents: 1,
                     rolled: Vec::new(),
                     complete: false,
+                    relinked: Vec::new(),
+                    notes: Vec::new(),
                 });
             }
             std::thread::sleep(std::time::Duration::from_millis(200));
@@ -288,11 +406,14 @@ pub fn deploy(image: &Path, timeout_secs: u64) -> Result<DeployReport> {
             }
         }
         if all && rolled.len() >= expected {
+            let (relinked, notes) = relink_after_roll(&app, &launch_images, &image_abs);
             return Ok(DeployReport {
                 app,
                 parents: parents.len(),
                 rolled: rolled.into_iter().collect(),
                 complete: true,
+                relinked,
+                notes,
             });
         }
         if std::time::Instant::now() >= deadline {
@@ -301,6 +422,8 @@ pub fn deploy(image: &Path, timeout_secs: u64) -> Result<DeployReport> {
                 parents: parents.len(),
                 rolled: rolled.into_iter().collect(),
                 complete: false,
+                relinked: Vec::new(),
+                notes: Vec::new(),
             });
         }
         std::thread::sleep(std::time::Duration::from_millis(300));
@@ -802,5 +925,47 @@ mod tests {
             "{unit}"
         );
         assert!(!unit.contains("--user"), "{unit}");
+    }
+
+    #[test]
+    fn a_stable_link_is_made_beside_the_image_and_re_pointed_by_a_deploy() {
+        let dir = tempfile::tempdir().unwrap();
+        let v1 = dir.path().join("web-0.1.0-linux-x64.img");
+        let v2 = dir.path().join("web-0.2.0-linux-x64.img");
+        std::fs::write(&v1, b"one").unwrap();
+        std::fs::write(&v2, b"two").unwrap();
+
+        // `ply systemd` asks for the stable path: a current.img beside v1.
+        let link = stable_image_link(&v1).unwrap();
+        assert_eq!(link, dir.path().join(STABLE_LINK));
+        assert_eq!(std::fs::read(&link).unwrap(), b"one");
+        // Asking for the link itself hands it back unchanged.
+        assert_eq!(stable_image_link(&link).unwrap(), link);
+
+        // The app ran from the link; a deploy of v2 re-points it, and says
+        // nothing about a launch path that already is the deployed image.
+        let launched: BTreeSet<String> = [link.display().to_string()].into();
+        let (relinked, notes) = relink_after_roll("web", &launched, &v2);
+        assert_eq!(relinked, vec![link.clone()]);
+        assert!(notes.is_empty(), "{notes:?}");
+        assert_eq!(std::fs::read(&link).unwrap(), b"two");
+
+        // A literal launch path is the case that reverts on restart: noted,
+        // never rewritten (it is a file, not a link).
+        let launched: BTreeSet<String> = [v1.display().to_string()].into();
+        let (relinked, notes) = relink_after_roll("web", &launched, &v2);
+        assert!(relinked.is_empty());
+        assert_eq!(notes.len(), 1);
+        assert!(
+            notes[0].contains("would bring that version back"),
+            "{}",
+            notes[0]
+        );
+        assert_eq!(std::fs::read(&v1).unwrap(), b"one", "the file is untouched");
+
+        // A relative launch path is a foreground run somewhere else: silence.
+        let launched: BTreeSet<String> = ["web-0.1.0-linux-x64.img".to_string()].into();
+        let (relinked, notes) = relink_after_roll("web", &launched, &v2);
+        assert!(relinked.is_empty() && notes.is_empty());
     }
 }

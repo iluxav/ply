@@ -158,9 +158,11 @@ pub fn exec(args: RunArgs) -> Result<()> {
                 }
                 Err(NotInferable::RuntimeMissing { evidence, package }) => bail!(
                     "{} has no ply.toml; it looks like a project with {evidence}, which needs \
-                     `{package}`, and the registry does not carry that runtime yet — write a \
-                     ply.toml (`ply init`, then edit) with a runtime you vendor yourself, see \
-                     https://plybox.sh/docs/manifest/",
+                     `{package}`, and the registry does not carry that runtime. Two ways that work \
+                     today: build the app here and ship the binary — a static build needs no runtime \
+                     keg (a ply.toml with `entrypoint = [\"./myapp\"]` and `include = [\"myapp\"]`, \
+                     see https://plybox.sh/docs/manifest/) — or run a Docker image of it: \
+                     `ply import docker://<image>`",
                     dir.display()
                 ),
             }

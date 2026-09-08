@@ -75,6 +75,14 @@ pub struct InstanceState {
     /// has to keep meaning.
     #[serde(default = "yes")]
     pub serving: bool,
+    /// The path the run parent was STARTED with, before symlinks were
+    /// resolved — `image` above is what actually runs. They differ exactly
+    /// when the app was started from a `current.img` link, and that is the
+    /// case `ply deploy` needs to see: it re-points the link after a roll so
+    /// a restart brings back the deployed version. Absent in state files
+    /// from before this field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_path: Option<String>,
 }
 
 fn yes() -> bool {

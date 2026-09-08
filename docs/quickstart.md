@@ -13,9 +13,11 @@ order: 1
 curl -fsSL https://plybox.sh/install.sh | sh
 ```
 
-As root it installs `/usr/local/bin/ply` and prepares the host. As a regular
-user it installs to `~/.local/bin/ply` and tells you if a one-time
-`sudo ply setup` is needed (it usually is, for networking and the store).
+As root, or as a user who can `sudo`, it installs one system-wide
+`/usr/local/bin/ply` and prepares the host itself (AppArmor profile,
+subuid range, the user-mode router rootless instances need for outbound
+network). Only a user with no `sudo` at all gets `~/.local/bin/ply` and a
+note about the one-time `sudo ply setup`.
 
 ## Write a manifest
 
@@ -74,7 +76,8 @@ read-only rootfs — secure by default, no flags needed.
 Useful variations:
 
 ```sh
-ply run --scale 3 app.img          # three identical instances, each with its own IP
+ply run --scale 3 app.img          # three identical instances (rootful: each with its own IP;
+                                   # rootless they share one network, each is handed its own PORT)
 ply run -e KEY=value app.img       # environment overrides
 ply run --env-file .env app.img    # secrets stay out of the image
 ply run --link ./src:/opt/app app.img   # dev mode: bind-mount live code
@@ -84,8 +87,12 @@ Need a database next to it? Prebuilt services run by name — no manifest,
 no build ([Databases & services](/docs/services/)):
 
 ```sh
-ply run postgres@17 -e POSTGRES_PASSWORD=dev -e POSTGRES_DB=todos
+ply run postgres@17 -e POSTGRES_PASSWORD=dev -e POSTGRES_DB=todos --publish internal:5432
 ```
+
+`--publish internal:5432` is what makes it reachable from your app on this
+host (`[ports]` in a manifest are labels, not host bindings; rootless, an
+instance has no address anyone can dial until something is published).
 
 And when the project is db + server + web, one `[stack]` file starts them
 all in order: [`ply up`](/docs/stacks/).

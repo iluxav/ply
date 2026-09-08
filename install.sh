@@ -102,6 +102,12 @@ else
         *":$HOME/.local/bin:"*) ;;
         *) echo "note: add ~/.local/bin to your PATH" ;;
     esac
+    # An older system-wide copy earlier on PATH wins over this one, and
+    # `ply --version` then looks like the install did nothing.
+    if [ -x /usr/local/bin/ply ]; then
+        echo "! /usr/local/bin/ply ($(/usr/local/bin/ply --version 2>/dev/null)) comes first on your PATH and shadows this copy —"
+        echo "  update it instead:  sudo ply self-update      (or remove it)"
+    fi
     # rootless containers need one-time host prep only on restricted kernels
     if [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null)" = "1" ] \
         && [ ! -f /etc/apparmor.d/ply ]; then

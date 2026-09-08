@@ -5,6 +5,45 @@ breaking changes, and known limitations. Write under **Unreleased** as work
 lands; `make release-cli` turns that heading into the version and date, and
 the release workflow publishes the entry as the GitHub release notes.
 
+## Unreleased
+
+Everything below came out of a first-hour audit on a fresh Ubuntu 24.04
+server, following the docs literally.
+
+### Fixes
+- **A restart no longer reverts a deploy.** `ply systemd` ran the app from
+  the image's own path, so after `ply deploy` rolled to a new version a
+  unit restart or a reboot came back on the old one, silently. The unit
+  now runs a `current.img` link beside the image, and `ply deploy`
+  re-points it once the roll succeeds; it also notes when an app was
+  started from a plain path that a restart would revert to.
+- **Rootless `--scale N` with a pinned instance port is refused** with the
+  fix spelled out. The instances share one network namespace, so
+  `--publish 8081:8000 --scale 2` made the second bind the same port,
+  exit 98 and restart forever, while `ply deploy` reported "1 instance(s)"
+  with no hint why.
+- `ply reconcile` run by hand says that it was one pass, and that nothing
+  keeps converging until the watcher is installed (`sudo ply setup
+  --edge`). The docs promised "delete the file and the app stops"; on a
+  plain install it kept serving.
+- `ply setup` installs `passt` itself when apt or dnf is there, instead
+  of telling you to, and every rootless run nagging until you did.
+- `ply ps` shows the address callers can dial: the published address when
+  there is one, a dash for a rootless instance nobody can reach. It showed
+  `127.0.0.1` next to `db:5432` for one, which a newcomer connects to and
+  cannot. As a user it also says that root's instances need `sudo ply ps`.
+- `ply exec postgres psql` works: the app image sets `PGHOST=/tmp`, where
+  its socket is (`ply/postgres@17.10.8`).
+- The publishing line says when a port is public, every interface, and
+  how to keep it private. A bare `--publish 8080` still binds `0.0.0.0` —
+  changing that default would turn every existing unit's public port
+  private on upgrade.
+- A Rust project the registry cannot serve is told the two ways that work
+  today (ship a static binary; `ply import docker://`).
+- The quickstart's install paragraph matches the installer; its Postgres
+  line publishes the port so an app can reach it; the installer warns when
+  a root-owned copy earlier on PATH will shadow a user install.
+
 ## v0.1.84 — 2026-09-08
 
 ### Fixes

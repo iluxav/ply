@@ -360,7 +360,7 @@ WantedBy=multi-user.target
 
         // Outbound network for rootless instances is a user-mode router;
         // without one an app still serves, but cannot reach anything.
-        if !which("pasta") && !which("slirp4netns") {
+        if !which("pasta") && !which("slirp4netns") && !install_router() {
             println!(
                 "todo: no user-mode router — rootless instances get no outbound network (they still\n      \
                  serve their ports and reach each other). Rootful is unaffected.\n      \
@@ -391,6 +391,37 @@ WantedBy=multi-user.target
             .map(|l| l.split(':').collect::<Vec<_>>())
             .find(|f| f.len() > 3 && f[0] == name)
             .and_then(|f| Some((name.clone(), f[2].parse().ok()?, f[3].parse().ok()?)))
+    }
+
+    /// Install `passt` with the host's package manager, when there is one
+    /// and this process is root — which `ply setup` is. The audit found the
+    /// installer printing "fix: sudo apt install passt" at the one moment it
+    /// held sudo and apt, and every rootless run nagging until the person
+    /// did it by hand; the install takes three seconds.
+    fn install_router() -> bool {
+        let attempts: &[(&str, &[&str])] = &[
+            ("apt-get", &["install", "-y", "-qq", "passt"]),
+            ("dnf", &["install", "-y", "-q", "passt"]),
+        ];
+        for (tool, args) in attempts {
+            if !which(tool) {
+                continue;
+            }
+            println!("installing passt (the user-mode router rootless instances need for outbound network) …");
+            let ok = std::process::Command::new(tool)
+                .args(*args)
+                .env("DEBIAN_FRONTEND", "noninteractive")
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+            if ok && (which("pasta") || which("slirp4netns")) {
+                println!("ok: passt installed — rootless instances have outbound network");
+                return true;
+            }
+            println!("could not install passt with {tool}");
+            return false;
+        }
+        false
     }
 
     fn which(tool: &str) -> bool {

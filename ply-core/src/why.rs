@@ -455,6 +455,7 @@ mod tests {
             domains: vec![],
             network: None,
             serving: true,
+            launch_path: None,
         }];
         let r = build("web", 1_000_600, &states, &[], &[], None, None, |_| vec![]);
         assert_eq!(r.status.instances.len(), 1);
