@@ -80,7 +80,7 @@ forms:
 
 ```sh
 ply run app-1.0.0-linux-x64.img    # an image file
-ply run .                          # an app dir: build (skipped when unchanged), run;
+ply run .                          # an app dir: build (skipped when unchanged), run; no ply.toml → inferred, shown, not written;
                                    #   applies ply.dev.toml if present
 ply run postgres@17                # a registry name — newest matching version,
                                    #   fetched and cached (see Databases & services)

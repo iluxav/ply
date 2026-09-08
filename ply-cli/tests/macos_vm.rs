@@ -1252,3 +1252,64 @@ port = 7777
         run.output()
     );
 }
+
+/// `ply run DIR` on a directory that has no ply.toml: the manifest is
+/// inferred from the package.json, printed, built and run, and the
+/// directory is left without a ply.toml or a ply.lock the person did not
+/// write.
+#[test]
+fn a_directory_without_a_manifest_runs_from_what_is_inferred() {
+    use std::io::Read;
+    let Some(kernel) = kernel() else { return };
+    let scratch = Scratch::new("infer");
+    let dir = scratch.app_dir();
+    std::fs::write(
+        dir.join("package.json"),
+        r#"{ "name": "inferred-node", "main": "server.js" }"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("server.js"),
+        r#"require("net").createServer((c) => { c.end("hello from an inferred app\n"); }).listen(7777, "0.0.0.0", () => console.log("listening"));"#,
+    )
+    .unwrap();
+    let port = free_host_port();
+    let run = Background::start(
+        &scratch,
+        &kernel,
+        &dir,
+        &["--publish", &format!("127.0.0.1:{port}:7777")],
+    );
+    let greeting = within(
+        "the inferred app answered",
+        90,
+        || run.output(),
+        || {
+            let mut conn = std::net::TcpStream::connect_timeout(
+                &([127, 0, 0, 1], port).into(),
+                std::time::Duration::from_secs(1),
+            )
+            .ok()?;
+            conn.set_read_timeout(Some(std::time::Duration::from_secs(3)))
+                .ok()?;
+            let mut got = String::new();
+            conn.read_to_string(&mut got).ok()?;
+            (!got.is_empty()).then_some(got)
+        },
+    );
+    assert_eq!(greeting.trim(), "hello from an inferred app");
+    let out = run.output();
+    assert!(
+        out.contains("has no ply.toml — running with one inferred from a package.json"),
+        "{out}"
+    );
+    assert!(
+        out.contains("entrypoint = [\"node\", \"server.js\"]"),
+        "{out}"
+    );
+    assert!(
+        !dir.join("ply.toml").exists(),
+        "nothing written for the person"
+    );
+    assert!(!dir.join("ply.lock").exists(), "no lock either");
+}

@@ -1264,6 +1264,7 @@ fn build_from_repo(name: &str, spec: &Spec) -> Result<(PathBuf, String, bool)> {
             // CD lanes are non-interactive: a repo that carries a .env
             // must fail loudly, never ship it.
             allow_secrets: false,
+            manifest: None,
         })
         .context("building the builder image")?;
 
@@ -1364,6 +1365,7 @@ fn build_from_repo(name: &str, spec: &Spec) -> Result<(PathBuf, String, bool)> {
         // CD lanes are non-interactive: a repo that carries a .env
         // must fail loudly, never ship it.
         allow_secrets: false,
+        manifest: None,
     })
     .context("packing the app image")?;
     // same path every build — remember the digest so a new commit forces a

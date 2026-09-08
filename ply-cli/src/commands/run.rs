@@ -132,33 +132,88 @@ pub fn exec(args: RunArgs) -> Result<()> {
                 dir.join("ply.toml").display()
             );
         }
-        if !dir.join("ply.toml").exists() {
-            bail!(
-                "{} has no ply.toml — `ply run DIR` builds and runs an app directory",
-                dir.display()
-            );
-        }
-        let image = match ply_core::build::up_to_date_image(&dir, None)? {
-            Some(image) => {
-                eprintln!(
-                    "ply: {} up to date",
-                    image.file_name().unwrap_or_default().to_string_lossy()
-                );
-                image
+        // No manifest: infer one the way `ply init -y` would, say so, and
+        // run it — without writing into the directory. The person sees the
+        // whole manifest, because a wrong entrypoint or port is otherwise a
+        // failure with nothing to point at.
+        let inferred = if dir.join("ply.toml").exists() {
+            None
+        } else {
+            use crate::commands::init::{infer, NotInferable};
+            match infer(&dir) {
+                Ok(inferred) => Some(inferred),
+                Err(NotInferable::Unrecognised { dockerfile }) => {
+                    let hint = if dockerfile {
+                        "there is a Dockerfile: `ply import docker://<image>` runs a built image, \
+                         or write a ply.toml for the app itself"
+                    } else {
+                        "write one with `ply init`"
+                    };
+                    bail!(
+                        "{} has no ply.toml, and nothing in it looks like a project ply knows \
+                         (package.json, go.mod, requirements.txt, Cargo.toml, Gemfile, deno.json, \
+                         a bun lockfile) — {hint}",
+                        dir.display()
+                    );
+                }
+                Err(NotInferable::RuntimeMissing { evidence, package }) => bail!(
+                    "{} has no ply.toml; it looks like a project with {evidence}, which needs \
+                     `{package}`, and the registry does not carry that runtime yet — write a \
+                     ply.toml (`ply init`, then edit) with a runtime you vendor yourself, see \
+                     https://plybox.sh/docs/manifest/",
+                    dir.display()
+                ),
             }
-            None => {
+        };
+        let image = match &inferred {
+            Some(inferred) => {
+                eprintln!(
+                    "ply: {} has no ply.toml — running with one inferred from {}:",
+                    dir.display(),
+                    inferred.evidence
+                );
+                for line in inferred
+                    .text
+                    .lines()
+                    .filter(|l| !l.trim().is_empty() && !l.trim_start().starts_with('#'))
+                {
+                    eprintln!("ply:     {line}");
+                }
+                eprintln!("ply: `ply init -y` writes it, and edits it into what you mean");
                 let outcome = ply_core::build::build(&ply_core::build::BuildOptions {
                     dir: dir.clone(),
                     output: None,
                     allow_insecure: false,
                     arch: None,
-                    // CD lanes are non-interactive: a repo that carries a .env
-                    // must fail loudly, never ship it.
                     allow_secrets: false,
+                    manifest: Some(inferred.text.clone()),
                 })?;
                 eprintln!("ply: built {}", outcome.image_name);
                 outcome.image_path
             }
+            None => match ply_core::build::up_to_date_image(&dir, None)? {
+                Some(image) => {
+                    eprintln!(
+                        "ply: {} up to date",
+                        image.file_name().unwrap_or_default().to_string_lossy()
+                    );
+                    image
+                }
+                None => {
+                    let outcome = ply_core::build::build(&ply_core::build::BuildOptions {
+                        dir: dir.clone(),
+                        output: None,
+                        allow_insecure: false,
+                        arch: None,
+                        // CD lanes are non-interactive: a repo that carries a .env
+                        // must fail loudly, never ship it.
+                        allow_secrets: false,
+                        manifest: None,
+                    })?;
+                    eprintln!("ply: built {}", outcome.image_name);
+                    outcome.image_path
+                }
+            },
         };
         // The dev overlay applies only on the DIR form: it belongs to the
         // working tree, not the artifact — plain image runs stay pristine.

@@ -19,7 +19,7 @@ user it installs to `~/.local/bin/ply` and tells you if a one-time
 
 ## Write a manifest
 
-A ply app is a directory with a `ply.toml`. `ply init` writes it for you
+A ply app is a directory with a `ply.toml`. Without one, `ply run .` infers a manifest from what is in the directory (a `package.json`, a `go.mod`, a `requirements.txt`) and shows it before running; `ply init -y` writes that same manifest down. `ply init` writes it for you
 (it detects Python/Node projects and asks a few questions); `ply add node`
 adds a dependency at its latest version. By hand, it is:
 

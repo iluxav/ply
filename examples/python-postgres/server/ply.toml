@@ -6,11 +6,8 @@ entrypoint = ["python3", "server.py"]
 include = ["server.py"]
 
 [dependencies]
-# The public registry has no Python yet, so these two come from `local`:
-# kegs converted from Debian with the repo's deb2pkg — see README.md.
-# Once they are published, drop `source = "local"` and the [sources] alias.
-python3 = { source = "local", version = "3.13" }
-python3-psycopg2 = { source = "local", version = "2.9.10" }   # exact: its keg path is spelled out in [env] below
+python3 = "3.13"
+python3-psycopg2 = "2.9.10"     # exact: its keg path is spelled out in [env] below
 
 [env]
 # A dependency is its own keg under /opt/<name>-<version>; python3 only
@@ -28,4 +25,3 @@ grace = "15s"
 
 [sources]
 default = "https://registry.plybox.sh/ply/{package}"
-local = "file://../../out/pkgs/{package}"        # relative to where `ply up` runs: this example's directory

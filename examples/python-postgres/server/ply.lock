@@ -2,13 +2,13 @@
 [[package]]
 name = "python3-psycopg2"
 version = "2.9.10"
-source = "file://../../out/pkgs/{package}"
+source = "https://registry.plybox.sh/ply/{package}"
 sha256 = "sha256:29a209bc7eff40815e0af8bb273fa0c8d04b202167c2290a702e112cd40a5936"
 
 [[package]]
 name = "python3"
 version = "3.13.5"
-source = "file://../../out/pkgs/{package}"
+source = "https://registry.plybox.sh/ply/{package}"
 sha256 = "sha256:e02a392fe36e80c4bae543f4025c118e6f0143c906d3476bca1b1f5f073bddc2"
 
 [[package]]

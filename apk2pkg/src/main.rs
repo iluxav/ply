@@ -248,6 +248,7 @@ fn main() -> Result<()> {
             "arm64" => Some(ply_core::image::name::Arch::Arm64),
             _ => Some(ply_core::image::name::Arch::X64),
         },
+        manifest: None,
     })?;
     println!(
         "built {} ({:.1} MiB)",

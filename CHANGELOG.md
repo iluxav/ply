@@ -5,6 +5,25 @@ breaking changes, and known limitations. Write under **Unreleased** as work
 lands; `make release-cli` turns that heading into the version and date, and
 the release workflow publishes the entry as the GitHub release notes.
 
+## Unreleased
+
+### What changed
+- **`ply run .` needs no ply.toml.** A directory without a manifest is run
+  with the one `ply init -y` would have written: ply says what it inferred
+  it from (a package.json, a go.mod, a manage.py), prints the whole manifest,
+  builds and runs it, and writes nothing into the directory. `ply init -y`
+  keeps it. A directory nothing is recognised in says so and points at
+  `ply init` (or `ply import` when there is a Dockerfile); a project whose
+  runtime the registry does not carry yet is refused up front, naming the
+  package, instead of failing at build time.
+- **The detector knows more projects.** Go (`go.mod` → `go run .`, with the
+  toolchain as a dependency and the build directory inside the app's own
+  prefix, since `/tmp` is noexec), Django (`manage.py runserver` on 8000),
+  Flask (port 5000), Rust, Ruby, Deno and Bun. `ply init` prefills the same.
+- **The registry carries `python3` 3.13 and `go` 1.24**, on both
+  architectures, plus `python3-psycopg2` 2.9. The python-postgres example
+  now resolves them from the registry instead of a local source.
+
 ## v0.1.79 — 2026-09-08
 
 ### What changed

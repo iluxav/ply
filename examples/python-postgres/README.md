@@ -3,21 +3,7 @@
 A two-member [stack](https://plybox.sh/docs/stacks/): the registry's prebuilt
 Postgres and a Python HTTP server that records every visit in it.
 
-**Once, before the first run:** the public registry does not carry Python
-yet, so the server's two dependencies are converted from Debian trixie into
-`out/pkgs/` at the repository root, with the repo's own `deb2pkg`
-(`--arch x64` on an x86_64 host):
-
-```sh
-cargo build --release -p deb2pkg
-target/release/deb2pkg python3.13 --name python3 --symlink python3=python3.13 \
-  --with python3.13-minimal --with libpython3.13-minimal --with libpython3.13-stdlib \
-  --arch arm64 -o out/pkgs/python3
-target/release/deb2pkg python3-psycopg2 --arch arm64 -o out/pkgs/python3-psycopg2
-```
-
-`server/ply.toml` names that directory as its `local` source. Then, from
-this directory:
+From this directory:
 
 ```sh
 ply up
@@ -37,7 +23,7 @@ What the two manifests say:
   reference is the connection string *and* the start order; there is no
   separate `after`.
 - `server/ply.toml` is an ordinary app: `python3` and `python3-psycopg2`
-  from the `local` source above on a `debian@13` base from the registry, a `[health]` port so the stack
+  from the registry on a `debian@13` base, a `[health]` port so the stack
   and `ply deploy` know when it is ready. psycopg2 lives in its own keg
   under `/opt/python3-psycopg2-2.9.10`, so `PYTHONPATH` names it; the
   dependency is pinned exactly so that path cannot drift.

@@ -33,6 +33,12 @@ pub struct BuildOptions {
     /// default: an image is a distributable artifact, so shipping a `.env`
     /// is a refusal, not a warning.
     pub allow_secrets: bool,
+    /// A manifest to build with INSTEAD of `<dir>/ply.toml`: the one
+    /// `ply run DIR` infers for a directory that has none. Nothing is
+    /// written into the directory for such a build — no `ply.toml`, no
+    /// `ply.lock` — because the person did not write a manifest and must not
+    /// find one they did not ask for; the lock still ships inside the image.
+    pub manifest: Option<String>,
 }
 
 /// Never ships, at ANY depth. Deliberately short: only files that cannot be
@@ -85,14 +91,19 @@ pub struct BuildOutcome {
 }
 
 pub fn build(opts: &BuildOptions) -> Result<BuildOutcome> {
-    let manifest_path = opts.dir.join("ply.toml");
-    if !manifest_path.exists() {
-        return Err(Error::Build(format!(
-            "no ply.toml in {} — create one with a [package] section (name, version, entrypoint)",
-            opts.dir.display()
-        )));
-    }
-    let manifest = Manifest::load(&manifest_path)?;
+    let manifest = match &opts.manifest {
+        Some(text) => Manifest::parse(text)?,
+        None => {
+            let manifest_path = opts.dir.join("ply.toml");
+            if !manifest_path.exists() {
+                return Err(Error::Build(format!(
+                    "no ply.toml in {} — create one with a [package] section (name, version, entrypoint)",
+                    opts.dir.display()
+                )));
+            }
+            Manifest::load(&manifest_path)?
+        }
+    };
 
     let arch = opts.arch.unwrap_or_else(Arch::host);
 
@@ -116,7 +127,10 @@ pub fn build(opts: &BuildOptions) -> Result<BuildOutcome> {
                 })
                 .collect(),
         };
-        lockfile.save(&opts.dir.join("ply.lock"))?;
+        // An inferred manifest leaves no lock behind: see `BuildOptions::manifest`.
+        if opts.manifest.is_none() {
+            lockfile.save(&opts.dir.join("ply.lock"))?;
+        }
         Some(lockfile)
     };
 
@@ -439,6 +453,33 @@ mod tests {
     }
 
     #[test]
+    fn an_inferred_manifest_builds_a_directory_with_no_ply_toml_and_writes_no_lock() {
+        // `ply run DIR` on a directory without a manifest: the manifest is
+        // handed in, the image is built, and the directory is left as it
+        // was — no ply.toml, no ply.lock the person did not ask for.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("hello"), b"\x7fELF fake binary").unwrap();
+        let out = build(&BuildOptions {
+            dir: dir.path().to_path_buf(),
+            output: None,
+            allow_insecure: false,
+            allow_secrets: false,
+            arch: None,
+            manifest: Some(
+                "[package]\nname = \"inferred\"\nversion = \"0.1.0\"\nentrypoint = [\"./hello\"]\n"
+                    .into(),
+            ),
+        })
+        .unwrap();
+        assert!(out.image_path.exists());
+        assert!(
+            !dir.path().join("ply.toml").exists(),
+            "nothing written for the person"
+        );
+        assert!(!dir.path().join("ply.lock").exists(), "no lock either");
+    }
+
+    #[test]
     fn build_emits_canonical_name_and_is_deterministic() {
         let dir = tempfile::tempdir().unwrap();
         app_dir(dir.path());
@@ -448,6 +489,7 @@ mod tests {
             allow_insecure: false,
             allow_secrets: false,
             arch: None,
+            manifest: None,
         };
         let one = build(&opts).unwrap();
         assert!(one
@@ -480,6 +522,7 @@ mod tests {
             allow_insecure: false,
             allow_secrets: false,
             arch: None,
+            manifest: None,
         };
 
         // swept in implicitly → refused, and the message names the file
@@ -532,6 +575,7 @@ mod tests {
             allow_insecure: false,
             allow_secrets: false,
             arch: None,
+            manifest: None,
         })
         .unwrap_err()
         .to_string();
@@ -559,6 +603,7 @@ mod tests {
             allow_insecure: false,
             allow_secrets: false,
             arch: None,
+            manifest: None,
         })
         .unwrap();
         let file = std::fs::File::open(&out.image_path).unwrap();
@@ -590,6 +635,7 @@ mod tests {
             allow_insecure: false,
             allow_secrets: false,
             arch: None,
+            manifest: None,
         })
         .unwrap();
         let file = std::fs::File::open(&out.image_path).unwrap();
@@ -632,6 +678,7 @@ mod tests {
             allow_insecure: false,
             allow_secrets: false,
             arch: None,
+            manifest: None,
         })
         .unwrap();
         let file = std::fs::File::open(&outcome.image_path).unwrap();
@@ -675,6 +722,7 @@ mod tests {
             allow_insecure: false,
             allow_secrets: false,
             arch: None,
+            manifest: None,
         };
         let outcome = build(&opts).unwrap();
         let listing: Vec<String> = {
@@ -726,6 +774,7 @@ mod tests {
             allow_insecure: false,
             allow_secrets: false,
             arch: None,
+            manifest: None,
         })
         .unwrap();
         let layer = crate::image::read::read_embedded(&outcome.image_path, "/.layer.toml")
@@ -779,6 +828,7 @@ mod tests {
             allow_insecure: false,
             allow_secrets: false,
             arch: None,
+            manifest: None,
         })
         .unwrap();
         let listing: Vec<String> = {

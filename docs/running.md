@@ -11,7 +11,7 @@ order: 12
 
 ```sh
 ply run myapp.img        # an image file
-ply run .                # an app dir: build if changed, then run
+ply run .                # an app dir: build if changed, then run (no ply.toml: one is inferred and shown)
 ply run postgres@17      # a prebuilt service from the registry
 ```
 

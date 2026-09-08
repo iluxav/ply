@@ -9,35 +9,90 @@ use ply_core::source::Source;
 
 use crate::cli::InitArgs;
 
-/// Latest `major.minor` ranges for the packages `init` suggests.
+/// The runtimes the detector can name, with the range `init` falls back to
+/// when the registry cannot be reached. The registry's own latest wins
+/// whenever it answers; a builtin range only has to be plausible.
+const RUNTIMES: &[(&str, &str)] = &[
+    ("node", "24"),
+    ("python3", "3.13"),
+    ("go", "1.24"),
+    ("rust", "1.85"),
+    ("ruby", "3.3"),
+    ("deno", "2.1"),
+    ("bun", "1.2"),
+];
+
+/// Latest `major.minor` ranges for the packages `init` suggests, and which
+/// of them the registry actually carries.
 #[derive(Debug, Clone)]
 pub(crate) struct Latest {
     pub debian: String,
-    pub python3: String,
-    pub node: String,
+    ranges: std::collections::BTreeMap<String, String>,
+    /// Package names the catalog lists; `None` when the catalog could not
+    /// be loaded, in which case nothing is ruled out.
+    available: Option<std::collections::BTreeSet<String>>,
 }
 
 impl Latest {
     pub(crate) fn builtin() -> Self {
         Latest {
             debian: "13".into(),
-            python3: "3.12".into(),
-            node: "24".into(),
+            ranges: RUNTIMES
+                .iter()
+                .map(|(n, r)| (n.to_string(), r.to_string()))
+                .collect(),
+            available: None,
         }
     }
 
     pub(crate) fn from_catalog(cat: &Catalog) -> Self {
         let b = Self::builtin();
-        let pick = |name: &str, fallback: String| {
-            cat.get(name)
-                .and_then(|p| p.range_of_latest())
-                .unwrap_or(fallback)
-        };
+        let ranges = RUNTIMES
+            .iter()
+            .map(|(name, _)| {
+                let range = cat
+                    .get(name)
+                    .and_then(|p| p.range_of_latest())
+                    .unwrap_or_else(|| b.range(name));
+                (name.to_string(), range)
+            })
+            .collect();
         Latest {
-            debian: pick("debian", b.debian),
-            python3: pick("python3", b.python3),
-            node: pick("node", b.node),
+            debian: cat
+                .get("debian")
+                .and_then(|p| p.range_of_latest())
+                .unwrap_or(b.debian),
+            ranges,
+            available: Some(
+                RUNTIMES
+                    .iter()
+                    .map(|(n, _)| n.to_string())
+                    .filter(|n| cat.get(n).is_some())
+                    .collect(),
+            ),
         }
+    }
+
+    /// The range to suggest for a runtime package.
+    pub(crate) fn range(&self, package: &str) -> String {
+        self.ranges
+            .get(package)
+            .cloned()
+            .unwrap_or_else(|| "*".to_string())
+    }
+
+    /// Does the registry carry this runtime? `true` when unknown: a
+    /// registry that could not be reached must not turn into a refusal.
+    pub(crate) fn has(&self, package: &str) -> bool {
+        self.available
+            .as_ref()
+            .is_none_or(|names| names.contains(package))
+    }
+
+    #[cfg(test)]
+    fn with_available(mut self, names: &[&str]) -> Self {
+        self.available = Some(names.iter().map(|n| n.to_string()).collect());
+        self
     }
 }
 
@@ -47,6 +102,12 @@ pub(crate) struct Defaults {
     pub entrypoint: Vec<String>,
     pub runtime: Option<(String, String)>,
     pub port: Option<u16>,
+    /// What the detection was based on, for the person to check: "a
+    /// package.json", "a go.mod". `None` when nothing was recognised.
+    pub evidence: Option<&'static str>,
+    /// Environment the runtime needs to behave inside an instance — the
+    /// kind of thing a person would only learn from a failure.
+    pub env: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +118,7 @@ pub(crate) struct Answers {
     pub base: String,
     pub runtime: Option<(String, String)>,
     pub port: Option<u16>,
+    pub env: Vec<(String, String)>,
 }
 
 /// Lowercase, `[a-z0-9-]` only, runs collapsed, trimmed; `app` if nothing is left.
@@ -114,16 +176,32 @@ fn node_start_file(script: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-fn has_py_files(dir: &Path) -> bool {
+/// Does any top-level file carry this extension?
+fn has_files_with(dir: &Path, ext: &str) -> bool {
     std::fs::read_dir(dir)
         .map(|rd| {
             rd.filter_map(|e| e.ok())
-                .any(|e| e.path().extension().is_some_and(|x| x == "py"))
+                .any(|e| e.path().extension().is_some_and(|x| x == ext))
         })
         .unwrap_or(false)
 }
 
+/// Does `requirements.txt` or `pyproject.toml` name this package?
+fn python_requires(dir: &Path, package: &str) -> bool {
+    ["requirements.txt", "pyproject.toml"].iter().any(|f| {
+        std::fs::read_to_string(dir.join(f))
+            .map(|t| t.to_lowercase().contains(package))
+            .unwrap_or(false)
+    })
+}
+
 /// Filesystem-only project detection.
+///
+/// One rule per ecosystem, first match wins, in the order a mixed directory
+/// is most likely meant: a Node project with a `requirements.txt` for a
+/// helper script is a Node project. Every rule names the file it keyed on,
+/// so `ply run .` can print "inferred from a go.mod" rather than an
+/// unexplained guess.
 pub(crate) fn detect(dir: &Path, latest: &Latest) -> Defaults {
     let name = sanitize_name(
         &std::fs::canonicalize(dir)
@@ -131,28 +209,135 @@ pub(crate) fn detect(dir: &Path, latest: &Latest) -> Defaults {
             .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
             .unwrap_or_default(),
     );
-    if dir.join("package.json").is_file() {
+    let runtime = |pkg: &str| Some((pkg.to_string(), latest.range(pkg)));
+    let has = |f: &str| dir.join(f).is_file();
+
+    if has("package.json") {
+        // Next, Nuxt and friends all serve on 3000 by default, as does the
+        // plain `http` server every tutorial writes; nothing to detect.
         return Defaults {
             name,
             entrypoint: vec!["node".into(), node_main(dir)],
-            runtime: Some(("node".into(), latest.node.clone())),
+            runtime: runtime("node"),
             port: Some(3000),
+            evidence: Some("a package.json"),
+            env: Vec::new(),
         };
     }
-    if dir.join("requirements.txt").is_file()
-        || dir.join("pyproject.toml").is_file()
-        || has_py_files(dir)
-    {
-        let script = if !dir.join("app.py").is_file() && dir.join("main.py").is_file() {
-            "main.py"
+    if has("deno.json") || has("deno.jsonc") {
+        let main = ["main.ts", "server.ts", "mod.ts", "main.js"]
+            .into_iter()
+            .find(|f| has(f))
+            .unwrap_or("main.ts");
+        return Defaults {
+            name,
+            entrypoint: vec!["deno".into(), "run".into(), "-A".into(), main.into()],
+            runtime: runtime("deno"),
+            port: Some(8000),
+            evidence: Some("a deno.json"),
+            env: Vec::new(),
+        };
+    }
+    if has("bun.lockb") || has("bun.lock") || has("bunfig.toml") {
+        let main = ["index.ts", "server.ts", "index.js"]
+            .into_iter()
+            .find(|f| has(f))
+            .unwrap_or("index.ts");
+        return Defaults {
+            name,
+            entrypoint: vec!["bun".into(), "run".into(), main.into()],
+            runtime: runtime("bun"),
+            port: Some(3000),
+            evidence: Some("a bun lockfile"),
+            env: Vec::new(),
+        };
+    }
+    if has("go.mod") {
+        // `go run .` inside the instance: the toolchain is a dependency
+        // like `node`, the module cache lands in the instance's own
+        // writable layer, and the image ships the source, not a binary
+        // built on a laptop of the wrong architecture. 8080 is what the
+        // Go tutorial, gin and chi all listen on.
+        let gotmpdir = format!("/opt/{name}");
+        return Defaults {
+            name,
+            entrypoint: vec!["go".into(), "run".into(), ".".into()],
+            runtime: runtime("go"),
+            port: Some(8080),
+            evidence: Some("a go.mod"),
+            // `go run` builds into $TMPDIR and execs the result, and an
+            // instance's /tmp is noexec. The app's own prefix is writable
+            // and executable, so the build lands there; the module and
+            // build caches follow HOME as usual.
+            env: vec![("GOTMPDIR".into(), gotmpdir)],
+        };
+    }
+    if has("Cargo.toml") {
+        return Defaults {
+            name,
+            entrypoint: vec!["cargo".into(), "run".into(), "--release".into()],
+            runtime: runtime("rust"),
+            port: Some(8080),
+            evidence: Some("a Cargo.toml"),
+            env: Vec::new(),
+        };
+    }
+    if has("Gemfile") {
+        let (entrypoint, port) = if has("config.ru") {
+            (vec!["rackup".into(), "-o".into(), "0.0.0.0".into()], 9292)
         } else {
-            "app.py"
+            let main = ["app.rb", "main.rb", "server.rb"]
+                .into_iter()
+                .find(|f| has(f))
+                .unwrap_or("app.rb");
+            (vec!["ruby".into(), main.into()], 4567)
         };
         return Defaults {
             name,
-            entrypoint: vec!["python3".into(), script.into()],
-            runtime: Some(("python3".into(), latest.python3.clone())),
-            port: Some(8000),
+            entrypoint,
+            runtime: runtime("ruby"),
+            port: Some(port),
+            evidence: Some("a Gemfile"),
+            env: Vec::new(),
+        };
+    }
+    if has("requirements.txt") || has("pyproject.toml") || has_files_with(dir, "py") {
+        // Django keys on manage.py and serves on 8000; Flask's `app.run()`
+        // default is 5000; anything else is the stdlib server's 8000.
+        let (entrypoint, port) = if has("manage.py") {
+            (
+                vec![
+                    "python3".into(),
+                    "manage.py".into(),
+                    "runserver".into(),
+                    "0.0.0.0:8000".into(),
+                ],
+                8000,
+            )
+        } else {
+            let script = if !has("app.py") && has("main.py") {
+                "main.py"
+            } else {
+                "app.py"
+            };
+            let port = if python_requires(dir, "flask") {
+                5000
+            } else {
+                8000
+            };
+            (vec!["python3".into(), script.into()], port)
+        };
+        return Defaults {
+            name,
+            entrypoint,
+            runtime: runtime("python3"),
+            port: Some(port),
+            evidence: Some(if has("manage.py") {
+                "a manage.py"
+            } else {
+                "a Python project"
+            }),
+            env: Vec::new(),
         };
     }
     Defaults {
@@ -160,7 +345,67 @@ pub(crate) fn detect(dir: &Path, latest: &Latest) -> Defaults {
         entrypoint: vec!["/bin/sh".into(), "-c".into(), "echo hello from ply".into()],
         runtime: None,
         port: None,
+        evidence: None,
+        env: Vec::new(),
     }
+}
+
+/// A manifest inferred for a directory that has none, for `ply run DIR`.
+pub(crate) struct Inferred {
+    /// The manifest, exactly as `ply init -y` would write it.
+    pub text: String,
+    /// What it was inferred from, for the line that says so.
+    pub evidence: &'static str,
+}
+
+/// Why a directory cannot be run without a manifest.
+pub(crate) enum NotInferable {
+    /// Nothing in the directory looked like a project. `dockerfile` says
+    /// whether a Dockerfile was there to point at `ply import` instead.
+    Unrecognised { dockerfile: bool },
+    /// A project the detector knows, whose runtime the registry does not
+    /// carry yet: the manifest would only fail at `ply build`.
+    RuntimeMissing {
+        evidence: &'static str,
+        package: String,
+    },
+}
+
+/// Infer a manifest for `dir` the way `ply init -y` would, without writing
+/// anything. The registry is consulted for the latest ranges and for
+/// whether the runtime exists at all.
+pub(crate) fn infer(dir: &Path) -> std::result::Result<Inferred, NotInferable> {
+    let latest = latest_versions();
+    let defaults = detect(dir, &latest);
+    infer_with(dir, &defaults, &latest)
+}
+
+fn infer_with(
+    dir: &Path,
+    defaults: &Defaults,
+    latest: &Latest,
+) -> std::result::Result<Inferred, NotInferable> {
+    let Some(evidence) = defaults.evidence else {
+        return Err(NotInferable::Unrecognised {
+            dockerfile: dir.join("Dockerfile").is_file(),
+        });
+    };
+    if let Some((package, _)) = &defaults.runtime {
+        if !latest.has(package) {
+            return Err(NotInferable::RuntimeMissing {
+                evidence,
+                package: package.clone(),
+            });
+        }
+    }
+    let mut sink = std::io::sink();
+    let mut no_input = std::io::empty();
+    let answers = prompt(&mut no_input, &mut sink, defaults, latest, true)
+        .expect("`yes` never reads input and never fails");
+    Ok(Inferred {
+        text: render_manifest(&answers),
+        evidence,
+    })
 }
 
 fn ask(
@@ -198,6 +443,7 @@ pub(crate) fn prompt(
             base: base_default,
             runtime: d.runtime.clone(),
             port: d.port,
+            env: d.env.clone(),
         });
     }
     writeln!(
@@ -251,6 +497,7 @@ pub(crate) fn prompt(
         base,
         runtime,
         port,
+        env: d.env.clone(),
     })
 }
 
@@ -272,6 +519,12 @@ pub(crate) fn render_manifest(a: &Answers) -> String {
         t.push_str("\n[dependencies]\n");
         t.push_str(&format!("{name} = {}\n", toml_str(range)));
     }
+    if !a.env.is_empty() {
+        t.push_str("\n[env]\n");
+        for (k, v) in &a.env {
+            t.push_str(&format!("{k} = {}\n", toml_str(v)));
+        }
+    }
     if let Some(port) = a.port {
         t.push_str("\n[ports]\n");
         t.push_str(&format!("http = {port}\n"));
@@ -283,7 +536,7 @@ pub(crate) fn render_manifest(a: &Answers) -> String {
     t
 }
 
-fn latest_versions() -> Latest {
+pub(crate) fn latest_versions() -> Latest {
     match Source::parse(OFFICIAL_SOURCE, false).and_then(|s| Catalog::load(&s)) {
         Ok(cat) => Latest::from_catalog(&cat),
         Err(_) => {
@@ -413,10 +666,10 @@ mod tests {
     #[test]
     fn detects_python() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("requirements.txt"), "flask\n").unwrap();
+        std::fs::write(dir.path().join("requirements.txt"), "requests\n").unwrap();
         std::fs::write(dir.path().join("main.py"), "").unwrap();
         let d = detect(dir.path(), &latest());
-        assert_eq!(d.runtime, Some(("python3".into(), "3.12".into())));
+        assert_eq!(d.runtime, Some(("python3".into(), "3.13".into())));
         assert_eq!(
             d.entrypoint,
             vec!["python3", "main.py"],
@@ -428,6 +681,131 @@ mod tests {
             detect(dir.path(), &latest()).entrypoint,
             vec!["python3", "app.py"]
         );
+    }
+
+    #[test]
+    fn detects_go_and_runs_it_in_the_instance() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("go.mod"),
+            "module example.com/hello\n\ngo 1.24\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("main.go"), "package main\nfunc main() {}\n").unwrap();
+        let d = detect(dir.path(), &latest());
+        assert_eq!(d.runtime, Some(("go".into(), "1.24".into())));
+        assert_eq!(d.entrypoint, vec!["go", "run", "."]);
+        assert_eq!(d.port, Some(8080));
+        assert_eq!(d.evidence, Some("a go.mod"));
+        assert_eq!(
+            d.env[0].0, "GOTMPDIR",
+            "go run execs its build: not from a noexec /tmp"
+        );
+    }
+
+    #[test]
+    fn django_and_flask_get_their_own_ports_and_entrypoints() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("manage.py"), "#!/usr/bin/env python3\n").unwrap();
+        std::fs::write(dir.path().join("requirements.txt"), "Django==5.1\n").unwrap();
+        let d = detect(dir.path(), &latest());
+        assert_eq!(
+            d.entrypoint,
+            vec!["python3", "manage.py", "runserver", "0.0.0.0:8000"]
+        );
+        assert_eq!(d.port, Some(8000));
+        assert_eq!(d.evidence, Some("a manage.py"));
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("app.py"), "from flask import Flask\n").unwrap();
+        std::fs::write(dir.path().join("requirements.txt"), "flask\n").unwrap();
+        let d = detect(dir.path(), &latest());
+        assert_eq!(d.entrypoint, vec!["python3", "app.py"]);
+        assert_eq!(d.port, Some(5000), "Flask's app.run() default");
+    }
+
+    #[test]
+    fn rust_ruby_deno_and_bun_are_recognised() {
+        let cases: &[(&str, &str, &str, &[&str])] = &[
+            (
+                "Cargo.toml",
+                "[package]\nname = \"svc\"\n",
+                "rust",
+                &["cargo", "run", "--release"],
+            ),
+            (
+                "Gemfile",
+                "source 'https://rubygems.org'\n",
+                "ruby",
+                &["ruby", "app.rb"],
+            ),
+            ("deno.json", "{}", "deno", &["deno", "run", "-A", "main.ts"]),
+            ("bun.lock", "", "bun", &["bun", "run", "index.ts"]),
+        ];
+        for (file, body, runtime, entrypoint) in cases {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join(file), body).unwrap();
+            let d = detect(dir.path(), &latest());
+            assert_eq!(
+                d.runtime.as_ref().map(|(n, _)| n.as_str()),
+                Some(*runtime),
+                "{file}"
+            );
+            assert_eq!(d.entrypoint, *entrypoint, "{file}");
+            assert!(d.evidence.is_some(), "{file}");
+        }
+    }
+
+    #[test]
+    fn a_node_project_wins_over_a_stray_requirements_file() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("package.json"), "{\"main\":\"index.js\"}").unwrap();
+        std::fs::write(dir.path().join("requirements.txt"), "requests\n").unwrap();
+        let d = detect(dir.path(), &latest());
+        assert_eq!(d.runtime.as_ref().map(|(n, _)| n.as_str()), Some("node"));
+    }
+
+    #[test]
+    fn inference_refuses_what_it_cannot_run_and_says_why() {
+        // Nothing recognisable, with a Dockerfile to point at.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Dockerfile"), "FROM scratch\n").unwrap();
+        let latest = latest().with_available(&["node", "python3"]);
+        match infer_with(dir.path(), &detect(dir.path(), &latest), &latest) {
+            Err(NotInferable::Unrecognised { dockerfile: true }) => {}
+            _ => panic!("a Dockerfile alone is not a ply project"),
+        }
+        // A project whose runtime the registry does not carry: refused
+        // here, with the package named, rather than at `ply build`.
+        std::fs::write(dir.path().join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
+        match infer_with(dir.path(), &detect(dir.path(), &latest), &latest) {
+            Err(NotInferable::RuntimeMissing { package, evidence }) => {
+                assert_eq!(package, "rust");
+                assert_eq!(evidence, "a Cargo.toml");
+            }
+            _ => panic!("rust is not in the registry"),
+        }
+        // A registry that could not be reached rules nothing out.
+        let unknown = Latest::builtin();
+        assert!(infer_with(dir.path(), &detect(dir.path(), &unknown), &unknown).is_ok());
+    }
+
+    #[test]
+    fn an_inferred_manifest_is_what_init_dash_y_writes_and_parses() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("package.json"), "{\"main\":\"server.js\"}").unwrap();
+        let latest = latest().with_available(&["node"]);
+        let inferred = infer_with(dir.path(), &detect(dir.path(), &latest), &latest)
+            .ok()
+            .expect("a Node directory is inferable");
+        assert_eq!(inferred.evidence, "a package.json");
+        let m = Manifest::parse(&inferred.text).expect("parses");
+        assert_eq!(
+            m.package.entrypoint.as_deref(),
+            Some(&["node".to_string(), "server.js".to_string()][..])
+        );
+        assert!(inferred.text.contains("node = \"24\""));
+        assert!(inferred.text.contains("http = 3000"));
     }
 
     #[test]
@@ -447,8 +825,10 @@ mod tests {
         Defaults {
             name: "myapp".into(),
             entrypoint: vec!["python3".into(), "app.py".into()],
-            runtime: Some(("python3".into(), "3.12".into())),
+            runtime: Some(("python3".into(), "3.13".into())),
             port: Some(8000),
+            evidence: Some("a Python project"),
+            env: Vec::new(),
         }
     }
 
@@ -460,7 +840,7 @@ mod tests {
         assert_eq!(a.name, "myapp");
         assert_eq!(a.version, "0.1.0");
         assert_eq!(a.base, "debian@13");
-        assert_eq!(a.runtime, Some(("python3".into(), "3.12".into())));
+        assert_eq!(a.runtime, Some(("python3".into(), "3.13".into())));
         assert_eq!(a.port, Some(8000));
         assert_eq!(input.position(), 0);
     }
@@ -478,7 +858,7 @@ mod tests {
         assert_eq!(a.port, Some(8000));
         let shown = String::from_utf8(out).unwrap();
         assert!(shown.contains("package name [myapp]:"), "{shown}");
-        assert!(shown.contains("runtime [python3 = \"3.12\"]"), "{shown}");
+        assert!(shown.contains("runtime [python3 = \"3.13\"]"), "{shown}");
     }
 
     #[test]
@@ -498,8 +878,9 @@ mod tests {
             version: "0.1.0".into(),
             entrypoint: vec!["python3".into(), "app.py".into()],
             base: "debian@13".into(),
-            runtime: Some(("python3".into(), "3.12".into())),
+            runtime: Some(("python3".into(), "3.13".into())),
             port: Some(8000),
+            env: Vec::new(),
         };
         let text = render_manifest(&a);
         let m = Manifest::parse(&text).expect("ply build must accept what init wrote");
@@ -514,7 +895,7 @@ mod tests {
             "init must not emit a [sources] stanza"
         );
         assert!(text.contains("# include = [\"dist/\"]"));
-        assert!(text.contains("[dependencies]\npython3 = \"3.12\""));
+        assert!(text.contains("[dependencies]\npython3 = \"3.13\""));
     }
 
     #[test]
@@ -526,6 +907,7 @@ mod tests {
             base: "debian@13".into(),
             runtime: None,
             port: None,
+            env: Vec::new(),
         };
         let text = render_manifest(&a);
         assert!(!text.contains("[dependencies]"));

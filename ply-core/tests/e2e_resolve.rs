@@ -26,6 +26,7 @@ fn build_dir(dir: &Path, ply_toml: &str, files: &[(&str, &str)]) -> PathBuf {
         allow_insecure: false,
         allow_secrets: false,
         arch: None,
+        manifest: None,
     })
     .unwrap()
     .image_path
@@ -139,6 +140,7 @@ fn resolves_via_file_source() {
         allow_insecure: false,
         allow_secrets: false,
         arch: None,
+        manifest: None,
     };
     let one = build(&opts).unwrap();
     assert_resolution(&app_dir, &one.image_path, &store);
@@ -195,6 +197,7 @@ fn resolves_via_http_source() {
         allow_insecure: false,
         allow_secrets: false,
         arch: None,
+        manifest: None,
     });
     server.kill().ok();
     server.wait().ok();
@@ -242,6 +245,7 @@ fn resolves_base_only_app() {
         allow_insecure: false,
         allow_secrets: false,
         arch: None,
+        manifest: None,
     })
     .unwrap();
 

@@ -13,6 +13,7 @@ pub fn run(args: BuildArgs) -> Result<()> {
         allow_insecure: args.insecure_source,
         arch: parse_arch(args.arch.as_deref())?,
         allow_secrets: args.allow_secrets,
+        manifest: None,
     })?;
     Ok(())
 }
@@ -38,6 +39,7 @@ pub fn build_for_push(dir: &Path, arch: Option<Arch>) -> Result<PathBuf> {
         allow_insecure: false,
         arch,
         allow_secrets: false,
+        manifest: None,
     })?
     .image_path)
 }
