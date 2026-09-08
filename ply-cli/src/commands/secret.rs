@@ -10,7 +10,7 @@ use anyhow::{bail, Context, Result};
 
 use ply_core::secrets::SecretStore;
 
-use crate::cli::{SecretLsArgs, SecretSetArgs};
+use crate::cli::{SecretLsArgs, SecretSealArgs, SecretSetArgs};
 
 /// Pick the store the `-C DIR` / `--deployments STACK` selector names.
 /// Clap's `conflicts_with` keeps them mutually exclusive; `deployments`
@@ -113,6 +113,67 @@ pub fn exec_set(args: &SecretSetArgs) -> Result<()> {
     };
     let path = set(&store, &args.name, &value)?;
     println!("wrote {} (0600)", path.display());
+    Ok(())
+}
+
+/// `ply secret hostkey` — this user's sealing key, made on first use. The
+/// public half is all that is printed; the file it lives in is named so a
+/// person knows what to back up and what never to copy anywhere.
+pub fn exec_hostkey() -> Result<()> {
+    let path = ply_core::sealed::key_path();
+    let (key, created) = ply_core::sealed::HostKey::load_or_create(&path)?;
+    println!("{}", key.public());
+    if created {
+        eprintln!(
+            "ply: made this host's sealing key at {} (0600; the public half above is what \
+             `ply secret seal --for` takes)",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+/// `ply secret seal KEY=VALUE … [--for HOSTKEY] [--env]`.
+pub fn exec_seal(args: &SecretSealArgs) -> Result<()> {
+    let recipient = match &args.recipient {
+        Some(text) => ply_core::sealed::parse_public(text)?,
+        None => {
+            // Sealing for this very host — the single-server case.
+            let path = ply_core::sealed::key_path();
+            let (key, created) = ply_core::sealed::HostKey::load_or_create(&path)?;
+            if created {
+                eprintln!("ply: made this host's sealing key at {}", path.display());
+            }
+            ply_core::sealed::parse_public(&key.public())?
+        }
+    };
+    for pair in &args.pairs {
+        let Some((name, value)) = pair.split_once('=') else {
+            bail!("`{pair}`: expected KEY=VALUE");
+        };
+        if name.is_empty()
+            || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            || name.starts_with(|c: char| c.is_ascii_digit())
+        {
+            bail!("`{name}`: not an environment variable name");
+        }
+        let value = if value == "-" {
+            let mut text = String::new();
+            std::io::stdin()
+                .lock()
+                .read_line(&mut text)
+                .context("reading the value from stdin")?;
+            text.trim_end_matches(['\n', '\r']).to_string()
+        } else {
+            value.to_string()
+        };
+        let sealed = ply_core::sealed::seal(name, &value, &recipient);
+        if args.env {
+            println!("{name}={sealed}");
+        } else {
+            println!("{name} = \"{sealed}\"");
+        }
+    }
     Ok(())
 }
 

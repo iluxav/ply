@@ -168,7 +168,11 @@ waiting for server.finish_boot == 'ok' (currently unset, 30s elapsed)
 See [Running & scaling](/docs/running/#start-order) for the `/run/ply`
 tree these conditions read, and how an app self-publishes into it.
 
-## Secrets: minted files, or `$VAR` holes
+## Secrets: minted files, sealed values, or `$VAR` holes
+
+A member's `env` may also carry a value sealed for the host
+(`DATABASE_URL = "enc:v1:…"`, from `ply secret seal`); it opens at launch
+and nowhere else. See [Sealed secrets](/docs/secrets/).
 
 The `db` member above declares no password anywhere — postgres's own
 `password = { secret = true }` mints a strong value the first time the

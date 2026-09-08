@@ -28,6 +28,7 @@ pub mod rebase;
 pub mod record;
 pub mod resolve;
 pub mod runtime;
+pub mod sealed;
 pub mod secrets;
 pub mod source;
 pub mod stack;

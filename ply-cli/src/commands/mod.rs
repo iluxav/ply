@@ -75,6 +75,8 @@ pub fn dispatch(command: Command) -> Result<()> {
         Command::Secret(cmd) => match cmd {
             crate::cli::SecretCommand::Ls(args) => secret::exec_ls(&args),
             crate::cli::SecretCommand::Set(args) => secret::exec_set(&args),
+            crate::cli::SecretCommand::Hostkey => secret::exec_hostkey(),
+            crate::cli::SecretCommand::Seal(args) => secret::exec_seal(&args),
         },
         Command::Audit(args) => lifecycle::audit(args),
         Command::Outdated(args) => lifecycle::outdated(args),

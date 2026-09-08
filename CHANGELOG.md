@@ -5,6 +5,21 @@ breaking changes, and known limitations. Write under **Unreleased** as work
 lands; `make release-cli` turns that heading into the version and date, and
 the release workflow publishes the entry as the GitHub release notes.
 
+## Unreleased
+
+### What changed
+- **Sealed secrets.** A manifest, a deployment file or a stack member can
+  carry `DATABASE_URL = "enc:v1:…"`, sealed for one host's key with
+  `ply secret seal … --for <key>`, and commit it to a public repo. The run
+  parent on that host opens it while composing the app's environment, on
+  its way into the process, and says which names it opened — never the
+  values. `ply secret hostkey` prints a host's key and makes it on first
+  use; `sudo ply setup` makes root's. A value opens only under the name
+  it was sealed for and only on the host it was sealed for; a host with
+  no key refuses to launch the app rather than run it with ciphertext.
+  Kamal's and SOPS's shape, not Vault's: no leases, no rotation, no
+  identity — those stay Vault's job. See the [Sealed secrets] guide.
+
 ## v0.1.85 — 2026-09-08
 
 Everything below came out of a first-hour audit on a fresh Ubuntu 24.04

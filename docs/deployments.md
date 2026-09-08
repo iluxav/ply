@@ -162,7 +162,9 @@ there and deploy with `from`.
 
 ## Shared env files
 
-Secrets never belong in a spec — a fleet repo is at its best public.
+Secrets never belong in a spec in the clear — a fleet repo is at its best
+public. Sealed ones do: `DATABASE_URL = "enc:v1:…"` in a spec's `[env]`
+opens only on the host it was sealed for ([Sealed secrets](/docs/secrets/)).
 Env files live in `deployments/.env/<name>.env` (0600, host-local, never
 synced), and **a deployment picks up the file named after it automatically**:
 

@@ -142,7 +142,11 @@ readable with `unsquashfs` in one command. `[env]` in `ply.toml` is therefore
 the wrong place for a password. `ply build` refuses to pack credential-shaped
 files that were swept in implicitly (see [CLI reference](/docs/cli/#build-validate)).
 
-Pass secrets at run time from a root-only file:
+Two ways that work. **Seal it** for the host, and commit the ciphertext:
+`ply secret seal DATABASE_URL=… --for <host key>` prints an `[env]` line that
+opens only on that host, at launch, in the run parent's memory
+([Sealed secrets](/docs/secrets/)). Or pass secrets at run time from a
+root-only file:
 
 ```sh
 ply run --env-file /etc/myapp/secrets.env myapp.img

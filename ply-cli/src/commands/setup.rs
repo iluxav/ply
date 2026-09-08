@@ -31,6 +31,18 @@ mod linux {
             bail!("ply setup changes host config — run it as root: sudo ply setup");
         }
 
+        // Root's sealing key, so a host is ready to open sealed values in
+        // its deployment files from the first `ply reconcile`.
+        {
+            let path = ply_core::sealed::key_path();
+            let (key, created) = ply_core::sealed::HostKey::load_or_create(&path)?;
+            println!(
+                "ok: host sealing key {} ({})",
+                key.public(),
+                if created { "made" } else { "exists" }
+            );
+        }
+
         apparmor_step()?;
         if let Some(port) = args.unprivileged_ports {
             unprivileged_ports_step(port)?;

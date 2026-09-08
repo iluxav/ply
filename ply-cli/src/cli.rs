@@ -883,6 +883,35 @@ pub enum SecretCommand {
     Ls(SecretLsArgs),
     /// Set a secret's value (external secrets need this before `ply up` will run)
     Set(SecretSetArgs),
+    /// Print this host's sealing key (the public half); made on first use
+    ///
+    /// Values sealed for it (`ply secret seal … --for <key>`) can sit in a
+    /// public repo and open only on this host, at launch, in the run
+    /// parent's memory. The key belongs to the user that runs the app:
+    /// `sudo ply secret hostkey` for apps under systemd.
+    Hostkey,
+    /// Seal KEY=VALUE pairs for a host; prints lines for `[env]`
+    ///
+    /// `ply secret seal DATABASE_URL=postgres://… --for ply-host-…` prints
+    /// `DATABASE_URL = "enc:v1:…"`. A value of `-` is read from stdin, which
+    /// keeps it out of shell history. Without `--for`, seals for this
+    /// host's own key.
+    Seal(SecretSealArgs),
+}
+
+#[derive(Args)]
+pub struct SecretSealArgs {
+    /// One or more KEY=VALUE (VALUE `-` reads stdin)
+    #[arg(value_name = "KEY=VALUE", required = true)]
+    pub pairs: Vec<String>,
+
+    /// The target host's key, as `ply secret hostkey` printed it there
+    #[arg(long = "for", value_name = "HOSTKEY")]
+    pub recipient: Option<String>,
+
+    /// Print `KEY=enc:…` lines for an env file instead of TOML
+    #[arg(long)]
+    pub env: bool,
 }
 
 #[derive(Args)]

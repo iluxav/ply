@@ -2038,6 +2038,19 @@ fn prepare_app(
         env.entry("TERM".into()).or_insert(term);
     }
 
+    // Sealed values (`enc:v1:…`, from any source above) open here, in this
+    // process, on their way into the child's environment — and nowhere
+    // else. Names are said; values never are. See `crate::sealed`.
+    let unsealed = crate::sealed::unseal_env(&mut env, &crate::sealed::key_path())?;
+    if !unsealed.is_empty() {
+        eprintln!(
+            "ply: unsealed {} for {}",
+            unsealed.join(", "),
+            manifest.package.name
+        );
+        crate::runtime::events::emit(&manifest.package.name, "unseal", &unsealed.join(", "));
+    }
+
     Ok(AppContext {
         entrypoint,
         env: env.into_iter().collect(),
