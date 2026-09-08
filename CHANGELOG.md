@@ -8,6 +8,12 @@ the release workflow publishes the entry as the GitHub release notes.
 ## Unreleased
 
 ### What changed
+- **The microVM kernel keg has its own version**, starting at
+  `ply/microvm-kernel@1.0.0`, and names the Linux release it carries in its
+  description. It used to be versioned as the kernel, which meant a change
+  to the guest init — which ships in the keg — had no version to publish
+  under until kernel.org happened to release one. The `6.12.x` kegs stay
+  published and resolvable; a registry withdraws nothing.
 - **`ply exec` works on macOS.** `ply exec <app> <cmd>` runs a command
   inside a running microVM — as the app's user, with the app's environment
   and workdir — and streams its output back with stdout and stderr kept

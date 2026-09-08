@@ -47,7 +47,8 @@ an error that names nothing. There is no `ply setup` on a Mac: nothing on
 the host needs preparing.
 
 **The kernel.** Each microVM boots ply's own arm64 kernel and initramfs,
-pinned per binary (`ply/microvm-kernel@6.12.109`), fetched from the
+pinned per binary (`ply/microvm-kernel@1.0.0`, whose description names
+the Linux version it carries), fetched from the
 registry the first time a microVM boots and kept in the store like any
 package. `ply self-update` brings a new pin with a new binary; no
 `ply.lock` ever mentions it, so a lockfile written on a Mac is

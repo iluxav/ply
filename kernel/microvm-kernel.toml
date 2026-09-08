@@ -5,10 +5,20 @@
 # runs `ply build --arch arm64` on the staging directory, whose only content
 # is `boot/{microvm-kernel.img,initramfs.cpio}`.
 #
-# THREE PLACES CARRY THIS VERSION and they must move in one edit:
+# THE VERSION BELOW IS THE RUNTIME'S, NOT THE KERNEL'S.
+#
+# The guest init ships in this keg's initramfs, so a change to the init
+# needs a new keg — but the registry is append-only and the kernel's own
+# version only moves when kernel.org says so, which left a guest-only fix
+# with no version to ship under. So this is plain semver for the runtime,
+# and `__KERNEL_VERSION__` in the description is substituted with the
+# kernel actually built (`KVER` in the build script).
+#
+# TWO PLACES CARRY IT and they must move in one edit:
 #   1. `version` below
-#   2. `KVER` in scripts/build-microvm-kernel.sh (and its pinned KSHA256)
-#   3. `MICROVM_KERNEL` in ply-core/src/runtime/vm/kernel.rs
+#   2. `MICROVM_KERNEL` in ply-core/src/runtime/vm/kernel.rs
+# (`KEGVER` in scripts/build-microvm-kernel.sh defaults to it and is only
+# overridden to rebuild an older keg.)
 # The binary pins (3); no ply.lock ever mentions this package, because the
 # kernel is part of the RUNTIME, not of any app.
 #
@@ -25,9 +35,9 @@
 
 [package]
 name = "microvm-kernel"
-version = "6.12.109"
+version = "1.0.0"
 owner = "ply"
-description = "Linux 6.12 microVM kernel and guest init — the runtime ply boots inside a macOS microVM"
+description = "The ply microVM runtime: Linux __KERNEL_VERSION__ and the guest init a ply instance boots inside a macOS microVM"
 # The kernel Image and the static e2fsprogs in the initramfs are both
 # GPL-2.0; ply-guest-init, the third component, is MIT like the rest of ply.
 license = "GPL-2.0"

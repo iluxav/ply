@@ -11,7 +11,14 @@ use std::path::{Path, PathBuf};
 use crate::error::{Error, Result};
 
 /// The keg this build boots. Bump it with the binary, never per app.
-pub const MICROVM_KERNEL: &str = "ply/microvm-kernel@6.12.109";
+///
+/// This is the RUNTIME's version, not the kernel's. The guest init ships
+/// inside the keg, so a change to it needs a new keg — and the kernel's
+/// own version only moves when kernel.org publishes one, which is not a
+/// release process anybody can wait on. The kernel a keg carries is named
+/// in its description. Versions before 1.0.0 were the kernel's own
+/// (`6.12.x`) and remain published: a registry withdraws nothing.
+pub const MICROVM_KERNEL: &str = "ply/microvm-kernel@1.0.0";
 
 /// Escape hatch for kernel development: a filesystem path (a keg's `boot/`
 /// directory, or a raw arm64 `Image`), or a registry ref to fetch instead of
@@ -367,8 +374,7 @@ mod tests {
         assert_eq!(
             MICROVM_KERNEL,
             format!("ply/microvm-kernel@{version}"),
-            "kernel/microvm-kernel.toml and this pin must move in one edit \
-             (and so must KVER in scripts/build-microvm-kernel.sh)"
+            "kernel/microvm-kernel.toml and this pin must move in one edit"
         );
         let name = parsed["package"]["name"].as_str().expect("[package] name");
         assert_eq!(name, "microvm-kernel", "the keg's name is half the pin");

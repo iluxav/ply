@@ -41,7 +41,7 @@
 # looking Image that a developer's PLY_MICROVM_KERNEL already points at is
 # worse than no Image at all.
 #
-# Env knobs: KVER, E2FSVER, OUT, JOBS, CARGO_TARGET_DIR (honoured, and the
+# Env knobs: KVER, KEGVER, E2FSVER, OUT, JOBS, CARGO_TARGET_DIR (honoured, and the
 # Lima gate sets it), SKIP_GUEST_INIT (a stub init, for proving the kernel
 # half alone -- it also skips the keg, which must never be built around a
 # do-nothing init), SKIP_SMOKE (do not; see scripts/microvm-smoke.sh for what
@@ -50,6 +50,18 @@
 set -eu
 
 KVER="${KVER:-6.12.109}"
+# The KEG's version, which is NOT the kernel's.
+#
+# It used to be, and that coupling had a cost nobody could pay: the guest
+# init ships inside this keg's initramfs, so a change to the init needs a
+# new keg — but the registry is append-only, and the kernel's own version
+# only moves when kernel.org publishes one. A guest-only fix therefore had
+# no version to ship under, and waiting on an unrelated upstream release is
+# not a release process. So the keg carries its own semver and names the
+# kernel it contains in its description; `ply/microvm-kernel@6.12.x` stays
+# published and resolvable forever, because nothing in a registry is ever
+# withdrawn.
+KEGVER="${KEGVER:-1.0.0}"
 E2FSVER="${E2FSVER:-1.47.4}"
 OUT="${OUT:-out}"
 JOBS="${JOBS:-$(nproc 2>/dev/null || echo 4)}"
@@ -248,8 +260,9 @@ python3 "$here/scripts/mkinitramfs.py" --verify "$OUT/initramfs.cpio" \
 
 # --- the kernel -----------------------------------------------------------
 # kernel.org names the .0 release `linux-6.12.tar.xz`, not `linux-6.12.0`,
-# but KVER must stay three-component semver: it is the keg version the ply
-# binary pins (`ply/microvm-kernel@6.12.0`). Derive the upstream name.
+# but KVER stays three-component semver so the built Image has one
+# canonical name. What the ply binary pins is KEGVER, not this. Derive the
+# upstream tarball name.
 ktar=$(echo "$KVER" | sed 's/\.0$//')
 kmajor=$(echo "$KVER" | cut -d. -f1)
 src="$OUT/linux-$ktar"
@@ -320,7 +333,7 @@ echo "config:    all required options present ($(echo $required | wc -w) checked
 
 # The banner is the reproducibility check: no username, no hostname, no
 # wall-clock time, no incrementing #N. If any of those reappear, two builds
-# of ply/microvm-kernel@$KVER are different bytes and the version stops
+# of ply/microvm-kernel@$KEGVER are different bytes and the version stops
 # meaning anything.
 banner=$(strings "$built" 2>/dev/null | grep -m1 '^Linux version ' || true)
 echo "banner:    ${banner:-(not found -- CONFIG_KALLSYMS or strings?)}"
@@ -381,7 +394,9 @@ else
     mkdir -p "$keg/boot"
     cp "$img" "$keg/boot/microvm-kernel.img"
     cp "$OUT/initramfs.cpio" "$keg/boot/initramfs.cpio"
-    cp "$here/kernel/microvm-kernel.toml" "$keg/ply.toml"
+    # The keg's version is its own; the kernel it carries is a fact about
+    # its contents, so the description states it rather than the version.
+    sed "s|__KERNEL_VERSION__|$KVER|" "$here/kernel/microvm-kernel.toml" > "$keg/ply.toml"
 
     # PLY_BIN is for a machine that already has ply; otherwise build the one
     # in this tree, so the keg is packed by the same code that will read it.
@@ -391,9 +406,9 @@ else
         cargo run --release -p ply-cli -- build "$keg" --arch arm64
     fi
 
-    kegimg="$keg/microvm-kernel-$KVER-linux-arm64.img"
+    kegimg="$keg/microvm-kernel-$KEGVER-linux-arm64.img"
     [ -f "$kegimg" ] || die "ply build produced no $kegimg
-       (does kernel/microvm-kernel.toml still say version = \"$KVER\"?)"
+       (does kernel/microvm-kernel.toml still say version = \"$KEGVER\"?)"
 
     # Read the payload back OUT of the image. `ply build` reports what it
     # packed, but the failure this guards against -- a file silently filtered
@@ -402,8 +417,8 @@ else
     listing=$(unsquashfs -l "$kegimg" 2>/dev/null) || die "cannot list $kegimg"
     for want in microvm-kernel.img initramfs.cpio; do
         echo "$listing" \
-            | grep -qx "squashfs-root/opt/microvm-kernel-$KVER/boot/$want" \
-            || die "the keg does not contain /opt/microvm-kernel-$KVER/boot/$want
+            | grep -qx "squashfs-root/opt/microvm-kernel-$KEGVER/boot/$want" \
+            || die "the keg does not contain /opt/microvm-kernel-$KEGVER/boot/$want
        -- \`ply build\` filtered it out. Nothing on a Mac would report this."
     done
     echo "keg:       payload verified inside the image (unsquashfs -l)"
