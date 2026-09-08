@@ -5,6 +5,32 @@ breaking changes, and known limitations. Write under **Unreleased** as work
 lands; `make release-cli` turns that heading into the version and date, and
 the release workflow publishes the entry as the GitHub release notes.
 
+## Unreleased
+
+### Fixes
+- **Apps started with SIGPIPE ignored, since v0.1.79, on both backends.**
+  The run parent ignores SIGPIPE so a dropped probe connection cannot kill
+  it, and on Linux that disposition survived the clone and the execve into
+  the app; in a microVM the guest's init is a Rust program, which ignores
+  SIGPIPE at startup, with the same result. An entrypoint like
+  `producer | head -1` got EPIPE errors where a Unix program expects to
+  exit quietly, which breaks `set -e` scripts and C tools that never check
+  `write()`. Every app, and every `ply exec` command, now starts with the
+  default disposition, as under Docker. The microVM half needs
+  `ply/microvm-kernel@1.0.1`, which this ply pins.
+- An instance's state file is written whole and renamed into place. It was
+  rewritten in place when the run parent seated the instance in its
+  published pool, and a `ply exec` or `ply ps` reading it in that instant
+  could see a torn file and report no running instance.
+- `ply craft commit` names what it leaves out of `/tmp` and the shell
+  history, one path at a time, instead of folding them into a total
+  labelled "package indexes and session logs" — a tool unpacked into
+  `/tmp` and meant to be kept used to vanish behind that line. Package-
+  manager caches are still one total.
+- `ply run .` on a directory with no `ply.toml` reuses its image when
+  nothing in the directory changed, as it already did with a manifest.
+  It repacked every file on every run.
+
 ## v0.1.83 — 2026-09-08
 
 ### What changed

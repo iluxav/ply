@@ -360,6 +360,11 @@ mod boot {
                     // the one outcome that must be impossible.
                     libc::close(0);
                 }
+                // This init is a Rust program, and Rust ignores SIGPIPE at
+                // startup; a child would inherit that through execve and get
+                // EPIPE where a Unix program expects to die quietly. It gets
+                // the default, as it does from the Linux backend.
+                libc::signal(libc::SIGPIPE, libc::SIG_DFL);
                 libc::execve(prog_c.as_ptr(), argv.as_ptr(), envp.as_ptr());
                 libc::_exit(127);
             }
@@ -1772,6 +1777,11 @@ mod boot {
                     // operates on `.`, so say so.
                     write_all_fd(2, b"ply-init: cannot enter the workdir; running from /\n");
                 }
+                // This init is a Rust program, and Rust ignores SIGPIPE at
+                // startup; a child would inherit that through execve and get
+                // EPIPE where a Unix program expects to die quietly. It gets
+                // the default, as it does from the Linux backend.
+                libc::signal(libc::SIGPIPE, libc::SIG_DFL);
                 libc::execve(prog_c.as_ptr(), argv.as_ptr(), envp.as_ptr());
                 write_all_fd(2, b"ply-init: exec failed - the entrypoint is not on the image's PATH, or its interpreter/libc is missing from the layers\n");
                 libc::_exit(127);

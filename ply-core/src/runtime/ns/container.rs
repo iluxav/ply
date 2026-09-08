@@ -470,6 +470,17 @@ fn setup_and_exec(spec: &ContainerSpec, egress: bool) -> Result<isize> {
                     std::process::exit(126);
                 }
             }
+            // The run parent ignores SIGPIPE so a dropped probe connection
+            // cannot kill it (`ignore_sigpipe`), and an ignored disposition
+            // survives both the clone that made this process and the execve
+            // below. Without this line every app ply started since v0.1.79
+            // ran with SIGPIPE ignored: `producer | head -1` in an entrypoint
+            // got EPIPE errors where a Unix program expects to exit quietly,
+            // which breaks `set -e` scripts and C tools that never check
+            // write(). Apps get the default, as they do under Docker.
+            unsafe {
+                nix::libc::signal(nix::libc::SIGPIPE, nix::libc::SIG_DFL);
+            }
             let e = nix::unistd::execve(&program, &argv, &env).unwrap_err();
             eprintln!(
                 "ply: exec {:?} (resolved to {resolved}): {e} — not on the image's PATH, or its interpreter/libc is missing from the layers",

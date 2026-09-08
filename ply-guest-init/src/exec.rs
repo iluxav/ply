@@ -232,6 +232,8 @@ fn run(
             // cannot be a way up from a command a caller asked for.
             libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
             libc::chdir(cwd_c.as_ptr());
+            // The Unix default, not this init's own SIG_IGN — see spawn_app.
+            libc::signal(libc::SIGPIPE, libc::SIG_DFL);
             libc::execve(prog_c.as_ptr(), argv_p.as_ptr(), env_p.as_ptr());
             libc::_exit(127);
         }

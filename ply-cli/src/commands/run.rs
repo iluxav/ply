@@ -180,16 +180,31 @@ pub fn exec(args: RunArgs) -> Result<()> {
                     eprintln!("ply:     {line}");
                 }
                 eprintln!("ply: `ply init -y` writes it, and edits it into what you mean");
-                let outcome = ply_core::build::build(&ply_core::build::BuildOptions {
-                    dir: dir.clone(),
-                    output: None,
-                    allow_insecure: false,
-                    arch: None,
-                    allow_secrets: false,
-                    manifest: Some(inferred.text.clone()),
-                })?;
-                eprintln!("ply: built {}", outcome.image_name);
-                outcome.image_path
+                // Reused when nothing changed, as with a manifest on disk —
+                // the check also compares the image's embedded manifest to
+                // this one, so a newer detector still rebuilds.
+                let parsed = ply_core::manifest::Manifest::parse(&inferred.text)?;
+                match ply_core::build::up_to_date_image_for(&dir, &parsed, None)? {
+                    Some(image) => {
+                        eprintln!(
+                            "ply: {} up to date",
+                            image.file_name().unwrap_or_default().to_string_lossy()
+                        );
+                        image
+                    }
+                    None => {
+                        let outcome = ply_core::build::build(&ply_core::build::BuildOptions {
+                            dir: dir.clone(),
+                            output: None,
+                            allow_insecure: false,
+                            arch: None,
+                            allow_secrets: false,
+                            manifest: Some(inferred.text.clone()),
+                        })?;
+                        eprintln!("ply: built {}", outcome.image_name);
+                        outcome.image_path
+                    }
+                }
             }
             None => match ply_core::build::up_to_date_image(&dir, None)? {
                 Some(image) => {

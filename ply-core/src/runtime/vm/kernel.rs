@@ -18,7 +18,7 @@ use crate::error::{Error, Result};
 /// release process anybody can wait on. The kernel a keg carries is named
 /// in its description. Versions before 1.0.0 were the kernel's own
 /// (`6.12.x`) and remain published: a registry withdraws nothing.
-pub const MICROVM_KERNEL: &str = "ply/microvm-kernel@1.0.0";
+pub const MICROVM_KERNEL: &str = "ply/microvm-kernel@1.0.1";
 
 /// Escape hatch for kernel development: a filesystem path (a keg's `boot/`
 /// directory, or a raw arm64 `Image`), or a registry ref to fetch instead of

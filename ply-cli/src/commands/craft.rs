@@ -53,12 +53,36 @@ mod linux {
                         outcome.skipped_deletions
                     );
                 }
-                if outcome.dropped_files > 0 {
+                let left = &outcome.left_out;
+                if left.regenerable_files > 0 {
                     println!(
-                        "left out {} cache file(s), {} — package indexes and session logs, \
-                         which regenerate themselves",
-                        outcome.dropped_files,
-                        human_size(outcome.dropped_bytes)
+                        "left out {} package-manager cache file(s), {} — apt/apk indexes and \
+                         download caches, which `apt-get update` regenerates",
+                        left.regenerable_files,
+                        human_size(left.regenerable_bytes)
+                    );
+                }
+                if !left.session.is_empty() {
+                    // Named, not summed: a person can mean to keep something
+                    // under /tmp, and a total would hide that it went.
+                    const SHOWN: usize = 6;
+                    let names: Vec<String> = left
+                        .session
+                        .iter()
+                        .take(SHOWN)
+                        .map(|p| p.display().to_string())
+                        .collect();
+                    let more = left.session.len().saturating_sub(SHOWN);
+                    println!(
+                        "left out {}{} — scratch and this session's own records (/tmp, \
+                         package-manager logs and locks, shell history); move anything you \
+                         meant to keep out of /tmp and commit again",
+                        names.join(", "),
+                        if more > 0 {
+                            format!(" and {more} more")
+                        } else {
+                            String::new()
+                        }
                     );
                 }
                 println!(

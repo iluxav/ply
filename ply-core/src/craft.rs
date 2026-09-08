@@ -372,52 +372,53 @@ pub fn changes(name: &str) -> Result<Vec<Change>> {
     Ok(result)
 }
 
-/// Directories whose whole contents a `craft commit` leaves out.
+/// What a `craft commit` leaves out falls in two classes, and they are
+/// reported differently because the person's stake in them differs.
 ///
-/// The bar for this list is narrow: a package manager regenerates it on
-/// demand, or it records THIS SESSION rather than its result. Everything
-/// else the person put in the session is theirs and ships.
-const DISPOSABLE_DIRS: &[&str] = &[
-    "var/lib/apt/lists",  // apt's package index — `apt-get update` rebuilds it
+/// A package manager REGENERATES the first on demand: apt's and apk's
+/// indexes and download caches, ldconfig's cache. Nobody put these in the
+/// session on purpose and nobody wants them back, so the report is one
+/// line with a total — and that total is most of the weight, measured at
+/// 21 MB of apt lists against 1.1 MB of everything else on an `apt-get
+/// install jq`.
+const REGENERABLE_DIRS: &[&str] = &[
+    "var/lib/apt/lists",  // `apt-get update` rebuilds it
     "var/cache/apt",      // the .debs it downloaded, and its binary caches
     "var/cache/apk",      // the same, for an Alpine base
-    "var/log/apt",        // what this session's apt run did, not what it made
     "var/cache/ldconfig", // `ldconfig` rebuilds it
-    "tmp",                // scratch, by definition
 ];
 
-/// Individual files, on the same terms.
-const DISPOSABLE_FILES: &[&str] = &[
+/// The second class is the record of THIS SESSION rather than its result:
+/// scratch under /tmp, the package manager's logs and lock files, the
+/// operator's own shell history. Usually noise — but a person CAN unpack a
+/// tool into /tmp and mean to keep it, so every one of these is NAMED in
+/// the report rather than summed, and `ply craft changes` still lists them.
+const SESSION_DIRS: &[&str] = &["tmp", "var/log/apt"];
+const SESSION_FILES: &[&str] = &[
     "var/log/dpkg.log",
     "var/log/alternatives.log",
     "var/lib/dpkg/lock",
     "var/lib/dpkg/lock-frontend",
     "var/lib/dpkg/triggers/Lock",
     "lib/apk/db/lock",
-    // The operator's own typing, which is nobody's business downstream.
     "root/.bash_history",
     "root/.ash_history",
 ];
 
-/// Does this path belong to a package manager's cache or to the record of
-/// the session, rather than to what the session produced?
-///
-/// Deliberately NOT the dpkg database: `var/lib/dpkg/status` and
-/// `var/lib/dpkg/info` are how a later `apt-get` knows what is already
-/// installed, so dropping them would make a derived session reinstall the
-/// world. Only the parts that regenerate themselves go.
-///
-/// Measured on a session that ran `apt-get install jq`: apt's lists were
-/// 21 MB and everything else, jq included, was 1.1 MB.
-pub fn is_disposable(rel: &Path) -> bool {
-    let rel = rel.to_string_lossy();
-    let rel = rel.trim_start_matches('/');
-    if DISPOSABLE_FILES.contains(&rel) {
-        return true;
-    }
-    DISPOSABLE_DIRS.iter().any(|dir| {
-        // `var/cache/apt` covers `var/cache/apt/archives/x.deb` and the
-        // directory itself, but never `var/cache/aptitude`.
+/// Which class a left-out path is in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeftOutAs {
+    /// A package manager rebuilds it; reported as a total.
+    Regenerable,
+    /// A record of the session; reported by name.
+    Session,
+}
+
+/// Is `rel` inside one of `dirs`? A prefix is a whole path component:
+/// `var/cache/apt` covers `var/cache/apt/archives/x.deb` and the directory
+/// itself, never `var/cache/aptitude`.
+fn under(rel: &str, dirs: &[&str]) -> bool {
+    dirs.iter().any(|dir| {
         rel == *dir
             || rel
                 .strip_prefix(dir)
@@ -425,26 +426,65 @@ pub fn is_disposable(rel: &Path) -> bool {
     })
 }
 
-/// How many files under `rw` are disposable, and what they weigh. An
-/// unreadable entry is skipped: this figure is a report, never a decision.
-fn disposable_total(rw: &Path) -> (usize, u64) {
-    let mut files = 0;
-    let mut bytes = 0;
+/// Does a commit leave this path out, and in which class?
+///
+/// Deliberately NOT the dpkg database: `var/lib/dpkg/status` and
+/// `var/lib/dpkg/info` are how a later `apt-get` knows what is already
+/// installed, so dropping them would make a derived session reinstall the
+/// world. Only the parts that regenerate themselves, and the session's own
+/// records, go.
+pub fn classify(rel: &Path) -> Option<LeftOutAs> {
+    let rel = rel.to_string_lossy();
+    let rel = rel.trim_start_matches('/');
+    if under(rel, REGENERABLE_DIRS) {
+        return Some(LeftOutAs::Regenerable);
+    }
+    if SESSION_FILES.contains(&rel) || under(rel, SESSION_DIRS) {
+        return Some(LeftOutAs::Session);
+    }
+    None
+}
+
+pub fn is_disposable(rel: &Path) -> bool {
+    classify(rel).is_some()
+}
+
+/// What a commit left out, measured by walking the session — NOT by
+/// counting inside the packer's filter, which prunes a left-out directory
+/// whole and never offers its contents. This figure is a report, never a
+/// decision: an unreadable entry is skipped.
+#[derive(Debug, Default)]
+pub struct LeftOut {
+    pub regenerable_files: usize,
+    pub regenerable_bytes: u64,
+    /// Every session-class file and symlink, rooted at `/` the way
+    /// `changes()` renders paths, so the person can find it.
+    pub session: Vec<PathBuf>,
+}
+
+fn left_out(rw: &Path) -> LeftOut {
+    let mut out = LeftOut::default();
     for entry in walkdir::WalkDir::new(rw).min_depth(1).into_iter().flatten() {
         let Ok(rel) = entry.path().strip_prefix(rw) else {
             continue;
         };
-        if !is_disposable(rel) {
+        let Ok(meta) = entry.path().symlink_metadata() else {
             continue;
+        };
+        if meta.is_dir() {
+            continue; // structure, not content — same rule as `changes()`
         }
-        if let Ok(meta) = entry.path().symlink_metadata() {
-            if meta.is_file() {
-                files += 1;
-                bytes += meta.len();
+        match classify(rel) {
+            Some(LeftOutAs::Regenerable) => {
+                out.regenerable_files += 1;
+                out.regenerable_bytes += meta.len();
             }
+            Some(LeftOutAs::Session) => out.session.push(PathBuf::from("/").join(rel)),
+            None => {}
         }
     }
-    (files, bytes)
+    out.session.sort();
+    out
 }
 
 fn is_whiteout(meta: &std::fs::Metadata) -> bool {
@@ -459,11 +499,10 @@ pub struct CommitOutcome {
     pub digest: String,
     pub size_bytes: u64,
     pub skipped_deletions: usize,
-    /// Files left out as regenerable cache (`is_disposable`), and what they
-    /// would have weighed. Reported rather than silently dropped: an image
-    /// that is smaller than the person expects should say why.
-    pub dropped_files: usize,
-    pub dropped_bytes: u64,
+    /// What was left out and why. Reported rather than silently dropped: an
+    /// image that is smaller than the person expects should say so, and a
+    /// file they meant to keep should be named.
+    pub left_out: LeftOut,
 }
 
 /// `ply craft commit` — pack the upperdir as a package image.
@@ -518,11 +557,7 @@ pub fn commit(name: &str, version: &Version, output: Option<&Path>) -> Result<Co
             skipped_deletions += 1;
         }
     }
-    // Measured by walking, NOT by counting inside the filter: the packer
-    // prunes a disposable directory whole, so its contents are never
-    // offered to the filter at all. Counting there reported 1.7 KiB for a
-    // commit that had just left out 15 MB of apt lists.
-    let (dropped_files, dropped_bytes) = disposable_total(&rw);
+    let left_out = left_out(&rw);
     let filter = |rel: &Path| -> bool {
         if is_disposable(rel) {
             return false;
@@ -573,8 +608,7 @@ pub fn commit(name: &str, version: &Version, output: Option<&Path>) -> Result<Co
         image_path,
         image_name,
         skipped_deletions,
-        dropped_files,
-        dropped_bytes,
+        left_out,
     })
 }
 
@@ -615,18 +649,38 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_package_managers_caches_and_this_sessions_logs_are_disposable() {
+    fn a_package_managers_caches_are_left_out_as_a_total() {
         for path in [
             "var/lib/apt/lists/deb.debian.org_debian_dists_trixie_InRelease",
             "var/cache/apt/archives/jq_1.7_arm64.deb",
             "var/cache/apt/pkgcache.bin",
+            "var/cache/apk/APKINDEX.tar.gz",
+        ] {
+            assert_eq!(
+                classify(Path::new(path)),
+                Some(LeftOutAs::Regenerable),
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_sessions_own_records_are_left_out_by_name() {
+        // Named, because a person can put something they care about in
+        // /tmp; a total would hide it.
+        for path in [
+            "tmp/scratch",
+            "tmp/tool/bin/thing",
             "var/log/apt/term.log",
             "var/log/dpkg.log",
             "var/lib/dpkg/lock-frontend",
-            "tmp/scratch",
             "root/.bash_history",
         ] {
-            assert!(is_disposable(Path::new(path)), "{path}");
+            assert_eq!(
+                classify(Path::new(path)),
+                Some(LeftOutAs::Session),
+                "{path}"
+            );
         }
     }
 
@@ -645,7 +699,7 @@ mod tests {
             "var/log/apticron.log",
             "tmpfile",
         ] {
-            assert!(!is_disposable(Path::new(path)), "{path}");
+            assert_eq!(classify(Path::new(path)), None, "{path}");
         }
     }
 
@@ -655,5 +709,29 @@ mod tests {
         // relative ones. The same answer either way.
         assert!(is_disposable(Path::new("/var/lib/apt/lists/x")));
         assert!(!is_disposable(Path::new("/usr/bin/jq")));
+    }
+
+    #[test]
+    fn the_report_names_session_files_and_totals_the_caches() {
+        let rw = tempfile::tempdir().unwrap();
+        let put = |rel: &str, bytes: usize| {
+            let p = rw.path().join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, vec![b'x'; bytes]).unwrap();
+        };
+        put("var/lib/apt/lists/a", 1000);
+        put("var/lib/apt/lists/b", 24);
+        put("tmp/kept-tool", 5);
+        put("root/.bash_history", 7);
+        put("usr/bin/jq", 3);
+        let seen = left_out(rw.path());
+        assert_eq!((seen.regenerable_files, seen.regenerable_bytes), (2, 1024));
+        assert_eq!(
+            seen.session,
+            vec![
+                PathBuf::from("/root/.bash_history"),
+                PathBuf::from("/tmp/kept-tool")
+            ]
+        );
     }
 }

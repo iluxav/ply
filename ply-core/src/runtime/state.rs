@@ -97,8 +97,19 @@ impl InstanceState {
             source,
         })?;
         let path = Self::path(&self.app, self.n);
-        std::fs::write(&path, serde_json::to_vec_pretty(self).expect("serializes"))
-            .map_err(|source| Error::Io { path, source })
+        // Written whole beside the file, then renamed over it: a reader sees
+        // the old file or the new one, never half of either. `mark_serving`
+        // rewrites this while the instance is alive, and a `ply exec`
+        // listing the directory in that instant could read a torn file and
+        // conclude the instance was gone.
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, serde_json::to_vec_pretty(self).expect("serializes")).map_err(
+            |source| Error::Io {
+                path: tmp.clone(),
+                source,
+            },
+        )?;
+        std::fs::rename(&tmp, &path).map_err(|source| Error::Io { path, source })
     }
 
     /// The run parent has seated this instance in its published pools.
@@ -139,6 +150,12 @@ pub fn list() -> Result<Vec<InstanceState>> {
         Err(source) => return Err(Error::Io { path: dir, source }),
     };
     for entry in entries.filter_map(|e| e.ok()) {
+        // Only the real files: `save` writes a `.json.tmp` beside each one
+        // and renames it into place, and a complete-but-not-yet-renamed one
+        // must not count as a second instance.
+        if entry.path().extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
         if let Ok(text) = std::fs::read_to_string(entry.path()) {
             if let Ok(state) = serde_json::from_str::<InstanceState>(&text) {
                 states.push(state);

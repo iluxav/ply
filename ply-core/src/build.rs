@@ -319,15 +319,31 @@ pub fn build(opts: &BuildOptions) -> Result<BuildOutcome> {
 /// needed. Conservative: any unreadable entry means rebuild. Top-level build
 /// outputs (images, ply.lock) and .git are not inputs.
 pub fn up_to_date_image(dir: &Path, arch: Option<Arch>) -> Result<Option<PathBuf>> {
-    use std::os::unix::fs::MetadataExt;
-    let stamp =
-        |md: &std::fs::Metadata| (md.mtime(), md.mtime_nsec()).max((md.ctime(), md.ctime_nsec()));
-
     let manifest_path = dir.join("ply.toml");
     if !manifest_path.exists() {
         return Ok(None);
     }
     let manifest = Manifest::load(&manifest_path)?;
+    up_to_date_image_for(dir, &manifest, arch)
+}
+
+/// The same check for a manifest that is not on disk — the one `ply run .`
+/// infers for a directory without one. Without this, every zero-config run
+/// repacked the whole directory, `node_modules` and all.
+///
+/// Timestamps are not enough here: the detector is part of the binary, so
+/// a newer ply can infer a different manifest from the same unchanged
+/// files. The image embeds the manifest it was built from, and it must be
+/// the one that would be written now.
+pub fn up_to_date_image_for(
+    dir: &Path,
+    manifest: &Manifest,
+    arch: Option<Arch>,
+) -> Result<Option<PathBuf>> {
+    use std::os::unix::fs::MetadataExt;
+    let stamp =
+        |md: &std::fs::Metadata| (md.mtime(), md.mtime_nsec()).max((md.ctime(), md.ctime_nsec()));
+
     let image_name = ImageName::new(
         &manifest.package.name,
         manifest.package.version.clone(),
@@ -361,6 +377,13 @@ pub fn up_to_date_image(dir: &Path, arch: Option<Arch>) -> Result<Option<PathBuf
                 dirs.push(entry.path());
             }
         }
+    }
+    // The image's own manifest is the one we would write now. Cheap — one
+    // small file out of the squashfs — and it is what makes this safe for a
+    // manifest that exists only in this binary's head.
+    let embedded = crate::image::read::read_embedded(&image, MANIFEST_PATH)?;
+    if embedded.as_deref() != Some(manifest.to_toml()?.as_bytes()) {
+        return Ok(None);
     }
     Ok(Some(image))
 }
@@ -477,6 +500,52 @@ mod tests {
             "nothing written for the person"
         );
         assert!(!dir.path().join("ply.lock").exists(), "no lock either");
+    }
+
+    #[test]
+    fn an_inferred_build_is_reused_until_a_file_or_the_inference_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("hello"), b"\x7fELF fake binary").unwrap();
+        let text =
+            "[package]\nname = \"inferred\"\nversion = \"0.1.0\"\nentrypoint = [\"./hello\"]\n";
+        let manifest = Manifest::parse(text).unwrap();
+        let opts = BuildOptions {
+            dir: dir.path().to_path_buf(),
+            output: None,
+            allow_insecure: false,
+            allow_secrets: false,
+            arch: None,
+            manifest: Some(text.into()),
+        };
+        assert_eq!(
+            up_to_date_image_for(dir.path(), &manifest, None).unwrap(),
+            None,
+            "nothing built yet"
+        );
+        let built = build(&opts).unwrap();
+        assert_eq!(
+            up_to_date_image_for(dir.path(), &manifest, None).unwrap(),
+            Some(built.image_path.clone()),
+            "the image is current"
+        );
+
+        // The detector is part of the binary: the same files can infer a
+        // different manifest under a newer ply, with no timestamp moving.
+        let other = Manifest::parse(&text.replace("./hello", "./hello --serve")).unwrap();
+        assert_eq!(
+            up_to_date_image_for(dir.path(), &other, None).unwrap(),
+            None,
+            "a different inference must rebuild"
+        );
+
+        // And a file that changed after the build, as with a manifest on disk.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(dir.path().join("hello"), b"\x7fELF changed").unwrap();
+        assert_eq!(
+            up_to_date_image_for(dir.path(), &manifest, None).unwrap(),
+            None,
+            "a changed file must rebuild"
+        );
     }
 
     #[test]

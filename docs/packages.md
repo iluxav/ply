@@ -61,13 +61,40 @@ sudo ply craft commit mytools --version 0.1.0  # → mytools-0.1.0-linux-x64.img
 It needs root (it mounts an overlay) and the base comes from the official
 registry unless `--source` says otherwise.
 
-`commit` leaves out what a package manager regenerates — apt's or apk's
-package lists, their download caches, and the session's own logs — because
-those are usually most of the weight: an `apt-get install jq` session packs
-to about half a megabyte instead of sixteen. The dpkg database itself
-ships, so a session resumed from the image with `craft edit` still knows
-what is installed; it just needs `apt-get update` before installing
-something new, exactly as a Dockerfile does.
+`commit` leaves two kinds of thing out, and says so. What a package
+manager regenerates — apt's or apk's package lists and download caches —
+is reported as one total, because it is usually most of the weight: an
+`apt-get install jq` session packs to about half a megabyte instead of
+sixteen. The session's own records — anything under `/tmp`, the package
+manager's logs and lock files, the shell history — are reported **by
+name**, because a tool you unpacked into `/tmp` and meant to keep would
+otherwise vanish quietly; move it somewhere else and commit again. The
+dpkg database itself ships, so a session resumed from the image with
+`craft edit` still knows what is installed; it just needs `apt-get update`
+before installing something new, exactly as a Dockerfile does.
+
+### `[layer]` — what a keg adds to the apps that depend on it
+
+A keg can contribute to the environment of every app that depends on it:
+
+```toml
+[layer]
+path = ["/opt/ruby-3.3.8/usr/bin"]
+ld_library_path = ["/opt/ruby-3.3.8/usr/lib/aarch64-linux-gnu"]
+env = { RUBYLIB = "/opt/ruby-3.3.8/usr/lib/ruby/3.3.0" }
+```
+
+`path` and `ld_library_path` are joined across the dependency closure;
+`env` sets plain variables, base first so a dependent's value wins, and
+the app's own `[env]` wins over all of them. This is how the registry's
+`ruby` finds its standard library from a relocated prefix without every
+app spelling out `RUBYLIB`.
+
+`env` arrived in ply 0.1.81, and the check is strict on both sides: a
+**host** running an older ply refuses a keg that carries it when the app
+starts — not when the image is built, because building never reads a
+dependency's layer. If you build on a current laptop against such a keg
+and ship the image to a server, update the server first.
 
 Sessions persist between shells (`ply craft shell`), can be listed
 (`ply craft ls`), discarded (`ply craft rm`), and — because a committed

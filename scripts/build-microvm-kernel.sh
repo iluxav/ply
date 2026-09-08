@@ -61,7 +61,7 @@ KVER="${KVER:-6.12.109}"
 # kernel it contains in its description; `ply/microvm-kernel@6.12.x` stays
 # published and resolvable forever, because nothing in a registry is ever
 # withdrawn.
-KEGVER="${KEGVER:-1.0.0}"
+KEGVER="${KEGVER:-1.0.1}"
 E2FSVER="${E2FSVER:-1.47.4}"
 OUT="${OUT:-out}"
 JOBS="${JOBS:-$(nproc 2>/dev/null || echo 4)}"
