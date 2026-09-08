@@ -5,7 +5,7 @@ breaking changes, and known limitations. Write under **Unreleased** as work
 lands; `make release-cli` turns that heading into the version and date, and
 the release workflow publishes the entry as the GitHub release notes.
 
-## Unreleased
+## v0.1.88 — 2026-09-08
 
 ### What changed
 - **Snapshots: a backup for any app, nothing in the image required.**
