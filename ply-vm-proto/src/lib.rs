@@ -223,6 +223,13 @@ pub struct NetSpec {
     pub gateway: String,
 }
 
+/// A capability a guest may advertise in its `ready` line. The host asks
+/// before it relies on one, because a guest is versioned independently of
+/// the binary that boots it: `PLY_MICROVM_KERNEL` is a documented override,
+/// and an old keg with a new ply must fail with a sentence rather than
+/// hang on a message nothing will ever answer.
+pub const FEATURE_EXEC: &str = "exec";
+
 /// The most bytes one `{"out":…}` carries before base64 expands them by a
 /// third. Sized so an encoded line stays far under the host's per-line cap
 /// even with the JSON around it: a command that prints a megabyte arrives
@@ -307,8 +314,10 @@ pub struct ExecDone {
 /// and this stays the shape the rest of the code matches on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GuestLine {
-    /// `{"ready":true}` — the entrypoint has been exec'd.
-    Ready,
+    /// `{"ready":true,"features":["exec"]}` — the entrypoint has been
+    /// exec'd, and this is what the guest can do. An older guest sends no
+    /// `features` at all, which reads as "none of them" and is correct.
+    Ready { features: Vec<String> },
     /// `{"exit":N}` — the entrypoint ended.
     Exit { code: i32 },
     /// `{"publish":{"key":"finish_boot","value":"ok"}}` — the app wrote
@@ -355,6 +364,8 @@ pub enum HostLine {
 struct GuestWire {
     #[serde(skip_serializing_if = "Option::is_none")]
     ready: Option<bool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    features: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     exit: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -392,8 +403,9 @@ struct HostWire {
 /// signature does not change, so nothing else has to.
 pub fn guest_line(line: &GuestLine) -> String {
     let wire = match line {
-        GuestLine::Ready => GuestWire {
+        GuestLine::Ready { features } => GuestWire {
             ready: Some(true),
+            features: features.clone(),
             ..Default::default()
         },
         GuestLine::Exit { code } => GuestWire {
@@ -437,7 +449,9 @@ pub fn parse_guest_line(text: &str) -> Option<GuestLine> {
     }
     let wire: GuestWire = serde_json::from_str(text).ok()?;
     if wire.ready == Some(true) {
-        return Some(GuestLine::Ready);
+        return Some(GuestLine::Ready {
+            features: wire.features,
+        });
     }
     if let Some(code) = wire.exit {
         return Some(GuestLine::Exit { code });
@@ -809,8 +823,27 @@ mod tests {
 
     #[test]
     fn guest_lines_are_newline_delimited_json_in_both_directions() {
-        let line = guest_line(&GuestLine::Ready);
+        // A guest with nothing to advertise renders exactly the line it
+        // always did, so an older host reads it unchanged.
+        let line = guest_line(&GuestLine::Ready { features: vec![] });
         assert_eq!(line, "{\"ready\":true}\n");
+        // …and one that can run commands says so, in a field an older host
+        // ignores.
+        let with = guest_line(&GuestLine::Ready {
+            features: vec![FEATURE_EXEC.to_string()],
+        });
+        assert_eq!(with, "{\"ready\":true,\"features\":[\"exec\"]}\n");
+        assert_eq!(
+            parse_guest_line(&with),
+            Some(GuestLine::Ready {
+                features: vec!["exec".to_string()]
+            })
+        );
+        // An older guest sends no features at all, which reads as none.
+        assert_eq!(
+            parse_guest_line("{\"ready\":true}"),
+            Some(GuestLine::Ready { features: vec![] })
+        );
         assert!(
             !line
                 .strip_suffix('\n')
@@ -853,7 +886,7 @@ mod tests {
         // Every variant still renders its real line, so the fallback is not
         // quietly the normal path.
         for line in [
-            GuestLine::Ready,
+            GuestLine::Ready { features: vec![] },
             GuestLine::Exit { code: 7 },
             GuestLine::Publish {
                 publish: Publish {
@@ -1027,7 +1060,7 @@ mod tests {
         // does, so the two sides cannot disagree about it.
         assert!(matches!(
             parse_guest_line(r#"{"ready":true,"exit":7}"#).unwrap(),
-            GuestLine::Ready
+            GuestLine::Ready { .. }
         ));
         assert!(matches!(
             parse_host_line(r#"{"signal":"TERM","params":[]}"#).unwrap(),

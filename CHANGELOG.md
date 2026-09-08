@@ -21,6 +21,12 @@ the release workflow publishes the entry as the GitHub release notes.
   still missing — that needs a pseudo-terminal, which the guest kernel is
   built without — and `ply exec app sh` therefore has no prompt; `sh -c
   '…'` is the form to use.
+
+  A guest now says what it can do when it reports ready, and the host asks
+  before relying on it: an instance booted from an older microVM kernel
+  refuses a command with a sentence instead of waiting forever on a
+  message nothing will answer. The ready line an older guest sends is
+  unchanged, and reads correctly as "no capabilities".
 - `ply craft commit` leaves out what a package manager regenerates: apt's
   and apk's package lists, their download caches, and the session's own
   logs. A session that ran `apt-get install jq` packed to 16 MiB and now
@@ -30,6 +36,13 @@ the release workflow publishes the entry as the GitHub release notes.
   the same convention a Dockerfile follows.
 
 ### Fixes
+- `ply deploy` could report "deploy complete" while the app's published
+  port still had no backend, so the next request after a deploy — a CI
+  smoke test, say — could be answered by nothing at all. Being healthy and
+  being seated in the published pool are different moments, and only the
+  run parent can see the second, so it records it and the watcher waits
+  for it. Probing the published port from outside cannot substitute: the
+  parent binds it at startup and accepts on it either way.
 - `ply craft new` demanded `--source` although its own help said the
   official registry was the default, so the command the packages guide
   prints failed at the first step. The default is now the default.

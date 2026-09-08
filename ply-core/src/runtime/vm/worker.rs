@@ -242,16 +242,29 @@ fn run_inner(instance_dir: &Path) -> Result<i32, String> {
     // that asked for it.
     let sessions: Sessions = Arc::new(Mutex::new(BTreeMap::new()));
 
+    // Whether this guest can run commands at all. Set when it reports
+    // ready, which always precedes any `ply exec`: the run parent writes
+    // the state file only after that, and the state file is how a client
+    // finds this instance.
+    let can_exec = Arc::new(AtomicBool::new(false));
+
     // Guest control lines → the session that owns them, or the parent.
     let exit: Arc<Mutex<Option<i32>>> = Arc::new(Mutex::new(None));
     if let Some(lines) = running.take_control() {
         let writer = writer.clone();
         let exit = exit.clone();
         let sessions = sessions.clone();
+        let can_exec = can_exec.clone();
         std::thread::Builder::new()
             .name("ply-vm-guest-lines".into())
             .spawn(move || {
                 for line in lines {
+                    if let GuestLine::Ready { features } = &line {
+                        can_exec.store(
+                            features.iter().any(|f| f == ply_vm_proto::FEATURE_EXEC),
+                            Ordering::SeqCst,
+                        );
+                    }
                     // Exec traffic belongs to one connection and must not
                     // reach the run parent, whose pump reads ready, exit and
                     // publish and nothing else.
@@ -283,7 +296,7 @@ fn run_inner(instance_dir: &Path) -> Result<i32, String> {
     }
 
     // `ply exec` — one connection per command.
-    serve_exec(instance_dir, running.control_handle(), sessions)?;
+    serve_exec(instance_dir, running.control_handle(), sessions, can_exec)?;
 
     // Host control lines from the parent → the guest. EOF means the parent
     // is gone, and a VM with no parent is a VM nobody can stop: it goes.
@@ -354,6 +367,7 @@ fn serve_exec(
     instance_dir: &Path,
     control: super::console::ControlHandle,
     sessions: Sessions,
+    can_exec: Arc<AtomicBool>,
 ) -> Result<(), String> {
     let path = instance_dir.join(EXEC_SOCKET);
     let _ = std::fs::remove_file(&path);
@@ -367,9 +381,10 @@ fn serve_exec(
                 let id = next_id.fetch_add(1, Ordering::Relaxed);
                 let control = control.clone();
                 let sessions = sessions.clone();
+                let can_exec = can_exec.clone();
                 let _ = std::thread::Builder::new()
                     .name(format!("ply-vm-exec-{id}"))
-                    .spawn(move || exec_session(stream, id, control, sessions));
+                    .spawn(move || exec_session(stream, id, control, sessions, can_exec));
             }
         })
         .map_err(|e| format!("spawning the exec listener: {e}"))?;
@@ -382,7 +397,29 @@ fn exec_session(
     id: u64,
     control: super::console::ControlHandle,
     sessions: Sessions,
+    can_exec: Arc<AtomicBool>,
 ) {
+    // A guest that never advertised `exec` will ignore the request as an
+    // unknown line — the protocol's own rule — and answer nothing at all.
+    // Refuse here instead, or `ply exec` waits forever.
+    if !can_exec.load(Ordering::SeqCst) {
+        let mut stream = stream;
+        let _ = stream.write_all(
+            guest_line(&GuestLine::Done {
+                done: ply_vm_proto::ExecDone {
+                    id: 0,
+                    code: 126,
+                    error: Some(
+                        "this instance's guest cannot run commands — it booted an older \
+                         microVM kernel than this ply expects (check PLY_MICROVM_KERNEL)"
+                            .into(),
+                    ),
+                },
+            })
+            .as_bytes(),
+        );
+        return;
+    }
     let Ok(read_half) = stream.try_clone() else {
         return;
     };

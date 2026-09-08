@@ -454,6 +454,7 @@ mod tests {
             instance_port: Some(8080),
             domains: vec![],
             network: None,
+            serving: true,
         }];
         let r = build("web", 1_000_600, &states, &[], &[], None, None, |_| vec![]);
         assert_eq!(r.status.instances.len(), 1);

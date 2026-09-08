@@ -546,7 +546,12 @@ mod boot {
         let app = spawn_app(&spec);
         APP_PID.store(app, Ordering::SeqCst);
         if let Some(sender) = &sender {
-            sender.send(&GuestLine::Ready);
+            sender.send(&GuestLine::Ready {
+                // What this init can do, so a host talking to an older keg
+                // fails with a sentence instead of waiting on a message
+                // nothing will answer.
+                features: vec![ply_vm_proto::FEATURE_EXEC.to_string()],
+            });
         }
         start_threads(sender.clone(), inbound, params_rw);
 

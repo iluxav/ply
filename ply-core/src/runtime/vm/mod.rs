@@ -661,7 +661,7 @@ fn wait_for_ready(
             )));
         }
         match lines.recv_timeout(left) {
-            Ok(GuestLine::Ready) => return Ok(()),
+            Ok(GuestLine::Ready { .. }) => return Ok(()),
             Ok(GuestLine::Exit { code }) => {
                 *exit.lock().map_err(poisoned)? = Some(code);
                 return Ok(());
@@ -692,7 +692,7 @@ fn pump_control(
     let mut warned = false;
     for line in lines {
         match line {
-            GuestLine::Ready => {}
+            GuestLine::Ready { .. } => {}
             GuestLine::Exit { code } => {
                 if let Ok(mut slot) = exit.lock() {
                     // First answer wins: an exit code is a fact about one

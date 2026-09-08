@@ -58,6 +58,27 @@ pub struct InstanceState {
     /// printed before this field existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub network: Option<PathBuf>,
+    /// Is this instance actually taking traffic on the app's published
+    /// ports? Written `false` at launch for a published app and flipped
+    /// when the run parent seats it in the pool, which happens after its
+    /// health gate passes.
+    ///
+    /// The two moments are not the same, and only the parent can see the
+    /// second: a watcher in another process cannot tell a pool with a
+    /// backend from one without, because the parent binds the host port at
+    /// startup and accepts on it either way. `ply deploy` used to report
+    /// "complete" in that gap, and the next request after a deploy could be
+    /// answered by nothing at all.
+    ///
+    /// Defaults to `true`, which is what an app with nothing published
+    /// means and what every state file written before this field existed
+    /// has to keep meaning.
+    #[serde(default = "yes")]
+    pub serving: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 fn state_dir() -> PathBuf {
@@ -78,6 +99,24 @@ impl InstanceState {
         let path = Self::path(&self.app, self.n);
         std::fs::write(&path, serde_json::to_vec_pretty(self).expect("serializes"))
             .map_err(|source| Error::Io { path, source })
+    }
+
+    /// The run parent has seated this instance in its published pools.
+    /// Cheap and best-effort: a state file that cannot be read or written
+    /// here means `ply deploy` waits a little longer, never that it lies.
+    pub fn mark_serving(app: &str, n: u32) {
+        let path = Self::path(app, n);
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            return;
+        };
+        let Ok(mut state) = serde_json::from_str::<InstanceState>(&text) else {
+            return;
+        };
+        if state.serving {
+            return;
+        }
+        state.serving = true;
+        let _ = state.save();
     }
 
     pub fn remove(app: &str, n: u32) {

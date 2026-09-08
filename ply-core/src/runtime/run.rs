@@ -1013,6 +1013,7 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                         // Healthy means accepting: seat it now rather than a
                         // loop turn later, so the roll never runs one short.
                         instance.membership.join(instance.n);
+                        state::InstanceState::mark_serving(&instance.app, instance.n);
                         Ok(instance)
                     } else {
                         let app = instance.app.clone();
@@ -1221,6 +1222,7 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                     .ready(std::time::Duration::from_millis(100))
             {
                 instance.membership.join(instance.n);
+                state::InstanceState::mark_serving(&instance.app, instance.n);
                 if let Some((at, peer)) = waking.take() {
                     let line = format!(
                         "connection from {}, ready in {} ms",
@@ -2591,6 +2593,9 @@ fn launch_instance(
             },
             // The first spec is the app's canonical address — what `--after`
             // hands to dependants and what `ply lb` emits.
+            // Nothing published means nothing to be seated in, so such an
+            // instance is serving the moment it exists.
+            serving: publish.is_empty(),
             published_port: publish.first().map(|w| w.spec.host_port),
             instance_port: publish.first().map(|w| w.spec.instance_port),
             published_addr: publish.first().map(|w| {

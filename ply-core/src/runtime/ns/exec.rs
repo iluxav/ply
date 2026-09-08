@@ -199,8 +199,6 @@ fn child_exec(instance: &InstanceState, cmd: &[String], env: Vec<CString>) -> i3
     127
 }
 
-/// `<app>` (first live instance) or `<app>.<n>` (exact).
-
 #[cfg(test)]
 mod tests {
     use super::*;

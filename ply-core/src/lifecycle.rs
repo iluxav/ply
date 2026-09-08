@@ -322,6 +322,13 @@ fn slot_rolled(instance_image: &str, want: &str, started: u64, deploy_started: u
 /// the first request after it found nothing listening. An app with no
 /// `[health] port` has nothing to ask, and its launch is its answer.
 fn answering(s: &state::InstanceState) -> bool {
+    // Seated in the app's published pools, which is a fact only the run
+    // parent can establish and therefore one it records. Probing the
+    // published port from here would prove nothing: the parent binds it at
+    // startup and accepts on it whether or not the pool has a backend.
+    if !s.serving {
+        return false;
+    }
     match s.health_port {
         Some(port) => crate::runtime::after::probe(s.ip, port, s.network.as_deref()).is_ok(),
         None => true,
