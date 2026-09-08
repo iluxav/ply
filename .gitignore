@@ -46,3 +46,6 @@ stack.dev.toml
 
 # macOS Finder metadata
 .DS_Store
+
+# working plan, per-machine, never committed
+correction-plan.md
