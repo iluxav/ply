@@ -110,6 +110,34 @@ pub fn list() -> Result<Vec<InstanceState>> {
     Ok(states)
 }
 
+/// The running instance a user meant by `myapp` or `myapp.2`.
+///
+/// One resolver for both backends: `ply exec` means the same thing whether
+/// it enters a namespace or talks to a microVM, so the way it picks an
+/// instance — and the error when nothing matches — should not depend on
+/// which one is underneath.
+pub fn find(target: &str) -> Result<InstanceState> {
+    let states = list()?;
+    let exact: Option<&InstanceState> = target.rsplit_once('.').and_then(|(app, n)| {
+        let n: u32 = n.parse().ok()?;
+        states.iter().find(|s| s.app == app && s.n == n)
+    });
+    let found = exact
+        .or_else(|| states.iter().find(|s| s.app == target && s.alive()))
+        .cloned();
+    found.filter(|s| s.alive()).ok_or_else(|| {
+        let running: Vec<String> = states
+            .iter()
+            .filter(|s| s.alive())
+            .map(|s| format!("{}.{}", s.app, s.n))
+            .collect();
+        Error::Runtime(format!(
+            "no running instance matches `{target}` — running: [{}]",
+            running.join(", ")
+        ))
+    })
+}
+
 /// Remove state (+ leftover instance dirs, mounts, hosts lines) of dead
 /// instances — the recovery path after a kill -9 of ply itself.
 pub fn reap_stale() -> Result<Vec<InstanceState>> {

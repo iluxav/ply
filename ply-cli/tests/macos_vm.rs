@@ -1313,3 +1313,223 @@ fn a_directory_without_a_manifest_runs_from_what_is_inferred() {
     );
     assert!(!dir.join("ply.lock").exists(), "no lock either");
 }
+
+/// `ply exec` into a microVM: the thing the Linux backend does with
+/// `setns`, and a VM cannot, because there is no process on the host to
+/// enter. It goes over the control channel the VMM already built.
+///
+/// One test, several properties, because each boots a machine: the command
+/// runs *inside* the instance (its hostname, its filesystem, its user), its
+/// two output streams stay apart, and its exit code comes back.
+#[test]
+fn exec_runs_a_command_inside_a_running_instance() {
+    let Some(kernel) = kernel() else { return };
+    let scratch = Scratch::new("execin");
+    let image = build_app(
+        &scratch,
+        r#"
+[package]
+name = "plytest-exec"
+version = "0.1.0"
+entrypoint = ["/bin/sleep", "300"]
+workdir = "/tmp"
+
+[dependencies]
+debian = "13.6"
+"#,
+    );
+    let run = Background::start(&scratch, &kernel, &image, &[]);
+    let exec = |args: &[&str]| -> std::process::Output {
+        Command::new(ply())
+            .arg("exec")
+            .arg("plytest-exec")
+            .args(args)
+            .env("PLY_MICROVM_KERNEL", &kernel)
+            .env("PLY_DATA_DIR", scratch.data_dir())
+            .output()
+            .expect("run ply exec")
+    };
+
+    // The instance has to be up and serving the exec socket first.
+    within(
+        "the instance accepted a command",
+        60,
+        || run.output(),
+        || exec(&["/bin/true"]).status.success().then_some(()),
+    );
+
+    let out = exec(&["/bin/echo", "from-inside"]);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim(),
+        "from-inside",
+        "stderr was:\n{}\nthe run said:\n{}",
+        String::from_utf8_lossy(&out.stderr),
+        run.output()
+    );
+
+    // Inside the instance means: its hostname, its workdir, its filesystem.
+    let out = exec(&[
+        "/bin/sh",
+        "-c",
+        "hostname; pwd; test -d /opt && echo has-opt",
+    ]);
+    let seen = String::from_utf8_lossy(&out.stdout);
+    assert!(seen.contains("plytest-exec"), "hostname: {seen}");
+    assert!(seen.contains("/tmp"), "workdir from the manifest: {seen}");
+    assert!(
+        seen.contains("has-opt"),
+        "the image's own filesystem: {seen}"
+    );
+
+    // The two streams do not merge. Merging them is not recoverable, so
+    // this is a property and not a nicety.
+    let out = exec(&["/bin/sh", "-c", "echo out; echo err >&2"]);
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "out");
+    assert_eq!(String::from_utf8_lossy(&out.stderr).trim(), "err");
+
+    // The command's own exit code, and the shell's convention for one that
+    // could not be started at all.
+    assert_eq!(exec(&["/bin/sh", "-c", "exit 42"]).status.code(), Some(42));
+    assert_eq!(exec(&["definitely-not-a-command"]).status.code(), Some(127));
+
+    // …and the app it ran beside is untouched by all of that.
+    // `pgrep` is not in a Debian base image; /proc is.
+    let alive = exec(&[
+        "/bin/sh",
+        "-c",
+        "cat /proc/*/comm | grep -qx sleep && echo alive",
+    ]);
+    assert!(
+        String::from_utf8_lossy(&alive.stdout).contains("alive"),
+        "the entrypoint should still be running:\n{}",
+        run.output()
+    );
+}
+
+/// Input reaches a command, and output comes back byte for byte.
+///
+/// Both halves cross as base64 inside JSON, which is the only way arbitrary
+/// bytes fit in a line-oriented text channel — so "byte for byte" is a
+/// claim that has to be tested rather than assumed.
+#[test]
+fn exec_carries_stdin_and_returns_output_unchanged() {
+    use std::io::Write;
+    let Some(kernel) = kernel() else { return };
+    let scratch = Scratch::new("execio");
+    let image = build_app(
+        &scratch,
+        r#"
+[package]
+name = "plytest-execio"
+version = "0.1.0"
+entrypoint = ["/bin/sleep", "300"]
+
+[dependencies]
+debian = "13.6"
+"#,
+    );
+    let run = Background::start(&scratch, &kernel, &image, &[]);
+    let start = |args: &[&str]| -> std::process::Child {
+        Command::new(ply())
+            .arg("exec")
+            .arg("plytest-execio")
+            .args(args)
+            .env("PLY_MICROVM_KERNEL", &kernel)
+            .env("PLY_DATA_DIR", scratch.data_dir())
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn ply exec")
+    };
+    within(
+        "the instance accepted a command",
+        60,
+        || run.output(),
+        || {
+            let mut child = start(&["/bin/true"]);
+            drop(child.stdin.take());
+            child.wait().ok()?.success().then_some(())
+        },
+    );
+
+    // Stdin: a command that reads to end-of-input only finishes if the
+    // `eof` arrives, which is the half that is easiest to lose.
+    let mut child = start(&["/bin/cat"]);
+    let mut stdin = child.stdin.take().expect("a pipe");
+    let sent = b"one\ntwo\nthree\n";
+    stdin.write_all(sent).expect("write stdin");
+    drop(stdin);
+    let out = child.wait_with_output().expect("wait");
+    assert_eq!(out.stdout, sent, "stdin must reach the command unchanged");
+    assert!(out.status.success());
+
+    // Output: a megabyte of it, so the chunking is exercised, and its hash
+    // computed on both sides so nothing is taken on trust.
+    let mut child = start(&[
+        "/bin/sh",
+        "-c",
+        "head -c 1048576 /dev/urandom > /tmp/r; md5sum /tmp/r | cut -d' ' -f1 >&2; cat /tmp/r",
+    ]);
+    drop(child.stdin.take());
+    let out = child.wait_with_output().expect("wait");
+    let in_guest = String::from_utf8_lossy(&out.stderr).trim().to_string();
+    assert_eq!(out.stdout.len(), 1048576, "every byte came back");
+    // Zero-padded: a digest with a leading zero is still 32 digits.
+    let on_host = format!("{:032x}", md5_of(&out.stdout));
+    assert_eq!(on_host, in_guest, "the bytes are the same bytes");
+}
+
+/// MD5 of a byte slice, so the test can check the guest's `md5sum` without
+/// a dependency. RFC 1321, and used here for equality and nothing else.
+fn md5_of(data: &[u8]) -> u128 {
+    let mut msg = data.to_vec();
+    let bit_len = (data.len() as u64).wrapping_mul(8);
+    msg.push(0x80);
+    while msg.len() % 64 != 56 {
+        msg.push(0);
+    }
+    msg.extend_from_slice(&bit_len.to_le_bytes());
+
+    const S: [u32; 64] = [
+        7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5,
+        9, 14, 20, 5, 9, 14, 20, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10,
+        15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
+    ];
+    let k: Vec<u32> = (0..64)
+        .map(|i| ((i as f64 + 1.0).sin().abs() * 4294967296.0) as u32)
+        .collect();
+    let (mut a0, mut b0, mut c0, mut d0) =
+        (0x67452301u32, 0xefcdab89u32, 0x98badcfeu32, 0x10325476u32);
+    for block in msg.chunks(64) {
+        let m: Vec<u32> = block
+            .chunks(4)
+            .map(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]]))
+            .collect();
+        let (mut a, mut b, mut c, mut d) = (a0, b0, c0, d0);
+        for i in 0..64 {
+            let (f, g) = match i / 16 {
+                0 => ((b & c) | (!b & d), i),
+                1 => ((d & b) | (!d & c), (5 * i + 1) % 16),
+                2 => (b ^ c ^ d, (3 * i + 5) % 16),
+                _ => (c ^ (b | !d), (7 * i) % 16),
+            };
+            let f = f.wrapping_add(a).wrapping_add(k[i]).wrapping_add(m[g]);
+            a = d;
+            d = c;
+            c = b;
+            b = b.wrapping_add(f.rotate_left(S[i]));
+        }
+        a0 = a0.wrapping_add(a);
+        b0 = b0.wrapping_add(b);
+        c0 = c0.wrapping_add(c);
+        d0 = d0.wrapping_add(d);
+    }
+    let mut out = 0u128;
+    for word in [a0, b0, c0, d0] {
+        for byte in word.to_le_bytes() {
+            out = (out << 8) | byte as u128;
+        }
+    }
+    out
+}

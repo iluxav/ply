@@ -18,6 +18,8 @@ mod blk;
 #[cfg(target_os = "macos")]
 mod console;
 #[cfg(target_os = "macos")]
+pub mod exec;
+#[cfg(target_os = "macos")]
 mod machine;
 #[cfg(target_os = "macos")]
 mod net;
@@ -613,9 +615,14 @@ impl Backend for VmBackend {
         })
     }
 
+    /// The dashboard's interactive terminal, which is a different thing
+    /// from `ply exec` and still missing: it needs a pseudo-terminal in the
+    /// guest, and this kernel is built without one. `ply exec` runs commands
+    /// with pipes and needs no pty at all — see `vm::exec`.
     fn terminal(&self, _app: &str, _slot: u32, _nonce: &str) -> Result<()> {
         Err(Error::Runtime(
-            "`ply exec` into a microVM is not available yet (a virtio-console shell channel is v2)"
+            "an interactive terminal into a microVM needs a pseudo-terminal, which this guest \
+             kernel is built without — `ply exec <app> <cmd>` runs commands with pipes"
                 .into(),
         ))
     }
@@ -660,6 +667,11 @@ fn wait_for_ready(
                 return Ok(());
             }
             Ok(GuestLine::Publish { publish }) => apply_publish(app, &publish, &mut false),
+            // A command's output belongs to the `ply exec` that asked for
+            // it; the worker routes those to their connection and never
+            // relays them here. Ignored rather than unreachable, because a
+            // guest is versioned independently of this binary.
+            Ok(GuestLine::Output { .. }) | Ok(GuestLine::Done { .. }) => continue,
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                 return Err(Error::Runtime(format!(
@@ -689,6 +701,8 @@ fn pump_control(
                 }
             }
             GuestLine::Publish { publish } => apply_publish(app, &publish, &mut warned),
+            // The worker's, not this pump's — see `wait_for_ready`.
+            GuestLine::Output { .. } | GuestLine::Done { .. } => {}
         }
     }
 }

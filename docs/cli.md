@@ -151,6 +151,15 @@ ply egress APP [--follow] [--blocked] [--json]
 ply why APP [--json]
 ```
 
+**`ply exec`** runs a command inside a running instance and gives back its
+output and exit code. On Linux it enters the instance's namespaces; on
+macOS there is no namespace to enter, so the request crosses the microVM's
+control channel and the guest runs the command beside the app. Either way
+it runs as the app's user, with the app's environment and workdir, and
+stdout and stderr stay apart. An interactive shell needs a
+pseudo-terminal, which the microVM guest kernel does not have — `sh -c
+'…'` is the form that works everywhere.
+
 **`ply logs`** reads the bounded per-instance ring the run parent tees
 (512 KiB ×2 per instance, in the run dir) — identical foreground, under
 systemd, rootless. journald remains the unbounded archive on systemd hosts.

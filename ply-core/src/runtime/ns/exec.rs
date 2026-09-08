@@ -46,7 +46,7 @@ fn is_own_userns(ns: &std::fs::File) -> bool {
 }
 
 pub fn exec(target: &str, cmd: &[String]) -> Result<i32> {
-    let instance = find_instance(target)?;
+    let instance = state::find(target)?;
     let pid = instance.pid;
 
     // Rootless instances live in a user namespace we must join FIRST (it
@@ -200,27 +200,6 @@ fn child_exec(instance: &InstanceState, cmd: &[String], env: Vec<CString>) -> i3
 }
 
 /// `<app>` (first live instance) or `<app>.<n>` (exact).
-fn find_instance(target: &str) -> Result<InstanceState> {
-    let states = state::list()?;
-    let exact: Option<&InstanceState> = target.rsplit_once('.').and_then(|(app, n)| {
-        let n: u32 = n.parse().ok()?;
-        states.iter().find(|s| s.app == app && s.n == n)
-    });
-    let found = exact
-        .or_else(|| states.iter().find(|s| s.app == target && s.alive()))
-        .cloned();
-    found.filter(|s| s.alive()).ok_or_else(|| {
-        let running: Vec<String> = states
-            .iter()
-            .filter(|s| s.alive())
-            .map(|s| format!("{}.{}", s.app, s.n))
-            .collect();
-        Error::Runtime(format!(
-            "no running instance matches `{target}` — running: [{}]",
-            running.join(", ")
-        ))
-    })
-}
 
 #[cfg(test)]
 mod tests {

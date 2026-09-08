@@ -50,6 +50,8 @@
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
 mod control;
+#[cfg(target_os = "linux")]
+mod exec;
 mod net_setup;
 mod overlay;
 mod spec;
@@ -89,7 +91,7 @@ mod boot {
     };
 
     use crate::control::Control;
-    use crate::{net_setup, overlay, spec, volumes};
+    use crate::{exec, net_setup, overlay, spec, volumes};
 
     /// How many `/dev/vdN` slots to probe before giving up. The scan stops at
     /// the first absent device anyway (they are contiguous from `vda`); this
@@ -128,6 +130,15 @@ mod boot {
 
     /// The entrypoint's pid, for the control channel's `{"signal":…}`.
     static APP_PID: AtomicI32 = AtomicI32::new(0);
+
+    /// What an exec'd command inherits: the instance's environment, workdir
+    /// and user. Captured once, from the spec disk, so a command runs
+    /// inside the same instance the app does rather than beside it.
+    ///
+    /// It holds the composed environment, which includes the run's secrets,
+    /// and is therefore never logged — the same rule the spec disk itself
+    /// is read under.
+    static EXEC_CONTEXT: std::sync::OnceLock<exec::Context> = std::sync::OnceLock::new();
 
     // ---------------------------------------------------------------- log
 
@@ -374,7 +385,12 @@ mod boot {
                 return 255;
             }
             if got != pid {
-                continue; // an orphan reparented to init
+                // Either an orphan reparented to init, or a command `ply
+                // exec` started. This loop is the ONLY reaper in the
+                // process, so the exit status has to be handed on here or
+                // the thread waiting for it waits forever.
+                exec::note_exit(got, status);
+                continue;
             }
             return exit_code(status);
         }
@@ -510,6 +526,14 @@ mod boot {
 
         // --- 5. /run/ply --------------------------------------------------
         let params_rw = setup_params(&spec);
+
+        // What `ply exec` runs commands with. Set before the control
+        // channel opens, so the first request cannot arrive before it.
+        let _ = EXEC_CONTEXT.set(exec::Context {
+            env: spec.env.clone(),
+            workdir: spec.workdir.clone(),
+            user: spec.user.as_ref().map(|u| (u.uid, u.gid)),
+        });
 
         // --- 6. ready, exec, forward signals, report the exit -------------
         // Opened before the fork (it only opens files, it starts no thread),
@@ -1418,6 +1442,22 @@ mod boot {
                     Some(fd) => apply_params(fd, &params),
                     None => log("params update ignored: /run/ply is not mounted"),
                 },
+                // `ply exec`. The context was captured once, after the spec
+                // disk was read; without it there is no instance to run
+                // "inside", so the request is refused rather than run
+                // against this init's own environment.
+                HostLine::Exec { exec: request } => match EXEC_CONTEXT.get() {
+                    Some(ctx) => exec::start(control.clone(), ctx, request),
+                    None => control.send(&GuestLine::Done {
+                        done: ply_vm_proto::ExecDone {
+                            id: request.id,
+                            code: 126,
+                            error: Some("this instance is not ready to run commands".into()),
+                        },
+                    }),
+                },
+                HostLine::Stdin { stdin } => exec::stdin(stdin.id, &stdin.data, stdin.eof),
+                HostLine::Kill { kill } => exec::kill(kill.id, &kill.name),
             });
             // Say so. This thread ending means the host can no longer signal
             // this instance — `ply stop` will not reach it, and no params
@@ -1442,7 +1482,7 @@ mod boot {
         }
     }
 
-    fn signal_number(name: &str) -> Option<libc::c_int> {
+    pub(crate) fn signal_number(name: &str) -> Option<libc::c_int> {
         let bare = name.strip_prefix("SIG").unwrap_or(name);
         Some(match bare {
             "TERM" => libc::SIGTERM,

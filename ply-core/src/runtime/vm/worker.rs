@@ -33,11 +33,12 @@
 //! The worker's exit code is the guest's, or 255 for a machine that stopped
 //! without reporting one.
 
+use std::collections::BTreeMap;
 use std::io::{BufRead, Write};
-use std::os::unix::net::UnixStream;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 use nix::sys::signal::Signal;
@@ -50,6 +51,11 @@ use super::{machine, switch};
 pub const SPEC_FILE: &str = "worker.json";
 /// Where the parent listens for the worker.
 pub const CONTROL_SOCKET: &str = "control.sock";
+/// Where the WORKER listens, for `ply exec`. Beside the instance's other
+/// state, so it disappears with the instance directory; reachable by anyone
+/// who can already read that directory, which is the same trust boundary
+/// the state files and the switch socket sit behind.
+pub const EXEC_SOCKET: &str = "exec.sock";
 /// The hidden subcommand.
 pub const SUBCOMMAND: &str = "__vm-worker";
 
@@ -231,15 +237,38 @@ fn run_inner(instance_dir: &Path) -> Result<i32, String> {
             .map_err(|e| format!("spawning the console pump: {e}"))?;
     }
 
-    // Guest control lines → the parent, and the exit code noted on the way.
+    // `ply exec` sessions, by request id: the guest tags a command's output
+    // and its exit with the id, and this is how each finds the connection
+    // that asked for it.
+    let sessions: Sessions = Arc::new(Mutex::new(BTreeMap::new()));
+
+    // Guest control lines → the session that owns them, or the parent.
     let exit: Arc<Mutex<Option<i32>>> = Arc::new(Mutex::new(None));
     if let Some(lines) = running.take_control() {
         let writer = writer.clone();
         let exit = exit.clone();
+        let sessions = sessions.clone();
         std::thread::Builder::new()
             .name("ply-vm-guest-lines".into())
             .spawn(move || {
                 for line in lines {
+                    // Exec traffic belongs to one connection and must not
+                    // reach the run parent, whose pump reads ready, exit and
+                    // publish and nothing else.
+                    if let Some(id) = exec_id(&line) {
+                        let done = matches!(line, GuestLine::Done { .. });
+                        let mut sessions = match sessions.lock() {
+                            Ok(sessions) => sessions,
+                            Err(poisoned) => poisoned.into_inner(),
+                        };
+                        if let Some(tx) = sessions.get(&id) {
+                            let _ = tx.send(line);
+                        }
+                        if done {
+                            sessions.remove(&id);
+                        }
+                        continue;
+                    }
                     if let GuestLine::Exit { code } = &line {
                         if let Ok(mut slot) = exit.lock() {
                             slot.get_or_insert(*code);
@@ -252,6 +281,9 @@ fn run_inner(instance_dir: &Path) -> Result<i32, String> {
             })
             .map_err(|e| format!("spawning the control pump: {e}"))?;
     }
+
+    // `ply exec` — one connection per command.
+    serve_exec(instance_dir, running.control_handle(), sessions)?;
 
     // Host control lines from the parent → the guest. EOF means the parent
     // is gone, and a VM with no parent is a VM nobody can stop: it goes.
@@ -299,6 +331,137 @@ fn run_inner(instance_dir: &Path) -> Result<i32, String> {
     drop(running);
     let code = exit.lock().ok().and_then(|slot| *slot).unwrap_or(255);
     Ok(code)
+}
+
+/// Which exec session a guest line belongs to, if any.
+fn exec_id(line: &GuestLine) -> Option<u64> {
+    match line {
+        GuestLine::Output { output } => Some(output.id),
+        GuestLine::Done { done } => Some(done.id),
+        _ => None,
+    }
+}
+
+type Sessions = Arc<Mutex<BTreeMap<u64, mpsc::Sender<GuestLine>>>>;
+
+/// Listen for `ply exec`. One connection is one command: the client sends a
+/// `{"exec":…}` line, then reads back that command's output and its exit,
+/// and may send `{"stdin":…}` or `{"kill":…}` meanwhile.
+///
+/// Ids are allocated HERE, not by the client: two `ply exec` processes know
+/// nothing of each other, and a collision would cross two commands' output.
+fn serve_exec(
+    instance_dir: &Path,
+    control: super::console::ControlHandle,
+    sessions: Sessions,
+) -> Result<(), String> {
+    let path = instance_dir.join(EXEC_SOCKET);
+    let _ = std::fs::remove_file(&path);
+    let listener = UnixListener::bind(&path)
+        .map_err(|e| format!("listening for `ply exec` at {}: {e}", path.display()))?;
+    std::thread::Builder::new()
+        .name("ply-vm-exec".into())
+        .spawn(move || {
+            let next_id = AtomicU64::new(1);
+            for stream in listener.incoming().flatten() {
+                let id = next_id.fetch_add(1, Ordering::Relaxed);
+                let control = control.clone();
+                let sessions = sessions.clone();
+                let _ = std::thread::Builder::new()
+                    .name(format!("ply-vm-exec-{id}"))
+                    .spawn(move || exec_session(stream, id, control, sessions));
+            }
+        })
+        .map_err(|e| format!("spawning the exec listener: {e}"))?;
+    Ok(())
+}
+
+/// One `ply exec`, start to finish.
+fn exec_session(
+    stream: UnixStream,
+    id: u64,
+    control: super::console::ControlHandle,
+    sessions: Sessions,
+) {
+    let Ok(read_half) = stream.try_clone() else {
+        return;
+    };
+    let mut reader = std::io::BufReader::new(read_half);
+    let mut first = String::new();
+    if reader.read_line(&mut first).is_err() {
+        return;
+    }
+    let Some(HostLine::Exec { mut exec }) = parse_host_line(&first) else {
+        // Not a request. Say so in the client's own language rather than
+        // closing on it, so `ply exec` can print something useful.
+        let mut stream = stream;
+        let _ = stream.write_all(
+            guest_line(&GuestLine::Done {
+                done: ply_vm_proto::ExecDone {
+                    id: 0,
+                    code: 126,
+                    error: Some("expected an exec request".into()),
+                },
+            })
+            .as_bytes(),
+        );
+        return;
+    };
+    exec.id = id;
+
+    let (tx, rx) = mpsc::channel();
+    match sessions.lock() {
+        Ok(mut sessions) => sessions.insert(id, tx),
+        Err(poisoned) => poisoned.into_inner().insert(id, tx),
+    };
+    control.send(&HostLine::Exec { exec });
+
+    // Client → guest: more input, or a signal. EOF means the client is gone,
+    // and a command nobody is listening to should stop rather than run on
+    // inside the instance forever.
+    let signal_control = control.clone();
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => match parse_host_line(&line) {
+                    Some(HostLine::Stdin { mut stdin }) => {
+                        stdin.id = id;
+                        signal_control.send(&HostLine::Stdin { stdin });
+                    }
+                    Some(HostLine::Kill { mut kill }) => {
+                        kill.id = id;
+                        signal_control.send(&HostLine::Kill { kill });
+                    }
+                    _ => {}
+                },
+            }
+        }
+        signal_control.send(&HostLine::Kill {
+            kill: ply_vm_proto::ExecKill {
+                id,
+                name: "TERM".into(),
+            },
+        });
+    });
+
+    // Guest → client, until the command ends.
+    let mut stream = stream;
+    for line in rx {
+        let done = matches!(line, GuestLine::Done { .. });
+        if stream.write_all(guest_line(&line).as_bytes()).is_err() || stream.flush().is_err() {
+            break;
+        }
+        if done {
+            break;
+        }
+    }
+    match sessions.lock() {
+        Ok(mut sessions) => sessions.remove(&id),
+        Err(poisoned) => poisoned.into_inner().remove(&id),
+    };
 }
 
 fn send(writer: &Arc<Mutex<UnixStream>>, text: &str) -> Result<(), String> {

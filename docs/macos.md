@@ -31,7 +31,7 @@ Two ways to run it:
 | `ply up` stacks | yes | yes |
 | `--scale`, `ply deploy` | yes | yes |
 | `ply.dev.toml` links (live source) | yes, over virtio-9p | yes |
-| `ply exec` | not yet | yes |
+| `ply exec` | yes (no interactive shell) | yes |
 | egress contract | not enforced yet | audit and enforce, as on Linux |
 | Intel Mac | no | yes |
 
@@ -77,11 +77,33 @@ Mac is what the next read inside the guest sees, so `tsx watch`,
 `nodemon` and friends work as they do on Linux. The shared tree appears
 owned by the app's user.
 
+**Running a command inside an instance.** `ply exec <app> <cmd>` works the
+way it does on Linux — the command runs inside the instance, as the app's
+user, with the app's environment and workdir, and its output and exit code
+come back:
+
+```sh
+ply exec myapp ls /opt
+echo '{"a":1}' | ply exec myapp jq .a
+ply exec myapp sh -c 'exit 3'; echo $?     # 3
+```
+
+There is no namespace to enter, so it is not `setns` as on Linux: the
+request crosses the control channel the machine already has, and the
+guest's init runs the command beside the app. Output streams back as it
+is produced, stdout and stderr kept apart, byte for byte. What is missing
+is an interactive shell — that needs a pseudo-terminal, which this guest
+kernel is built without — so `ply exec app sh` gives you a shell with no
+prompt and no line editing. Use `sh -c '…'`.
+
 ### What is not there yet
 
 Said plainly:
 
-- `ply exec` into a microVM (a console channel into the guest is v2).
+- An interactive terminal (`ply exec app sh` as a prompt, and the
+  dashboard's web terminal): the guest kernel has no pseudo-terminal
+  support. Commands run with pipes, which is what a script or an agent
+  wants.
 - The [egress contract](/docs/security/#egress-the-contract): the microVM
   backend reports itself as not enforcing, and runs the app unobserved.
 - `[resources]` limits are ignored: a microVM gets a fixed RAM size.
@@ -131,9 +153,10 @@ WSL2 is a real Linux kernel: ply runs in it directly, no extra tooling.
 The native backend is complete for running and wiring apps and is covered
 by an integration suite on Apple Silicon (`make mac-test`): disks, exit
 codes, stdout, published ports, `.ply` names, outbound through the switch,
-signals, stacks, the clock, `--scale`, links, `ply deploy`. It ships as a
-signed release binary, installed by the installer, with its kernel in the
-registry. Next are `ply exec` and egress enforcement in the VM. The design that got here is `docs/ply-vm.md`
+signals, stacks, the clock, `--scale`, links, `ply deploy`, `ply exec`. It
+ships as a signed release binary, installed by the installer, with its
+kernel in the registry. Next are an interactive terminal and egress
+enforcement in the VM. The design that got here is `docs/ply-vm.md`
 in the repo.
 
 **Signing, for the curious.** The release is signed ad-hoc with the

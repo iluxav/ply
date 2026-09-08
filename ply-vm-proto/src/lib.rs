@@ -223,6 +223,82 @@ pub struct NetSpec {
     pub gateway: String,
 }
 
+/// The most bytes one `{"out":…}` carries before base64 expands them by a
+/// third. Sized so an encoded line stays far under the host's per-line cap
+/// even with the JSON around it: a command that prints a megabyte arrives
+/// as a stream of these, not as one line nobody can buffer.
+pub const EXEC_CHUNK: usize = 16 * 1024;
+
+/// Which of the command's two streams a chunk came from. Kept apart all the
+/// way to the caller, because a program's diagnostics and its output are
+/// different things and merging them is not recoverable.
+pub const STREAM_STDOUT: u8 = 1;
+pub const STREAM_STDERR: u8 = 2;
+
+/// Run this command inside the instance.
+///
+/// `id` is the caller's handle on it: output and the exit status come back
+/// tagged with it, and `ExecStdin`/`ExecKill` name it. Ids are the host's to
+/// allocate and the guest never invents one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecRequest {
+    pub id: u64,
+    /// argv, the first element being the program. Resolved against the
+    /// instance's own PATH by the guest, so `ls` works as well as `/bin/ls`.
+    pub argv: Vec<String>,
+    /// Added to the instance's environment for this command only. The
+    /// instance's own env is the base, so a command sees what the app sees.
+    #[serde(default)]
+    pub env: Vec<(String, String)>,
+    /// Absent = the instance's workdir, which is what `ply exec` means by
+    /// "inside the instance".
+    #[serde(default)]
+    pub cwd: Option<String>,
+}
+
+/// Bytes for a running command's standard input, base64 in `data`.
+/// `eof` closes it, which is how `sort` or `cat` ever finish.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecStdin {
+    pub id: u64,
+    #[serde(default)]
+    pub data: String,
+    #[serde(default)]
+    pub eof: bool,
+}
+
+/// Signal a running command by name, the same spelling `HostLine::Signal`
+/// uses. This is how a caller enforces a timeout on something it started.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecKill {
+    pub id: u64,
+    pub name: String,
+}
+
+/// A chunk of a running command's output, base64 in `data`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecOutput {
+    pub id: u64,
+    /// `STREAM_STDOUT` or `STREAM_STDERR`.
+    pub stream: u8,
+    pub data: String,
+}
+
+/// A command ended. The last thing said about that id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecDone {
+    pub id: u64,
+    /// The command's own status, or `128 + signal` if a signal ended it.
+    /// 127 when it could not be started at all and 126 when it was found
+    /// but could not be run — the shell's conventions, because that is what
+    /// a caller's error handling already knows.
+    pub code: i32,
+    /// Why it could not be started, when that is what happened. Present
+    /// only with 126 or 127.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 /// Guest → host, one JSON object per line on `hvc1`.
 ///
 /// Deliberately NOT a serde enum. `{"ready":true}` is a unit variant with a
@@ -238,6 +314,11 @@ pub enum GuestLine {
     /// `{"publish":{"key":"finish_boot","value":"ok"}}` — the app wrote
     /// `/run/ply/self/<key>`; forward it to the host's params tree.
     Publish { publish: Publish },
+    /// `{"out":{"id":1,"stream":1,"data":"aGk="}}` — output from a command
+    /// the host started with `HostLine::Exec`.
+    Output { output: ExecOutput },
+    /// `{"done":{"id":1,"code":0}}` — that command ended.
+    Done { done: ExecDone },
 }
 
 /// One fact the instance published about itself: the guest saw the app write
@@ -258,6 +339,12 @@ pub enum HostLine {
     /// `{"params":[["<app>",[["<key>","<value>"]]]]}` — a live params update
     /// to apply to the read-only peer nodes under `/run/ply`.
     Params { params: ParamsTree },
+    /// `{"exec":{"id":1,"argv":["ls"]}}` — run this, beside the app.
+    Exec { exec: ExecRequest },
+    /// `{"stdin":{"id":1,"data":"aGk=","eof":false}}`
+    Stdin { stdin: ExecStdin },
+    /// `{"kill":{"id":1,"name":"TERM"}}`
+    Kill { kill: ExecKill },
 }
 
 /// The on-the-wire shape of a guest→host line: every variant's payload as an
@@ -272,6 +359,10 @@ struct GuestWire {
     exit: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     publish: Option<Publish>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output: Option<ExecOutput>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    done: Option<ExecDone>,
 }
 
 /// The host→guest mirror of `GuestWire`.
@@ -281,6 +372,12 @@ struct HostWire {
     signal: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     params: Option<ParamsTree>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    exec: Option<ExecRequest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stdin: Option<ExecStdin>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    kill: Option<ExecKill>,
 }
 
 /// Render one guest→host line, newline included. The newline is the frame,
@@ -305,6 +402,14 @@ pub fn guest_line(line: &GuestLine) -> String {
         },
         GuestLine::Publish { publish } => GuestWire {
             publish: Some(publish.clone()),
+            ..Default::default()
+        },
+        GuestLine::Output { output } => GuestWire {
+            output: Some(output.clone()),
+            ..Default::default()
+        },
+        GuestLine::Done { done } => GuestWire {
+            done: Some(done.clone()),
             ..Default::default()
         },
     };
@@ -337,7 +442,13 @@ pub fn parse_guest_line(text: &str) -> Option<GuestLine> {
     if let Some(code) = wire.exit {
         return Some(GuestLine::Exit { code });
     }
-    wire.publish.map(|publish| GuestLine::Publish { publish })
+    if let Some(publish) = wire.publish {
+        return Some(GuestLine::Publish { publish });
+    }
+    if let Some(output) = wire.output {
+        return Some(GuestLine::Output { output });
+    }
+    wire.done.map(|done| GuestLine::Done { done })
 }
 
 /// Render one host→guest line, newline included. Degrades to `{}` for the
@@ -351,6 +462,18 @@ pub fn host_line(line: &HostLine) -> String {
         },
         HostLine::Params { params } => HostWire {
             params: Some(params.clone()),
+            ..Default::default()
+        },
+        HostLine::Exec { exec } => HostWire {
+            exec: Some(exec.clone()),
+            ..Default::default()
+        },
+        HostLine::Stdin { stdin } => HostWire {
+            stdin: Some(stdin.clone()),
+            ..Default::default()
+        },
+        HostLine::Kill { kill } => HostWire {
+            kill: Some(kill.clone()),
             ..Default::default()
         },
     };
@@ -374,7 +497,71 @@ pub fn parse_host_line(text: &str) -> Option<HostLine> {
     if let Some(name) = wire.signal {
         return Some(HostLine::Signal { name });
     }
-    wire.params.map(|params| HostLine::Params { params })
+    if let Some(params) = wire.params {
+        return Some(HostLine::Params { params });
+    }
+    if let Some(exec) = wire.exec {
+        return Some(HostLine::Exec { exec });
+    }
+    if let Some(stdin) = wire.stdin {
+        return Some(HostLine::Stdin { stdin });
+    }
+    wire.kill.map(|kill| HostLine::Kill { kill })
+}
+
+// --------------------------------------------------------------- base64
+//
+// A command's output is not text — it is whatever the program wrote — and a
+// JSON string holds only valid UTF-8. So output crosses base64-encoded.
+//
+// Hand-rolled rather than taken as a dependency, for the reason the header
+// gives: this crate links into a static init inside an initramfs with a size
+// budget, and the whole codec is thirty lines. It is also the only code here
+// that touches attacker-shaped bytes in bulk, so it indexes nothing and
+// returns `None` rather than failing.
+
+const B64_ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+/// Standard base64 with padding.
+pub fn b64_encode(bytes: &[u8]) -> String {
+    let symbol = |n: u32| -> char { B64_ALPHABET[(n & 63) as usize] as char };
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b = |i: usize| -> u32 { chunk.get(i).copied().unwrap_or(0) as u32 };
+        let n = (b(0) << 16) | (b(1) << 8) | b(2);
+        out.push(symbol(n >> 18));
+        out.push(symbol(n >> 12));
+        out.push(if chunk.len() > 1 { symbol(n >> 6) } else { '=' });
+        out.push(if chunk.len() > 2 { symbol(n) } else { '=' });
+    }
+    out
+}
+
+/// The inverse. `None` for anything that is not base64 — padding and
+/// newlines are skipped, every other stray byte is a refusal, because a
+/// chunk that decoded "mostly" would corrupt a caller's output silently.
+pub fn b64_decode(text: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(text.len() / 4 * 3);
+    let mut acc: u32 = 0;
+    let mut bits: u32 = 0;
+    for byte in text.bytes() {
+        let six = match byte {
+            b'A'..=b'Z' => byte - b'A',
+            b'a'..=b'z' => byte - b'a' + 26,
+            b'0'..=b'9' => byte - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            b'=' | b'\n' | b'\r' => continue,
+            _ => return None,
+        };
+        acc = (acc << 6) | six as u32;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+        }
+    }
+    Some(out)
 }
 
 /// Why a byte range refused to be a spec disk.
@@ -691,6 +878,121 @@ mod tests {
             assert_ne!(rendered, "{}\n", "{line:?} must not render as the fallback");
             assert_eq!(parse_host_line(&rendered), Some(line));
         }
+    }
+
+    #[test]
+    fn base64_round_trips_every_byte_and_every_length() {
+        // Every byte value, so no alphabet entry is wrong; every length mod
+        // 3, so both padding cases are covered.
+        let all: Vec<u8> = (0..=255u8).collect();
+        for len in 0..=all.len() {
+            let slice = &all[..len];
+            let encoded = b64_encode(slice);
+            assert_eq!(encoded.len() % 4, 0, "len {len} is not padded to a quantum");
+            assert_eq!(b64_decode(&encoded).as_deref(), Some(slice), "len {len}");
+        }
+        // The canonical vectors, so this is standard base64 and not a
+        // private dialect that only round-trips with itself.
+        assert_eq!(b64_encode(b""), "");
+        assert_eq!(b64_encode(b"f"), "Zg==");
+        assert_eq!(b64_encode(b"fo"), "Zm8=");
+        assert_eq!(b64_encode(b"foo"), "Zm9v");
+        assert_eq!(b64_encode(b"foobar"), "Zm9vYmFy");
+    }
+
+    #[test]
+    fn base64_refuses_what_is_not_base64() {
+        assert_eq!(b64_decode("Zm9v*"), None);
+        assert_eq!(b64_decode("Zm 9v"), None);
+        // Padding and newlines are noise, not data.
+        assert_eq!(b64_decode("Zm9v\n").as_deref(), Some(&b"foo"[..]));
+    }
+
+    #[test]
+    fn an_exec_request_and_its_answer_cross_the_wire() {
+        // The whole loop, as the host and guest actually speak it.
+        let request = HostLine::Exec {
+            exec: ExecRequest {
+                id: 7,
+                argv: vec!["sh".into(), "-c".into(), "echo hi".into()],
+                env: vec![("X".into(), "1".into())],
+                cwd: Some("/opt/app".into()),
+            },
+        };
+        let text = host_line(&request);
+        assert!(text.ends_with('\n'), "the newline is the frame");
+        assert_eq!(parse_host_line(&text), Some(request));
+
+        // Output is arbitrary bytes, including invalid UTF-8, which is the
+        // reason it is base64 and not a JSON string.
+        let raw = vec![0x00, 0xff, b'h', b'i', 0x80];
+        let out = GuestLine::Output {
+            output: ExecOutput {
+                id: 7,
+                stream: STREAM_STDERR,
+                data: b64_encode(&raw),
+            },
+        };
+        let parsed = parse_guest_line(&guest_line(&out)).expect("output parses");
+        let GuestLine::Output { output } = &parsed else {
+            panic!("expected output, got {parsed:?}");
+        };
+        assert_eq!(b64_decode(&output.data), Some(raw));
+
+        let done = GuestLine::Done {
+            done: ExecDone {
+                id: 7,
+                code: 127,
+                error: Some("not on PATH".into()),
+            },
+        };
+        assert_eq!(parse_guest_line(&guest_line(&done)), Some(done));
+        // A plain success carries no error field at all.
+        let ok = guest_line(&GuestLine::Done {
+            done: ExecDone {
+                id: 7,
+                code: 0,
+                error: None,
+            },
+        });
+        assert!(!ok.contains("error"), "{ok}");
+    }
+
+    #[test]
+    fn stdin_and_kill_reach_a_running_command() {
+        for line in [
+            HostLine::Stdin {
+                stdin: ExecStdin {
+                    id: 1,
+                    data: b64_encode(b"data\n"),
+                    eof: false,
+                },
+            },
+            HostLine::Stdin {
+                stdin: ExecStdin {
+                    id: 1,
+                    data: String::new(),
+                    eof: true,
+                },
+            },
+            HostLine::Kill {
+                kill: ExecKill {
+                    id: 1,
+                    name: "TERM".into(),
+                },
+            },
+        ] {
+            assert_eq!(parse_host_line(&host_line(&line)), Some(line));
+        }
+    }
+
+    #[test]
+    fn an_older_guest_ignores_exec_instead_of_dying() {
+        // The compatibility rule: a line this build does not know is
+        // nothing, never an error. An init from before exec existed keeps
+        // running the app when a newer host asks it to run a command.
+        assert_eq!(parse_host_line("{\"neverheardofit\":{\"id\":1}}"), None);
+        assert_eq!(parse_guest_line("{\"neverheardofit\":1}"), None);
     }
 
     #[test]

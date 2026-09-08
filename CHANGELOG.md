@@ -8,6 +8,19 @@ the release workflow publishes the entry as the GitHub release notes.
 ## Unreleased
 
 ### What changed
+- **`ply exec` works on macOS.** `ply exec <app> <cmd>` runs a command
+  inside a running microVM — as the app's user, with the app's environment
+  and workdir — and streams its output back with stdout and stderr kept
+  apart, byte for byte, ending with its exit code. Standard input is
+  forwarded when it is not a terminal, so `echo x | ply exec app cat`
+  works, and several commands can run at once.
+
+  There is no namespace to enter, so this is not the Linux path: the
+  request crosses the control channel the machine already has, and the
+  guest's init forks the command beside the app. An interactive shell is
+  still missing — that needs a pseudo-terminal, which the guest kernel is
+  built without — and `ply exec app sh` therefore has no prompt; `sh -c
+  '…'` is the form to use.
 - `ply craft commit` leaves out what a package manager regenerates: apt's
   and apk's package lists, their download caches, and the session's own
   logs. A session that ran `apt-get install jq` packed to 16 MiB and now
