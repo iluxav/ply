@@ -5,6 +5,18 @@ breaking changes, and known limitations. Write under **Unreleased** as work
 lands; `make release-cli` turns that heading into the version and date, and
 the release workflow publishes the entry as the GitHub release notes.
 
+## Unreleased
+
+### What changed
+- Notify config moved to `<data>/config/notify.toml` (the old
+  `<data>/notify.toml` is still read), and `ply setup` creates the
+  `config/` dir. It holds only notify config and no secrets, so the
+  dashboard can be granted it read-write without exposing `host.key` — the
+  dashboard now has a **Notifications page** where you pick the events and
+  add a Telegram (or Discord, webhook, command) destination, with an
+  instant "send test". Config code and the settings page live in the
+  separate iluxav/ply-dashboard repo.
+
 ## v0.1.91 — 2026-09-08
 
 ### What changed

@@ -43,6 +43,15 @@ mod linux {
             );
         }
 
+        // The config dir the dashboard can be granted for notify.toml — a
+        // grant source that exists, holding no secrets.
+        {
+            let dir = ply_core::notify::config_dir();
+            if std::fs::create_dir_all(&dir).is_ok() {
+                println!("ok: config dir {}", dir.display());
+            }
+        }
+
         apparmor_step()?;
         if let Some(port) = args.unprivileged_ports {
             unprivileged_ports_step(port)?;

@@ -49,8 +49,28 @@ const DISK_RENAG_SECS: u64 = 6 * 3600;
 /// A synthetic event name the journal never carries — computed here.
 const DERIVED: &[&str] = &["restart-loop", "disk-high"];
 
-fn config_path() -> PathBuf {
-    crate::paths::data_dir().join("notify.toml")
+/// Where the notify config lives. Canonically `<data>/config/notify.toml`
+/// — a directory that holds only notify config, so the dashboard can be
+/// granted it read-write without exposing `host.key` and the rest of the
+/// data dir. The old `<data>/notify.toml` is still read if present, so a
+/// host configured before the move keeps working.
+pub fn config_path() -> PathBuf {
+    let dir = crate::paths::data_dir().join("config");
+    let current = dir.join("notify.toml");
+    if current.exists() {
+        return current;
+    }
+    let legacy = crate::paths::data_dir().join("notify.toml");
+    if legacy.exists() {
+        return legacy;
+    }
+    current
+}
+
+/// The directory `ply setup` creates so the dashboard's grant has a source
+/// that exists.
+pub fn config_dir() -> PathBuf {
+    crate::paths::data_dir().join("config")
 }
 fn state_path() -> PathBuf {
     crate::paths::data_dir().join("notify.state")
