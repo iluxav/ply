@@ -5,6 +5,24 @@ breaking changes, and known limitations. Write under **Unreleased** as work
 lands; `make release-cli` turns that heading into the version and date, and
 the release workflow publishes the entry as the GitHub release notes.
 
+## Unreleased
+
+### What changed
+- `ply craft commit` leaves out what a package manager regenerates: apt's
+  and apk's package lists, their download caches, and the session's own
+  logs. A session that ran `apt-get install jq` packed to 16 MiB and now
+  packs to 564 KiB, and the commit line says what it left out. The dpkg
+  database still ships, so a session resumed with `craft edit` knows what
+  is installed and only needs `apt-get update` before installing more —
+  the same convention a Dockerfile follows.
+
+### Fixes
+- `ply craft new` demanded `--source` although its own help said the
+  official registry was the default, so the command the packages guide
+  prints failed at the first step. The default is now the default.
+- The packages guide's craft example named a `--base` flag that does not
+  exist (it is `--from`), and did not say that craft needs root.
+
 ## v0.1.82 — 2026-09-08
 
 ### Fixes

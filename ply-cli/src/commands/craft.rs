@@ -53,6 +53,14 @@ mod linux {
                         outcome.skipped_deletions
                     );
                 }
+                if outcome.dropped_files > 0 {
+                    println!(
+                        "left out {} cache file(s), {} — package indexes and session logs, \
+                         which regenerate themselves",
+                        outcome.dropped_files,
+                        human_size(outcome.dropped_bytes)
+                    );
+                }
                 println!(
                     "committed {} ({})",
                     outcome.image_path.display(),

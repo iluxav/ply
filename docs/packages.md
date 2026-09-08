@@ -52,11 +52,22 @@ For anything that isn't a Debian package, `craft` turns a shell session
 into a package. The overlay upper layer *is* the layer:
 
 ```sh
-ply craft new --base debian@13 mytools      # opens a shell on the base
-# …inside: install things, copy files, configure…
-ply craft changes mytools                   # what did the session add?
-ply craft commit mytools --version 0.1.0    # → mytools-0.1.0-linux-x64.img
+sudo ply craft new --from debian@13 mytools  # opens a shell on the base
+# …inside: apt-get install things, copy files, configure…
+sudo ply craft changes mytools               # what did the session add?
+sudo ply craft commit mytools --version 0.1.0  # → mytools-0.1.0-linux-x64.img
 ```
+
+It needs root (it mounts an overlay) and the base comes from the official
+registry unless `--source` says otherwise.
+
+`commit` leaves out what a package manager regenerates — apt's or apk's
+package lists, their download caches, and the session's own logs — because
+those are usually most of the weight: an `apt-get install jq` session packs
+to about half a megabyte instead of sixteen. The dpkg database itself
+ships, so a session resumed from the image with `craft edit` still knows
+what is installed; it just needs `apt-get update` before installing
+something new, exactly as a Dockerfile does.
 
 Sessions persist between shells (`ply craft shell`), can be listed
 (`ply craft ls`), discarded (`ply craft rm`), and — because a committed

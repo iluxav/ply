@@ -78,10 +78,11 @@ pub fn new(
             "--from `{from}`: expected pkg@constraint, e.g. alpine@3.20"
         ))
     })?;
+    // The official registry, as `--source`'s own help says. It used to be
+    // required, so `ply craft new --from debian@13 mytools` — the exact
+    // line the packages guide prints — failed at the first step.
     let source_spec = source
-        .ok_or_else(|| {
-            Error::Runtime("--source URL is required (where to fetch the base from)".into())
-        })?
+        .unwrap_or(crate::catalog::OFFICIAL_SOURCE)
         .to_string();
 
     // Resolve exactly like an app with one dependency would.
@@ -371,6 +372,81 @@ pub fn changes(name: &str) -> Result<Vec<Change>> {
     Ok(result)
 }
 
+/// Directories whose whole contents a `craft commit` leaves out.
+///
+/// The bar for this list is narrow: a package manager regenerates it on
+/// demand, or it records THIS SESSION rather than its result. Everything
+/// else the person put in the session is theirs and ships.
+const DISPOSABLE_DIRS: &[&str] = &[
+    "var/lib/apt/lists",  // apt's package index — `apt-get update` rebuilds it
+    "var/cache/apt",      // the .debs it downloaded, and its binary caches
+    "var/cache/apk",      // the same, for an Alpine base
+    "var/log/apt",        // what this session's apt run did, not what it made
+    "var/cache/ldconfig", // `ldconfig` rebuilds it
+    "tmp",                // scratch, by definition
+];
+
+/// Individual files, on the same terms.
+const DISPOSABLE_FILES: &[&str] = &[
+    "var/log/dpkg.log",
+    "var/log/alternatives.log",
+    "var/lib/dpkg/lock",
+    "var/lib/dpkg/lock-frontend",
+    "var/lib/dpkg/triggers/Lock",
+    "lib/apk/db/lock",
+    // The operator's own typing, which is nobody's business downstream.
+    "root/.bash_history",
+    "root/.ash_history",
+];
+
+/// Does this path belong to a package manager's cache or to the record of
+/// the session, rather than to what the session produced?
+///
+/// Deliberately NOT the dpkg database: `var/lib/dpkg/status` and
+/// `var/lib/dpkg/info` are how a later `apt-get` knows what is already
+/// installed, so dropping them would make a derived session reinstall the
+/// world. Only the parts that regenerate themselves go.
+///
+/// Measured on a session that ran `apt-get install jq`: apt's lists were
+/// 21 MB and everything else, jq included, was 1.1 MB.
+pub fn is_disposable(rel: &Path) -> bool {
+    let rel = rel.to_string_lossy();
+    let rel = rel.trim_start_matches('/');
+    if DISPOSABLE_FILES.contains(&rel) {
+        return true;
+    }
+    DISPOSABLE_DIRS.iter().any(|dir| {
+        // `var/cache/apt` covers `var/cache/apt/archives/x.deb` and the
+        // directory itself, but never `var/cache/aptitude`.
+        rel == *dir
+            || rel
+                .strip_prefix(dir)
+                .is_some_and(|rest| rest.starts_with('/'))
+    })
+}
+
+/// How many files under `rw` are disposable, and what they weigh. An
+/// unreadable entry is skipped: this figure is a report, never a decision.
+fn disposable_total(rw: &Path) -> (usize, u64) {
+    let mut files = 0;
+    let mut bytes = 0;
+    for entry in walkdir::WalkDir::new(rw).min_depth(1).into_iter().flatten() {
+        let Ok(rel) = entry.path().strip_prefix(rw) else {
+            continue;
+        };
+        if !is_disposable(rel) {
+            continue;
+        }
+        if let Ok(meta) = entry.path().symlink_metadata() {
+            if meta.is_file() {
+                files += 1;
+                bytes += meta.len();
+            }
+        }
+    }
+    (files, bytes)
+}
+
 fn is_whiteout(meta: &std::fs::Metadata) -> bool {
     use std::os::unix::fs::FileTypeExt;
     use std::os::unix::fs::MetadataExt;
@@ -383,6 +459,11 @@ pub struct CommitOutcome {
     pub digest: String,
     pub size_bytes: u64,
     pub skipped_deletions: usize,
+    /// Files left out as regenerable cache (`is_disposable`), and what they
+    /// would have weighed. Reported rather than silently dropped: an image
+    /// that is smaller than the person expects should say why.
+    pub dropped_files: usize,
+    pub dropped_bytes: u64,
 }
 
 /// `ply craft commit` — pack the upperdir as a package image.
@@ -437,10 +518,16 @@ pub fn commit(name: &str, version: &Version, output: Option<&Path>) -> Result<Co
             skipped_deletions += 1;
         }
     }
-    let rw_for_filter = rw.clone();
-    let filter = move |rel: &Path| -> bool {
-        rw_for_filter
-            .join(rel)
+    // Measured by walking, NOT by counting inside the filter: the packer
+    // prunes a disposable directory whole, so its contents are never
+    // offered to the filter at all. Counting there reported 1.7 KiB for a
+    // commit that had just left out 15 MB of apt lists.
+    let (dropped_files, dropped_bytes) = disposable_total(&rw);
+    let filter = |rel: &Path| -> bool {
+        if is_disposable(rel) {
+            return false;
+        }
+        rw.join(rel)
             .symlink_metadata()
             .map(|m| !is_whiteout(&m))
             .unwrap_or(true)
@@ -486,6 +573,8 @@ pub fn commit(name: &str, version: &Version, output: Option<&Path>) -> Result<Co
         image_path,
         image_name,
         skipped_deletions,
+        dropped_files,
+        dropped_bytes,
     })
 }
 
@@ -519,4 +608,52 @@ pub fn rm(name: &str) -> Result<bool> {
     }
     crate::paths::force_remove_dir_all(&dir).map_err(|source| Error::Io { path: dir, source })?;
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_package_managers_caches_and_this_sessions_logs_are_disposable() {
+        for path in [
+            "var/lib/apt/lists/deb.debian.org_debian_dists_trixie_InRelease",
+            "var/cache/apt/archives/jq_1.7_arm64.deb",
+            "var/cache/apt/pkgcache.bin",
+            "var/log/apt/term.log",
+            "var/log/dpkg.log",
+            "var/lib/dpkg/lock-frontend",
+            "tmp/scratch",
+            "root/.bash_history",
+        ] {
+            assert!(is_disposable(Path::new(path)), "{path}");
+        }
+    }
+
+    #[test]
+    fn what_the_session_actually_produced_ships() {
+        for path in [
+            // The dpkg database: without it a derived session reinstalls
+            // everything it already has.
+            "var/lib/dpkg/status",
+            "var/lib/dpkg/info/libjq1:arm64.list",
+            "usr/bin/jq",
+            "usr/lib/aarch64-linux-gnu/libjq.so.1",
+            "opt/mine/note.txt",
+            // A prefix is a whole path component, never a substring.
+            "var/cache/aptitude/pkgstates",
+            "var/log/apticron.log",
+            "tmpfile",
+        ] {
+            assert!(!is_disposable(Path::new(path)), "{path}");
+        }
+    }
+
+    #[test]
+    fn a_leading_slash_makes_no_difference() {
+        // `changes()` renders paths rooted at `/`; the packer hands over
+        // relative ones. The same answer either way.
+        assert!(is_disposable(Path::new("/var/lib/apt/lists/x")));
+        assert!(!is_disposable(Path::new("/usr/bin/jq")));
+    }
 }
