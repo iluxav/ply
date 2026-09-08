@@ -203,6 +203,8 @@ ply snapshot take APP[.N]          # every declared volume, as one dated image i
 ply snapshot ls|rm APP [NAME]
 ply restore APP [NAME|latest]      # a roll: the slot stops, its volumes are moved aside
                                    # (kept) and filled from the snapshot, it starts
+ply notify [--test] [--to DEST]    # flush event notifications now (the reconcile beat does it
+                                   # each minute); --test proves a destination. See Notifications
 ply backup now|ls APP              # a service's own dump contract (postgres), through
                                    # `ply exec`: dump to BACKUP_DEST now, or list dumps
 ply backup restore APP [NAME|latest] --to DB | --replace

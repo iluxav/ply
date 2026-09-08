@@ -13,6 +13,7 @@ mod init;
 pub mod lb;
 mod lifecycle;
 mod logs;
+mod notify;
 mod ps;
 mod reconcile;
 mod run;
@@ -91,6 +92,7 @@ pub fn dispatch(command: Command) -> Result<()> {
             crate::cli::SnapshotCommand::Rm(args) => snapshot::rm(&args),
         },
         Command::Restore(args) => snapshot::restore(&args),
+        Command::Notify(args) => notify::run(&args),
         Command::Audit(args) => lifecycle::audit(args),
         Command::Outdated(args) => lifecycle::outdated(args),
     }

@@ -196,6 +196,10 @@ pub fn exec(args: crate::cli::ReconcileArgs) -> Result<()> {
     if changed_units {
         run("systemctl", &["daemon-reload"])?;
     }
+    // The notifier rides the same beat: read the events since last time and
+    // deliver the subscribed ones. Best-effort — a delivery failure must
+    // never fail a reconcile.
+    ply_core::notify::run();
     // This was one pass. The docs promise that a touched file deploys and a
     // deleted one retires its app "within a minute" — that is the watcher
     // unit's promise, and a plain install has no watcher. Say so here,

@@ -55,6 +55,7 @@ process, and your app runs as an ordinary child process. `Ctrl-C` stops it.
 - [Security & rootless](/docs/security/) — namespaces, seccomp, cgroups, and the egress contract: what an app may reach, enforced and audited
 - [Sealed secrets](/docs/secrets/) — secrets in the repo as ciphertext, opened only on the host, at launch, in memory
 - [Backups](/docs/backups/) — snapshot any app's volumes as a dated image, restore by rolling it back in
+- [Notifications](/docs/notifications/) — a deploy fails or an app crash-loops, and ply tells you; no metrics stack
 - [Dependencies & lockfiles](/docs/dependencies/) — how resolution works
 - [Registries & publishing](/docs/registries/) — shipping images anywhere
 - [ply vs Docker](/docs/ply-vs-docker/) — an honest comparison

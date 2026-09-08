@@ -230,6 +230,15 @@ pub enum Command {
     /// short outage a restore is; a scaled app restores slot by slot.
     Restore(RestoreArgs),
 
+    /// Send notifications for new events, or test delivery
+    ///
+    /// The reconcile beat runs this every minute on a host set up with
+    /// `sudo ply setup --edge`; run it by hand to flush now, or
+    /// `--test` to send one message and prove a destination works.
+    /// Destinations and the events to notify on live in
+    /// `<data>/notify.toml`; see the Notifications guide.
+    Notify(NotifyArgs),
+
     /// Report shared volumes, deprecated runtimes, and other risk surface
     Audit(AuditArgs),
 
@@ -848,6 +857,17 @@ pub struct RmArgs {
 
 #[derive(Args)]
 pub struct AuditArgs {}
+
+#[derive(Args)]
+pub struct NotifyArgs {
+    /// Send a test message instead of flushing real events
+    #[arg(long)]
+    pub test: bool,
+
+    /// Destinations to use for --test, instead of notify.toml's `to`
+    #[arg(long = "to", value_name = "DEST")]
+    pub to: Vec<String>,
+}
 
 #[derive(Subcommand)]
 pub enum BackupCommand {

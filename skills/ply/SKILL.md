@@ -200,6 +200,17 @@ schedule (`BACKUP_DEST`, `RCLONE_S3_*` sealed, the destination allowed in
 its egress); `ply backup now|ls db` and `ply backup restore db --to check
 | --replace` drive that.
 
+## Notifications
+
+`/var/lib/ply/notify.toml` with `on = ["deploy-failed", "restart-loop",
+"snapshot-failed", "disk-high"]` and `to = ["telegram:<token>:<chat>"]`
+(or `discord:`, a bare `https://` webhook, or `command:<prog>` for email
+via `mail`). The reconcile beat delivers new events each minute — no
+daemon. `restart-loop` (3 crashes in 5 min) and `disk-high` (>90% full)
+are computed and rate-limited. Seal a destination (`ply secret seal
+notify=… --for <key>`) to keep the token out of a public fleet repo.
+`ply notify --test` proves it.
+
 ## Using Docker images
 
 `ply import docker://mongo:7 -o mongo.img` pulls an OCI image,

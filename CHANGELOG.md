@@ -5,6 +5,21 @@ breaking changes, and known limitations. Write under **Unreleased** as work
 lands; `make release-cli` turns that heading into the version and date, and
 the release workflow publishes the entry as the GitHub release notes.
 
+## Unreleased
+
+### What changed
+- **Notifications.** A host tells you when something happens: a
+  `notify.toml` names the events (`deploy-failed`, `restart-loop`,
+  `snapshot-failed`, `egress-blocked`, `disk-high`, …) and the
+  destinations (Telegram, Discord, any webhook, or a local command for
+  email), and the reconcile beat that already runs each minute reads the
+  events journal and delivers the new ones — no daemon, no metrics stack.
+  `restart-loop` (3 crashes of one app in 5 minutes) and `disk-high` (the
+  data filesystem past 90%) are computed and rate-limited so one problem is
+  one message. A destination may be a sealed value, so a fleet repo stays
+  publishable. `ply notify --test` proves delivery; `ply notify` flushes by
+  hand. See the Notifications guide.
+
 ## v0.1.90 — 2026-09-08
 
 ### What changed
