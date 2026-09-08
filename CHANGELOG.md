@@ -5,7 +5,7 @@ breaking changes, and known limitations. Write under **Unreleased** as work
 lands; `make release-cli` turns that heading into the version and date, and
 the release workflow publishes the entry as the GitHub release notes.
 
-## Unreleased
+## v0.1.84 — 2026-09-08
 
 ### Fixes
 - **Apps started with SIGPIPE ignored, since v0.1.79, on both backends.**
