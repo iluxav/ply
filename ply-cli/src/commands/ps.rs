@@ -161,6 +161,7 @@ mod tests {
             domains: vec![],
             network: None,
             serving: true,
+            volumes: vec![],
             launch_path: None,
         }
     }

@@ -5,6 +5,15 @@ breaking changes, and known limitations. Write under **Unreleased** as work
 lands; `make release-cli` turns that heading into the version and date, and
 the release workflow publishes the entry as the GitHub release notes.
 
+## Unreleased
+
+### What changed
+- An instance's state file records its declared volume names, so a reader
+  can tell a stateful app from a stateless one without opening the image.
+  The dashboard uses it to offer snapshot controls only where there is data
+  to snapshot: a stateless app (read-only rootfs, throwaway scratch) no
+  longer shows a "take snapshot" button that could only ever error.
+
 ## v0.1.89 — 2026-09-08
 
 ### What changed

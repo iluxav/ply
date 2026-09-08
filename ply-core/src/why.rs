@@ -455,6 +455,7 @@ mod tests {
             domains: vec![],
             network: None,
             serving: true,
+            volumes: vec![],
             launch_path: None,
         }];
         let r = build("web", 1_000_600, &states, &[], &[], None, None, |_| vec![]);

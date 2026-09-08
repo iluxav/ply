@@ -75,6 +75,13 @@ pub struct InstanceState {
     /// has to keep meaning.
     #[serde(default = "yes")]
     pub serving: bool,
+    /// The names of this app's declared volumes — what `ply snapshot` backs
+    /// up. Recorded so a reader (the dashboard) can tell a stateful app
+    /// from a stateless one without reading the image, and offer snapshots
+    /// only where there is data to snapshot. Empty for a volume-less app,
+    /// and absent in state files written before this field existed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub volumes: Vec<String>,
     /// The path the run parent was STARTED with, before symlinks were
     /// resolved — `image` above is what actually runs. They differ exactly
     /// when the app was started from a `current.img` link, and that is the

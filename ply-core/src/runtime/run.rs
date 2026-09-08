@@ -2746,6 +2746,7 @@ fn launch_instance(
     let reach_via = backend.reach_via();
     // Handed to the backend, which calls it once the instance's pid and
     // address are known and BEFORE the instance runs.
+    let volume_names: Vec<String> = all_volumes.keys().cloned().collect();
     let mut record = |pid: i32, ip: Ipv4Addr| -> Result<()> {
         InstanceState {
             app: app.clone(),
@@ -2782,6 +2783,7 @@ fn launch_instance(
             }),
             domains: opts.domains.clone(),
             network: reach_via.clone(),
+            volumes: volume_names.clone(),
         }
         .save()
     };
