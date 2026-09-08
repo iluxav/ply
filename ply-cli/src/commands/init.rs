@@ -18,8 +18,8 @@ const RUNTIMES: &[(&str, &str)] = &[
     ("go", "1.24"),
     ("rust", "1.85"),
     ("ruby", "3.3"),
-    ("deno", "2.1"),
-    ("bun", "1.2"),
+    ("deno", "2.9"),
+    ("bun", "1.4"),
 ];
 
 /// Latest `major.minor` ranges for the packages `init` suggests, and which

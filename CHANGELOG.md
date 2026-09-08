@@ -5,6 +5,22 @@ breaking changes, and known limitations. Write under **Unreleased** as work
 lands; `make release-cli` turns that heading into the version and date, and
 the release workflow publishes the entry as the GitHub release notes.
 
+## Unreleased
+
+### What changed
+- **The registry carries `ruby` 3.3.8, `deno` 2.9.6 and `bun` 1.4.2**, on
+  both architectures, so a directory with a Gemfile, a deno.json or a bun
+  lockfile runs with `ply run .` like a Node, Python or Go one. Ruby is
+  converted from Debian trixie; Deno and Bun are the official Linux builds,
+  checksum-verified, in a keg each. Rust is detected but not carried: a
+  usable toolchain is 132 MiB before a C linker, over the registry's cap.
+- **A keg can set environment variables**, `[layer] env = { … }`, beside
+  the `PATH` and `LD_LIBRARY_PATH` it already contributes; they compose
+  before the app's own `[env]`, dependents over dependencies. Debian's Ruby
+  has its load path compiled in as `/usr/lib/ruby`, so the `ruby` keg sets
+  `RUBYLIB` to its own prefix and `require "socket"` works. A keg carrying
+  `[layer] env` needs this ply or newer: an older one refuses the field.
+
 ## v0.1.80 — 2026-09-08
 
 ### What changed

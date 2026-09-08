@@ -168,6 +168,12 @@ pub struct Layer {
     pub path: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ld_library_path: Vec<String>,
+    /// Any other variable the package needs set for its binaries to find
+    /// their own files at the keg's prefix: `RUBYLIB` for a Ruby whose load
+    /// path was compiled as `/usr/lib/ruby`, `PYTHONPATH` for a Python
+    /// extension keg. Set before the app's own `[env]`, which wins.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
