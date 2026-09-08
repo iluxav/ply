@@ -26,8 +26,10 @@ ply run IMAGE [--scale N]
 ply ps [--json]
 ply stats [APP|APP.N] [--json]
 ply exec APP[.N] CMD...
-ply backup now|ls APP              # a service's self-backup contract (postgres): dump now / list dumps
-ply restore APP [NAME|latest] --to DB | --replace
+ply snapshot take|ls|rm APP        # volumes → a dated image, app held still for the copy
+ply restore APP [NAME|latest]      # roll the slot back onto a snapshot (previous volume kept)
+ply backup now|ls APP              # a service's own dump contract (postgres): dump now / list
+ply backup restore APP [NAME|latest] --to DB | --replace
 ply secret hostkey                 # this host's sealing key; sudo for root's
 ply secret seal KEY=VALUE... [--for HOSTKEY] [--env]   # KEY = "enc:v1:…" for [env]
 ply egress APP [--follow] [--blocked] [--json]          # the outbound audit log as a table

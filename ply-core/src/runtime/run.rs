@@ -2447,6 +2447,37 @@ fn launch_instance(
     // Manifest volumes plus any added with --volume: a deployment can give an
     // imported app a writable data dir its image never declared.
     let mut all_volumes = manifest.volumes.clone();
+    // A pending `ply restore` for this slot: the volumes it names are moved
+    // aside (kept, never deleted) so the loop below makes fresh ones, and
+    // the launch carries the populate instruction for the instance's init.
+    let mut restores: Vec<crate::runtime::backend::VolumeRestore> = Vec::new();
+    let mut set_aside: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for pending in crate::snapshot::take_pending(&app, n) {
+        match crate::snapshot::meta_of(&pending.image) {
+            Ok(meta) => {
+                for vname in meta.volumes.keys() {
+                    if let Some(volume) = all_volumes.get(vname) {
+                        eprintln!(
+                            "ply: {app}.{n}: restoring volume {vname} from {}",
+                            pending.image.display()
+                        );
+                        set_aside.insert(vname.clone());
+                        restores.push(crate::runtime::backend::VolumeRestore {
+                            path: volume.path.clone(),
+                            image: pending.image.clone(),
+                            subdir: format!("{}/{vname}", crate::snapshot::VOLUMES_PREFIX),
+                        });
+                    } else {
+                        eprintln!(
+                            "ply: warning: {app}.{n}: the snapshot holds a volume `{vname}` this \
+                             manifest no longer declares — skipped"
+                        );
+                    }
+                }
+            }
+            Err(e) => eprintln!("ply: warning: {app}.{n}: restore skipped — {e}"),
+        }
+    }
     for path in &opts.volumes {
         let vname = volume_name_from_path(path);
         all_volumes
@@ -2465,6 +2496,14 @@ fn launch_instance(
         };
         let app_volumes = crate::paths::volumes_dir().join(&app);
         let host_dir = app_volumes.join(format!("{name}.{suffix}"));
+        if set_aside.contains(name) {
+            if let Some(aside) = crate::snapshot::set_aside(&host_dir)? {
+                eprintln!(
+                    "ply: {app}.{n}: the previous {name}.{suffix} is kept at {}",
+                    aside.display()
+                );
+            }
+        }
         std::fs::create_dir_all(&host_dir).map_err(|source| Error::Io {
             path: host_dir.clone(),
             source,
@@ -2551,6 +2590,7 @@ fn launch_instance(
         app: app.clone(),
         package: manifest.package.name.clone(),
         n,
+        restores,
         instance_dir: instance_dir.clone(),
         images: std::iter::once(ctx.image.clone())
             .chain(ctx.dep_images.iter().cloned())

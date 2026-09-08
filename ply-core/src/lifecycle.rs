@@ -1,6 +1,6 @@
 //! Day-2 verbs: gc, rm, sync, systemd emit, audit, outdated.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::apps::{self, AppRecord};
@@ -339,17 +339,19 @@ pub fn deploy(image: &Path, timeout_secs: u64) -> Result<DeployReport> {
     // Watch the roll: done when every slot that was live at the start runs
     // the new image (a mid-roll slot is briefly absent from state — counting
     // only visible instances would declare victory early). "Runs the new
-    // image" must mean the slot RESTARTED after this deploy began: deploys
-    // ship to a stable path (current.img), so the path alone matches before
-    // anything happened — comparing it was a false-success generator.
-    let expected: usize = state::list()?
+    // image" must mean the slot is a NEW PROCESS: deploys ship to a stable
+    // path (current.img), so the path alone matches before anything
+    // happened, and the start time is no better — a deploy issued in the
+    // same second an instance launched matched a one-second slack and
+    // reported "rolled" with no roll at all (found by `ply restore`, whose
+    // test flow does exactly that). The pid it had when the deploy began is
+    // the fact that cannot be confused.
+    let before: BTreeMap<u32, i32> = state::list()?
         .iter()
         .filter(|s| s.app == app && s.alive())
-        .count();
-    let deploy_started = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+        .map(|s| (s.n, s.pid))
+        .collect();
+    let expected = before.len();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
     let want = image_abs.display().to_string();
     if asleep.is_some() {
@@ -362,7 +364,7 @@ pub fn deploy(image: &Path, timeout_secs: u64) -> Result<DeployReport> {
                 None => state::list()?.iter().any(|s| {
                     s.app == app
                         && s.alive()
-                        && slot_rolled(&s.image, &want, s.started, deploy_started)
+                        && slot_rolled(&s.image, &want, s.pid, before.get(&s.n).copied())
                 }),
             };
             if switched {
@@ -397,8 +399,12 @@ pub fn deploy(image: &Path, timeout_secs: u64) -> Result<DeployReport> {
                 continue;
             }
             let name = format!("{}.{}", instance.app, instance.n);
-            if slot_rolled(&instance.image, &want, instance.started, deploy_started)
-                && answering(&instance)
+            if slot_rolled(
+                &instance.image,
+                &want,
+                instance.pid,
+                before.get(&instance.n).copied(),
+            ) && answering(&instance)
             {
                 rolled.insert(name);
             } else {
@@ -430,12 +436,14 @@ pub fn deploy(image: &Path, timeout_secs: u64) -> Result<DeployReport> {
     }
 }
 
-/// A slot counts as rolled when it runs the target image AND (re)started
-/// after the deploy began — the path matching alone is meaningless when
-/// every deploy ships to the same stable path. 1s slack covers second
-/// granularity of the state's `started` stamp.
-fn slot_rolled(instance_image: &str, want: &str, started: u64, deploy_started: u64) -> bool {
-    instance_image == want && started + 1 >= deploy_started
+/// A slot counts as rolled when it runs the target image AND is not the
+/// process it was when the deploy began — the path alone is meaningless
+/// when every deploy ships to the same stable path, and the start time is
+/// second-granular and races a deploy issued right after a launch. A slot
+/// that did not exist before (a scale-up mid-roll) counts once it runs
+/// the image.
+fn slot_rolled(instance_image: &str, want: &str, pid: i32, pid_before: Option<i32>) -> bool {
+    instance_image == want && pid_before != Some(pid)
 }
 
 /// A rolled slot is one that ANSWERS on the new image, not one that has
@@ -759,35 +767,36 @@ pub fn outdated(allow_insecure: bool) -> Result<Vec<String>> {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn slot_rolled_requires_a_restart_not_just_the_path() {
-        // stable-path deploy: path matches BEFORE anything happened — the
-        // old instance (started long before the deploy) must not count
+    fn slot_rolled_means_a_new_process_on_the_wanted_image() {
+        // Stable-path deploy: the path matches BEFORE anything happened, and
+        // the old process must not count — however recently it started.
         assert!(!super::slot_rolled(
             "/srv/app/current.img",
             "/srv/app/current.img",
-            1000,
-            8000
+            4242,
+            Some(4242)
         ));
-        // restarted after the deploy began → rolled
+        // A new process on the image: rolled.
         assert!(super::slot_rolled(
             "/srv/app/current.img",
             "/srv/app/current.img",
-            8003,
-            8000
+            4300,
+            Some(4242)
         ));
-        // second-granularity slack
+        // A slot that was not there when the deploy began counts once it
+        // runs the image.
         assert!(super::slot_rolled(
             "/srv/app/current.img",
             "/srv/app/current.img",
-            7999,
-            8000
+            4300,
+            None
         ));
-        // different path never counts, however fresh
+        // A different image never counts, however new the process.
         assert!(!super::slot_rolled(
             "/srv/app/other.img",
             "/srv/app/current.img",
-            9000,
-            8000
+            4300,
+            Some(4242)
         ));
     }
 

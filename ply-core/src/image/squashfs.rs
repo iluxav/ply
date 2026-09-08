@@ -251,6 +251,185 @@ pub fn write_image(trees: &[TreeSource], extra: &[ExtraFile], out: &Path) -> Res
     Ok(())
 }
 
+/// One entry of a tar stream as the image should carry it: where it goes,
+/// and whose it is. Ownership is the point — a snapshot of a volume has to
+/// come back with the same uids the app wrote it with, or the app cannot
+/// open its own files — which is why this writer, unlike `write_image`,
+/// does not force root ownership.
+pub struct TarPlacement {
+    /// Absolute path inside the image.
+    pub dest: String,
+}
+
+/// A byte range of a file, opened on first read — the same fd discipline
+/// as `LazyFile`, for the spooled tar a snapshot is built from.
+///
+/// A finite reader that STAYS finite: once the range is consumed it is
+/// `finished` and every later read is `0`, never a reopen. The earlier
+/// version reopened whenever `open` was `None`, and since it set `open` to
+/// `None` at EOF, the very next read restarted the file — so backhand,
+/// which reads a file's reader more than once, streamed the range again
+/// and again. Observed as a 48 MiB tar producing a 325 MiB image that grew
+/// without end.
+struct LazyRange {
+    path: PathBuf,
+    offset: u64,
+    remaining: u64,
+    file: Option<File>,
+    finished: bool,
+}
+
+impl LazyRange {
+    fn new(path: PathBuf, offset: u64, len: u64) -> Self {
+        LazyRange {
+            path,
+            offset,
+            remaining: len,
+            file: None,
+            finished: len == 0,
+        }
+    }
+}
+
+impl std::io::Read for LazyRange {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        use std::io::Seek;
+        if self.finished || self.remaining == 0 {
+            self.finished = true;
+            self.file = None;
+            return Ok(0);
+        }
+        if self.file.is_none() {
+            let mut f = File::open(&self.path)?;
+            f.seek(std::io::SeekFrom::Start(self.offset))?;
+            self.file = Some(f);
+        }
+        let f = self.file.as_mut().expect("opened above");
+        let want = buf.len().min(self.remaining as usize);
+        let n = f.read(&mut buf[..want])?;
+        if n == 0 {
+            // The spool is shorter than the header claimed — stop, do not spin.
+            self.finished = true;
+            self.file = None;
+            return Ok(0);
+        }
+        self.remaining -= n as u64;
+        Ok(n)
+    }
+}
+
+/// Write an image from a tar archive on disk, placing each entry where
+/// `place` says (or dropping it), with the tar's own uid, gid, mode and
+/// mtime on every node. Hard links are refused by name: a volume that
+/// holds them is rare, and silently duplicating or dropping one is worse
+/// than saying so.
+pub fn write_image_from_tar(
+    tar_path: &Path,
+    place: &dyn Fn(&Path) -> Option<TarPlacement>,
+    extra: &[ExtraFile],
+    out: &Path,
+) -> Result<()> {
+    let err = |path: &Path, source: std::io::Error| Error::Io {
+        path: path.to_path_buf(),
+        source,
+    };
+    let berr = |what: &str, e: backhand::BackhandError| {
+        Error::Build(format!("squashfs write failed at {what}: {e}"))
+    };
+    let mut fs = FilesystemWriter::default();
+    fs.set_time(0);
+    fs.set_block_size(DEFAULT_BLOCK_SIZE);
+    fs.set_no_duplicate_files(false);
+    fs.set_root_mode(0o755);
+    let compressor = FilesystemCompressor::new(
+        Compressor::Zstd,
+        Some(backhand::compression::CompressionOptions::Zstd(
+            backhand::compression::Zstd {
+                compression_level: 15,
+            },
+        )),
+    )
+    .map_err(|e| berr("compressor init", e))?;
+    fs.set_compressor(compressor);
+
+    let file = File::open(tar_path).map_err(|e| err(tar_path, e))?;
+    let mut archive = tar::Archive::new(std::io::BufReader::new(file));
+    let mut lazy: Vec<(u64, u64, String, NodeHeader)> = Vec::new();
+    let entries = archive
+        .entries()
+        .map_err(|e| Error::Build(format!("{}: not a tar stream: {e}", tar_path.display())))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| Error::Build(format!("reading the tar stream: {e}")))?;
+        let header = entry.header();
+        let path = entry
+            .path()
+            .map_err(|e| Error::Build(format!("a tar entry's path: {e}")))?
+            .into_owned();
+        let Some(placed) = place(&path) else {
+            continue;
+        };
+        let node = NodeHeader {
+            permissions: (header.mode().unwrap_or(0o644) & 0o7777) as u16,
+            uid: header.uid().unwrap_or(0) as u32,
+            gid: header.gid().unwrap_or(0) as u32,
+            mtime: header.mtime().unwrap_or(0) as u32,
+        };
+        let kind = header.entry_type();
+        if kind.is_dir() {
+            fs.push_dir_all(&placed.dest, node)
+                .map_err(|e| berr(&placed.dest, e))?;
+        } else if kind.is_symlink() {
+            let target = entry
+                .link_name()
+                .ok()
+                .flatten()
+                .map(|t| t.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            fs.push_symlink(&target, &placed.dest, node)
+                .map_err(|e| berr(&placed.dest, e))?;
+        } else if kind.is_file() {
+            // Files are pushed after the walk as lazy ranges over the
+            // spooled tar: the writer holds every reader until write().
+            let size = header.size().unwrap_or(0);
+            lazy.push((entry.raw_file_position(), size, placed.dest, node));
+        } else if kind.is_hard_link() {
+            return Err(Error::Build(format!(
+                "{}: a hard link, which a snapshot cannot carry — copy the file instead",
+                path.display()
+            )));
+        }
+        // Devices, fifos, GNU long-name/pax headers (consumed by the crate):
+        // nothing to place.
+    }
+    // Parents first, so a file never lands before its directory exists.
+    lazy.sort_by(|a, b| a.2.cmp(&b.2));
+    for (offset, len, dest, node) in lazy {
+        if let Some(parent) = Path::new(&dest).parent() {
+            let parent = parent.to_string_lossy();
+            if parent.len() > 1 {
+                let _ = fs.push_dir_all(parent.as_ref(), header(0o755));
+            }
+        }
+        fs.push_file(
+            LazyRange::new(tar_path.to_path_buf(), offset, len),
+            &dest,
+            node,
+        )
+        .map_err(|e| berr(&dest, e))?;
+    }
+    for ef in extra {
+        fs.push_file(
+            std::io::Cursor::new(ef.bytes.clone()),
+            &ef.path,
+            header(ef.mode),
+        )
+        .map_err(|e| berr(&ef.path, e))?;
+    }
+    let mut out_file = std::io::BufWriter::new(File::create(out).map_err(|e| err(out, e))?);
+    fs.write(&mut out_file).map_err(|e| berr("finalize", e))?;
+    Ok(())
+}
+
 /// Test helper shared across modules AND crates: a minimal image whose only
 /// content is `/.manifest.toml` holding `manifest_toml` verbatim — enough to
 /// exercise `image::read::read_embedded`/`read_manifest`,
@@ -288,6 +467,33 @@ mod tests {
         std::fs::write(&exe, b"#!/bin/sh\necho hi\n").unwrap();
         std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
         std::os::unix::fs::symlink("hello.txt", root.join("link")).unwrap();
+    }
+
+    #[test]
+    fn a_lazy_range_is_read_exactly_once_however_many_times_it_is_polled() {
+        use std::io::Read;
+        let dir = tempfile::tempdir().unwrap();
+        let spool = dir.path().join("spool");
+        std::fs::write(&spool, b"....HELLOWORLD....").unwrap();
+        // The range "HELLOWORLD" at offset 4, length 10.
+        let mut r = LazyRange::new(spool.clone(), 4, 10);
+        let mut all = Vec::new();
+        // Read in tiny chunks, then keep polling well past the end — the way
+        // backhand does, which is what broke the reopen-on-None version.
+        let mut buf = [0u8; 3];
+        loop {
+            let n = r.read(&mut buf).unwrap();
+            if n == 0 {
+                break;
+            }
+            all.extend_from_slice(&buf[..n]);
+        }
+        for _ in 0..5 {
+            assert_eq!(r.read(&mut buf).unwrap(), 0, "stays finished");
+        }
+        assert_eq!(all, b"HELLOWORLD");
+        // A zero-length range is finished from the start.
+        assert_eq!(LazyRange::new(spool, 0, 0).read(&mut buf).unwrap(), 0);
     }
 
     #[test]

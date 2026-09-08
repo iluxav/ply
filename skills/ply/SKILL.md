@@ -190,12 +190,15 @@ deployment file, or stack member) and can be committed. It opens only on
 that host, at launch, in the run parent; the log names the variable, never
 the value. Or keep a root-only `--env-file`.
 
-The registry's Postgres backs itself up: give it `BACKUP_DEST=:s3:bucket/prefix`
-and rclone's `RCLONE_S3_*` credentials (sealed), allow the destination in
-its egress, and it dumps on `BACKUP_INTERVAL`, keeps `BACKUP_KEEP_DAYS`, and
-restores into an empty volume from `BACKUP_RESTORE=latest`. `ply backup
-now db`, `ply backup ls db`, `ply restore db --to check` (beside the live
-data) or `--replace` (over it) drive that through `ply exec`.
+Any app with `[volumes]` is backed up with `ply snapshot take APP`: its
+volumes become one dated image in the store, taken with the app held still
+so a database comes out consistent; `ply snapshot ls APP` lists them and
+`ply restore APP [NAME]` rolls one back in (the previous volume is kept
+under `.pre-restore/`). Nothing in the image has to cooperate. The
+registry's Postgres can also dump itself to an rclone target on a
+schedule (`BACKUP_DEST`, `RCLONE_S3_*` sealed, the destination allowed in
+its egress); `ply backup now|ls db` and `ply backup restore db --to check
+| --replace` drive that.
 
 ## Using Docker images
 

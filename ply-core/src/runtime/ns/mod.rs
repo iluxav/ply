@@ -322,6 +322,7 @@ impl Backend for NsBackend {
             binds: spec.binds.clone(),
             sync_rx,
             volume_targets: spec.volume_targets.clone(),
+            restores: spec.restores.clone(),
             keep_caps,
             privileged: spec.privileged,
             rootless,

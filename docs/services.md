@@ -76,11 +76,11 @@ ply run api.img --after postgres      # waits for health, learns the address
 
 ## Backups
 
-The Postgres image backs itself up: set `BACKUP_DEST` to an rclone target
-and it dumps on a schedule, prunes, and restores into an empty volume from
-`BACKUP_RESTORE`; `ply backup now|ls db` and `ply restore db --to X |
---replace` drive it. The whole story, credentials and the disaster path
-included, is the [Backups](/docs/backups/) guide.
+`ply snapshot take db` commits the database's volume as a dated image,
+held still for the copy, and `ply restore db` rolls it back in — nothing
+in the image has to cooperate. The Postgres image can also dump itself to
+an rclone target on a schedule (`BACKUP_DEST`), driven by `ply backup`.
+Both are the [Backups](/docs/backups/) guide.
 
 ## The escape hatch: docker://
 

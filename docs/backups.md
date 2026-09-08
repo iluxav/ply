@@ -1,107 +1,109 @@
 ---
 title: Backups
-description: A database that backs itself up on a schedule to any S3-compatible store, and comes back from it — tested, not hoped.
+description: Snapshot any app's volumes as a dated image, restore by rolling it back in — nothing in the image has to cooperate.
 section: Guides
 order: 16
 ---
 
 # Backups
 
-A service that holds state has to be able to come back. ply's answer is
-the service's own: the registry's Postgres dumps itself on a schedule to
-wherever you point it, keeps a window, and restores from there. ply's
-verbs drive that, inside the instance, with the instance's own
-environment, so the destination and its credentials are set once.
-
-## Turning it on
-
-Three variables on the service. In a stack file:
-
-```toml
-[[app]]
-run = "postgres@17"
-e = [
-  "BACKUP_DEST=:s3:my-bucket/pg",     # an rclone target
-  "BACKUP_INTERVAL=86400",            # seconds between dumps (default: a day)
-  "BACKUP_KEEP_DAYS=14",              # prune older dumps (default: 14)
-  "RCLONE_S3_PROVIDER=AWS",
-  "RCLONE_S3_REGION=eu-central-1",
-  "RCLONE_S3_ACCESS_KEY_ID=AKIA…",
-  "RCLONE_S3_SECRET_ACCESS_KEY=enc:v1:…",   # sealed for this host — see Sealed secrets
-]
-egress = { allow = ["s3.eu-central-1.amazonaws.com"] }
-```
-
-`BACKUP_DEST` is any [rclone](https://rclone.org/) target: an S3 bucket
-on AWS, Cloudflare R2, Backblaze, MinIO, DigitalOcean Spaces; or
-`:local:/backups` for a directory you `--link` in from the host. The
-credentials are rclone's environment variables; seal the secret one
-([Sealed secrets](/docs/secrets/)) and the stack file can live in git.
-
-The Postgres image declares `egress = []`, so a destination has to be
-allowed by the operator, as above; under `enforce`, a backup to an
-unlisted host fails and shows in `ply egress db --blocked`.
-
-From the first boot the service dumps `POSTGRES_DB` with `pg_dump`,
-gzipped, every `BACKUP_INTERVAL` seconds, named
-`<db>-<UTC timestamp>.sql.gz`, and prunes anything older than
-`BACKUP_KEEP_DAYS`. Each run prints one line to the service's log and
-writes the last outcome to `/run/ply/self/backup`.
-
-## Driving it
+An app's state lives in its `[volumes]`: the rootfs is read-only and the
+overlay's scratch is thrown away on purpose. So a backup is a copy of the
+volumes, and ply takes it the way `ply craft commit` takes an overlay:
+commit the directory as an image.
 
 ```sh
-ply backup now db          # a dump outside the schedule; prints its name
-ply backup ls db           # the dumps at BACKUP_DEST, oldest first
-ply restore db --to check  # the latest dump, into a database named `check`,
-                           # beside the live one — look at yesterday next to today
-ply restore db app-20260908-030001.sql.gz --replace
-                           # that dump, OVER the live database
+ply snapshot take db            # every declared volume of db, as one dated image
+ply snapshot ls db              # what you have, oldest first
+ply restore db                  # the latest, back into the slot it came from
+ply restore db db-snapshot-20260908.182535.1
 ```
 
-`--replace` is the disaster path. Connections to the live database are
-terminated, it is dropped and recreated, and the dump loads; the app
-reconnects, as database clients do, and everything written since the dump
-is gone. That is what a restore means, and the flag says so.
+Nothing in the image has to cooperate. A Postgres from the registry, a
+`docker://` import, your own app with an uploads folder or a SQLite file:
+a `[volumes]` entry is the whole contract.
 
-Both verbs run inside the instance through `ply exec`, so they work
-wherever `ply exec` does, rootful or rootless, Linux or macOS, and need
-nothing on the command line that the service does not already know.
+## How a snapshot is taken
 
-## Coming back from nothing
+The one difference from a craft commit is that a craft session has left
+its shell when it commits, and a running database has not; it is always in
+the middle of writing. A file copy taken under it is not a backup, it is a
+photograph of a page while someone is writing on it. So, inside the
+instance, as the app's own user, ply holds every process of the app still
+for the seconds the copy takes, streams the volumes out as a tar, and lets
+them go. What comes out is exactly what a power cut would leave, which
+every real database is built to recover from by replaying its log. A
+killed `ply snapshot` cannot leave the app frozen: the thaw is on a trap.
 
-The volume is gone, or the host is. Start the same service on an empty
-volume with `BACKUP_RESTORE=latest` (or a dump's name) and the same
-`BACKUP_DEST` and credentials: on first boot it fetches the dump and
-loads it before the server takes connections. A failed restore wipes the
-data directory so the next start retries cleanly, rather than leaving a
-half-restored database that looks initialised.
+The pause is the length of the copy: a second or two for the sizes a
+single server holds, during which requests wait in the socket queue and
+are answered after. For a large database, the service's own dump (below)
+is smaller and needs no pause.
+
+The copy is streamed through `ply exec`, so it works identically rootful,
+rootless and inside a macOS microVM, needs no host path, and carries the
+ownership the restore has to reproduce.
+
+## What a snapshot is
+
+An ordinary ply image, in the store under `snapshots/<app>/`, named
+`<app>-snapshot-<YYYYMMDD>.<HHMMSS>.<slot>`: hashed, dated, listable, and
+`ply craft edit` opens a shell on one to look at yesterday's files. Inside,
+`/volumes/<name>/…` per declared volume, keyed by name so a manifest that
+later moves a volume still restores it. `ply run` refuses it, correctly:
+it has no entrypoint.
+
+## How a restore works
+
+A restore is a roll, the same path a deploy takes. The slot the snapshot
+came from is stopped; its volume directories are moved aside, kept, never
+deleted; fresh ones are filled from the image before the app starts, by
+the instance's own init, inside its user namespace, so the files come out
+owned by the app's ids rootless as well as rootful; then the app starts
+and passes its health gate. For a single database that is the short outage
+a restore inherently is. A scaled app restores slot by slot.
+
+The previous volume stays under the app's volumes directory, in
+`.pre-restore/`, until you remove it: a restore that turned out to be the
+wrong one has destroyed nothing.
+
+## Off the machine
+
+Snapshots are images, so they go where images go: copy the file, `scp` it,
+push it to a private registry with `ply push`. A snapshot on the same disk
+survives a bad deploy, not a dead disk; keep the ones that matter
+elsewhere. Scheduled snapshots and an S3 destination are the next step.
+
+## A service that dumps itself
+
+Some services know a better backup than a file copy: `pg_dump` is far
+smaller than a Postgres data directory and needs no pause. The registry's
+Postgres ships that, driven the same way:
 
 ```sh
-ply run postgres@17 -e POSTGRES_DB=app -e BACKUP_DEST=:s3:my-bucket/pg \
-  -e BACKUP_RESTORE=latest -e RCLONE_S3_… --publish internal:5432
+ply backup now db                    # a dump to BACKUP_DEST, outside the schedule
+ply backup ls db
+ply backup restore db --to check     # beside the live data
+ply backup restore db --replace      # over it: connections terminated, data since the dump gone
 ```
 
-`BACKUP_RESTORE` only ever applies to an empty volume; on a volume with
-data it is ignored, so it is safe to leave in a stack file.
+Set `BACKUP_DEST` (an rclone target: S3, R2, MinIO, `:local:/backups`),
+`BACKUP_INTERVAL`, `BACKUP_KEEP_DAYS`, and rclone's `RCLONE_S3_*`
+credentials on the service, sealed ([Sealed secrets](/docs/secrets/)); the
+image declares `egress = []`, so allow the destination in the stack file.
+`BACKUP_RESTORE=latest` on an empty volume restores on first boot, which is
+the path back from a dead disk. Any service can follow the contract: read
+those variables, ship `backup.sh` and `restore.sh` beside the entrypoint,
+depend on `rclone`. Nobody has to; the snapshot above works regardless.
 
 ## Prove it before you need it
 
-A backup nobody has restored is a hope. Once a month, or in CI against a
-scratch bucket:
+A backup nobody has restored is a hope. Take a snapshot, write something,
+restore, look:
 
 ```sh
-ply backup now db
-ply restore db --to verify
-ply exec db psql -U postgres -d verify -c 'select count(*) from your_table'
+ply snapshot take db
+ply exec db psql -U postgres -d app -c 'insert into t values (1)'
+ply restore db
+ply exec db psql -U postgres -d app -c 'select count(*) from t'   # the row is gone
 ```
-
-## Other services
-
-The contract is small and any service can follow it: read `BACKUP_DEST`,
-`BACKUP_INTERVAL`, `BACKUP_KEEP_DAYS` and `BACKUP_RESTORE`; ship
-`backup.sh` (one dump, now) and `restore.sh` (a dump on stdin, `--to
-NAME` or `--replace`) beside the entrypoint; depend on `rclone`. `ply
-backup` and `ply restore` then work unchanged. Plain volumes with no
-service to dump them are not covered here: snapshot the host's
-filesystem, as the [Volumes](/docs/volumes/) guide says.

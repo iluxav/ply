@@ -30,6 +30,7 @@ pub mod resolve;
 pub mod runtime;
 pub mod sealed;
 pub mod secrets;
+pub mod snapshot;
 pub mod source;
 pub mod stack;
 pub mod stats;

@@ -5,6 +5,33 @@ breaking changes, and known limitations. Write under **Unreleased** as work
 lands; `make release-cli` turns that heading into the version and date, and
 the release workflow publishes the entry as the GitHub release notes.
 
+## Unreleased
+
+### What changed
+- **Snapshots: a backup for any app, nothing in the image required.**
+  `ply snapshot take APP` commits every declared volume as one dated image
+  in the store, the way `ply craft commit` commits an overlay — with the
+  app's processes held still for the seconds the copy takes, inside the
+  instance, as the app's own user, so a database comes out the way a power
+  cut would leave it, which it recovers from. The copy streams through
+  `ply exec`, so it is the same rootful, rootless and in a macOS microVM,
+  and carries the ownership a restore needs. `ply snapshot ls|rm`, and
+  `ply restore APP [NAME]` rolls the slot back onto it: stopped, volumes
+  moved aside (kept under `.pre-restore/`), filled from the image by the
+  instance's own init before the app starts, health-gated. A `[volumes]`
+  entry is the whole contract. The microVM half needs
+  `ply/microvm-kernel@1.0.2`, which this ply pins.
+- The Postgres dump contract from v0.1.87 keeps its verbs under
+  `ply backup`, with its restore now `ply backup restore` — `ply restore`
+  is the generic one.
+
+### Fixes
+- `ply deploy` could report a slot rolled without any roll: it counted a
+  slot as restarted when its recorded start was within a second of the
+  deploy's start, so a deploy issued in the same second an instance
+  launched reported success immediately. A rolled slot is a new process
+  now — the pid it had when the deploy began is what the watcher compares.
+
 ## v0.1.87 — 2026-09-08
 
 ### What changed

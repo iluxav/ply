@@ -213,13 +213,21 @@ pub enum Command {
     /// now, or lists the dumps at the destination.
     #[command(subcommand)]
     Backup(BackupCommand),
-    /// Restore a service from one of its backups
+    /// Snapshot an app's volumes as a dated image, or list and remove them
     ///
-    /// `--to NAME` restores beside the live data, into a database of that
-    /// name, to look at yesterday next to today. `--replace` restores OVER
-    /// the live database: connections are terminated, it is recreated, and
-    /// what the app wrote since the dump is gone — which is what a restore
-    /// means. One of the two is required.
+    /// Any app with `[volumes]`; nothing in the image has to cooperate. The
+    /// app's processes are held still for the seconds the copy takes, so
+    /// what is captured is what a power cut would leave — which every real
+    /// database recovers from. Kept under ply's data dir; restore with
+    /// `ply restore`.
+    #[command(subcommand)]
+    Snapshot(SnapshotCommand),
+    /// Restore an app's volumes from a snapshot (a roll: stop, fill, start)
+    ///
+    /// The slot the snapshot was taken from is rolled the way a deploy
+    /// rolls it; its volumes are moved aside (kept) and filled from the
+    /// snapshot before the app starts. For a single database that is the
+    /// short outage a restore is; a scaled app restores slot by slot.
     Restore(RestoreArgs),
 
     /// Report shared volumes, deprecated runtimes, and other risk surface
@@ -847,6 +855,12 @@ pub enum BackupCommand {
     Now(BackupTarget),
     /// List the dumps at the service's BACKUP_DEST, oldest first
     Ls(BackupTarget),
+    /// Restore a dump: `--to NAME` beside the live database, `--replace` over it
+    ///
+    /// `--replace` terminates connections, recreates the database and loads
+    /// the dump; what the app wrote since the dump is gone, which is what a
+    /// restore means. One of the two is required.
+    Restore(BackupRestoreArgs),
 }
 
 #[derive(Args)]
@@ -857,7 +871,7 @@ pub struct BackupTarget {
 }
 
 #[derive(Args)]
-pub struct RestoreArgs {
+pub struct BackupRestoreArgs {
     /// The service (or service.<n>)
     #[arg(value_name = "APP")]
     pub app: String,
@@ -873,6 +887,45 @@ pub struct RestoreArgs {
     /// Restore over the live database (connections terminated, data since the dump lost)
     #[arg(long)]
     pub replace: bool,
+}
+
+#[derive(Subcommand)]
+pub enum SnapshotCommand {
+    /// Take a snapshot of every declared volume of APP (or APP.<n>)
+    Take(SnapshotTarget),
+    /// List an app's snapshots, oldest first
+    Ls(SnapshotTarget),
+    /// Delete one snapshot
+    Rm(SnapshotRmArgs),
+}
+
+#[derive(Args)]
+pub struct SnapshotTarget {
+    #[arg(value_name = "APP")]
+    pub app: String,
+}
+
+#[derive(Args)]
+pub struct SnapshotRmArgs {
+    #[arg(value_name = "APP")]
+    pub app: String,
+    /// As `ply snapshot ls` names it
+    #[arg(value_name = "NAME")]
+    pub name: String,
+}
+
+#[derive(Args)]
+pub struct RestoreArgs {
+    #[arg(value_name = "APP")]
+    pub app: String,
+
+    /// As `ply snapshot ls` names it; default: the latest
+    #[arg(value_name = "NAME", default_value = "latest")]
+    pub name: String,
+
+    /// How long to wait for the roll before reporting partial progress
+    #[arg(long, value_name = "S", default_value_t = 120)]
+    pub timeout: u64,
 }
 
 #[derive(Subcommand)]

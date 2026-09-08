@@ -22,6 +22,15 @@ use crate::runtime::run::RunOptions;
 /// Everything a backend needs to start one instance, and nothing a
 /// platform decides. Built by the supervisor from the manifest, the
 /// lockfile, `RunOptions`, and the composed environment.
+/// One volume to populate at launch: `image` holds the tree under
+/// `subdir`; it goes to `path` inside the instance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VolumeRestore {
+    pub path: String,
+    pub image: PathBuf,
+    pub subdir: String,
+}
+
 pub struct InstanceSpec {
     /// Runtime identity: `--name`, else the package name. State pool,
     /// `<app>.ply`, volumes and the params tree key on it.
@@ -47,6 +56,12 @@ pub struct InstanceSpec {
     pub binds: Vec<(PathBuf, String)>,
     /// Container paths of the declared volumes (chowned to `run_user`).
     pub volume_targets: Vec<String>,
+    /// Volumes to fill from a snapshot image before the app starts — the
+    /// tail of a `ply restore`. Done by the instance's init, inside its
+    /// user namespace, so the restored files come out owned by the app's
+    /// own ids rootless as well as rootful; the host process that launched
+    /// it could not chown to a mapped uid.
+    pub restores: Vec<VolumeRestore>,
     pub run_user: Option<RunUser>,
     /// `[package] capabilities` as declared; the backend decides what
     /// "keep" means on its platform.

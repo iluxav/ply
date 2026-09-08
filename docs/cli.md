@@ -198,10 +198,15 @@ ply reconcile                      # converge systemd units to
                                    # a deployment is a file (root)
 ply rm APP [--volumes]             # volumes kept unless --volumes
 ply gc                             # drop store entries nothing references
-ply backup now|ls APP              # a service's own backup contract, driven through
-                                   # `ply exec` (see Backups): dump now, or list dumps
-ply restore APP [NAME|latest] --to DB | --replace
-                                   # a dump beside the live data, or over it
+ply snapshot take APP[.N]          # every declared volume, as one dated image in the
+                                   # store; the app is held still for the copy (see Backups)
+ply snapshot ls|rm APP [NAME]
+ply restore APP [NAME|latest]      # a roll: the slot stops, its volumes are moved aside
+                                   # (kept) and filled from the snapshot, it starts
+ply backup now|ls APP              # a service's own dump contract (postgres), through
+                                   # `ply exec`: dump to BACKUP_DEST now, or list dumps
+ply backup restore APP [NAME|latest] --to DB | --replace
+                                   # a dump beside the live database, or over it
 ```
 
 `ply reconcile` run by hand is one pass, and says so; the watcher that

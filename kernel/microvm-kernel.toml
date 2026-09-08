@@ -35,7 +35,7 @@
 
 [package]
 name = "microvm-kernel"
-version = "1.0.1"
+version = "1.0.2"
 owner = "ply"
 description = "The ply microVM runtime: Linux __KERNEL_VERSION__ and the guest init a ply instance boots inside a macOS microVM"
 # The kernel Image and the static e2fsprogs in the initramfs are both

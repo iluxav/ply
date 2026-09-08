@@ -107,6 +107,16 @@ pub struct VolumeSpec {
     pub dev: String,
 }
 
+/// A volume to fill from a snapshot before the app starts: the squashfs at
+/// `dev` holds the tree under `subdir`; it goes to `path`, ownership and
+/// modes as recorded. The tail of a `ply restore`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RestoreSpec {
+    pub path: String,
+    pub dev: String,
+    pub subdir: String,
+}
+
 /// Everything the guest needs to become the instance. Built by the VM
 /// backend from `runtime::backend::InstanceSpec`; read once by the guest
 /// init before it pivots.
@@ -185,6 +195,12 @@ pub struct SpecDisk {
     /// has none, and for a disk from an older host.
     #[serde(default)]
     pub shares: Vec<ShareSpec>,
+    /// Volumes to populate from snapshot disks before the app starts.
+    /// Absent in older disks; an older guest ignores it, which is the
+    /// compatibility rule — and why the host refuses a restore when the
+    /// guest cannot do it rather than launching an empty volume.
+    #[serde(default)]
+    pub restores: Vec<RestoreSpec>,
 }
 
 /// A point in time as `CLOCK_REALTIME` counts it: seconds and nanoseconds
@@ -684,6 +700,7 @@ mod tests {
 
     fn sample() -> SpecDisk {
         SpecDisk {
+            restores: vec![],
             entrypoint: vec![
                 "/opt/db/bin/postgres".into(),
                 "-D".into(),

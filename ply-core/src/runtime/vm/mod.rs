@@ -368,6 +368,11 @@ impl Backend for VmBackend {
             .map(|d| (d.path.clone(), d.read_only))
             .collect();
         worker_disks.push((spec_img.clone(), true));
+        // Snapshot images to restore from, read-only, after the spec disk —
+        // `spec_disk::build` names their devices on the same assumption.
+        for r in &spec.restores {
+            worker_disks.push((r.image.clone(), true));
+        }
         let worker_spec = worker::WorkerSpec {
             app: spec.app.clone(),
             kernel: self.kernel.image.clone(),

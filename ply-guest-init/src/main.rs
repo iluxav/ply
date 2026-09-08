@@ -517,6 +517,10 @@ mod boot {
         for volume in &spec.volumes {
             prepare_volume(volume, &spec);
         }
+        // --- 3b. restores: a fresh volume filled from a snapshot disk ----
+        for restore in &spec.restores {
+            populate_volume(restore);
+        }
 
         // --- 3a. shared host directories, over virtio-9p ------------------
         for share in &spec.shares {
@@ -648,6 +652,68 @@ mod boot {
     /// the app would otherwise start on an empty directory where its code
     /// should be, which is precisely the silent failure the host refused to
     /// produce when it warned about links before shares existed.
+    /// Fill a volume from a snapshot image attached as a read-only disk:
+    /// the tail of `ply restore` on this backend. Fatal on failure, for the
+    /// same reason the Linux init's is: an app started on an empty volume
+    /// after a restore that "mostly" worked is the one unforgivable outcome.
+    fn populate_volume(restore: &ply_vm_proto::RestoreSpec) {
+        const SRC: &str = "/restore-src";
+        if !mkdir_p(SRC) || !mount(&restore.dev, SRC, "squashfs", libc::MS_RDONLY as _, "") {
+            fail(&format!(
+                "restore of {}: cannot mount the snapshot disk {}",
+                restore.path, restore.dev
+            ));
+        }
+        let from = format!("{SRC}{}", restore.subdir);
+        let to = format!("{NEWROOT}{}", restore.path);
+        log(&format!(
+            "restore: filling {} from {}",
+            restore.path, restore.dev
+        ));
+        if let Err(e) = copy_tree(std::path::Path::new(&from), std::path::Path::new(&to)) {
+            fail(&format!("restore of {}: {e}", restore.path));
+        }
+        umount_detach(SRC);
+    }
+
+    /// Copy a tree with ownership, modes and symlinks kept. `std::fs`
+    /// plus `lchown`; no hard links (the snapshot writer refuses them).
+    fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        fn own(path: &std::path::Path, uid: u32, gid: u32) -> std::io::Result<()> {
+            let c = CString::new(path.as_os_str().as_encoded_bytes())
+                .map_err(|_| std::io::Error::other("path holds a NUL"))?;
+            // SAFETY: a live NUL-terminated path; lchown never follows it.
+            if unsafe { libc::lchown(c.as_ptr(), uid, gid) } != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        }
+        let meta = std::fs::symlink_metadata(from)?;
+        if meta.is_dir() {
+            if !to.exists() {
+                std::fs::create_dir(to)?;
+            }
+            for entry in std::fs::read_dir(from)? {
+                let entry = entry?;
+                copy_tree(&entry.path(), &to.join(entry.file_name()))?;
+            }
+            std::fs::set_permissions(to, std::fs::Permissions::from_mode(meta.mode() & 0o7777))?;
+            own(to, meta.uid(), meta.gid())
+        } else if meta.file_type().is_symlink() {
+            let target = std::fs::read_link(from)?;
+            let _ = std::fs::remove_file(to);
+            std::os::unix::fs::symlink(&target, to)?;
+            own(to, meta.uid(), meta.gid())
+        } else if meta.is_file() {
+            std::fs::copy(from, to)?;
+            std::fs::set_permissions(to, std::fs::Permissions::from_mode(meta.mode() & 0o7777))?;
+            own(to, meta.uid(), meta.gid())
+        } else {
+            Ok(()) // devices and fifos never make it into a snapshot
+        }
+    }
+
     fn mount_share(share: &ply_vm_proto::ShareSpec, spec: &SpecDisk) {
         if !share.path.starts_with('/') {
             fail(&format!(

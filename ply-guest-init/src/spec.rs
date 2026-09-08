@@ -109,6 +109,7 @@ mod tests {
 
     pub(super) fn spec() -> SpecDisk {
         SpecDisk {
+            restores: vec![],
             entrypoint: vec!["/bin/true".into()],
             workdir: "/".into(),
             user: None,

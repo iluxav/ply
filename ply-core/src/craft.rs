@@ -242,6 +242,7 @@ pub fn shell(name: &str, cmd: &[String]) -> Result<i32> {
     let (sync_rx, sync_tx) =
         nix::unistd::pipe().map_err(|e| Error::Runtime(format!("pipe: {e}")))?;
     let spec = ContainerSpec {
+        restores: Vec::new(),
         layers: mounted,
         instance_dir: dir.clone(),
         hostname: format!("craft-{name}"),

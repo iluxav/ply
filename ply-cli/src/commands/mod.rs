@@ -20,6 +20,7 @@ mod search;
 mod secret;
 mod self_update;
 mod setup;
+mod snapshot;
 mod stats;
 mod up;
 mod volume;
@@ -82,8 +83,14 @@ pub fn dispatch(command: Command) -> Result<()> {
         Command::Backup(cmd) => match cmd {
             crate::cli::BackupCommand::Now(args) => backup::now(&args),
             crate::cli::BackupCommand::Ls(args) => backup::ls(&args),
+            crate::cli::BackupCommand::Restore(args) => backup::restore(&args),
         },
-        Command::Restore(args) => backup::restore(&args),
+        Command::Snapshot(cmd) => match cmd {
+            crate::cli::SnapshotCommand::Take(args) => snapshot::take(&args),
+            crate::cli::SnapshotCommand::Ls(args) => snapshot::ls(&args),
+            crate::cli::SnapshotCommand::Rm(args) => snapshot::rm(&args),
+        },
+        Command::Restore(args) => snapshot::restore(&args),
         Command::Audit(args) => lifecycle::audit(args),
         Command::Outdated(args) => lifecycle::outdated(args),
     }

@@ -29,6 +29,8 @@ pub struct ContainerSpec {
     /// Declared volume paths, to hand to `run_user` from inside the user
     /// namespace. Not --link: that is the caller's own working tree.
     pub volume_targets: Vec<String>,
+    /// Volumes to fill from snapshot images before the app starts.
+    pub restores: Vec<crate::runtime::backend::VolumeRestore>,
     /// Read end of the parent's sync pipe: proceed on 1 byte (parent placed
     /// us in the cgroup), abort on EOF (parent failed).
     pub sync_rx: std::os::fd::OwnedFd,
@@ -353,6 +355,25 @@ fn setup_and_exec(spec: &ContainerSpec, egress: bool) -> Result<isize> {
                 );
             }
         }
+    }
+
+    // A restore: fill the (fresh) volume from the snapshot image, with the
+    // ownership the image records — we are root over the mapped range
+    // here, which the host-side parent is not. Pre-pivot, while the image's
+    // host path is still reachable. A failure fails the launch: an app
+    // started on an empty volume after a restore that "mostly" worked is
+    // the one outcome this must never produce.
+    for r in &spec.restores {
+        let target = root.join(r.path.trim_start_matches('/'));
+        crate::image::extract::extract_subtree(&r.image, &r.subdir, &target, true).map_err(
+            |e| {
+                crate::Error::Runtime(format!(
+                    "restoring {} from {}: {e}",
+                    r.path,
+                    r.image.display()
+                ))
+            },
+        )?;
     }
 
     // /dev nodes before pivot: the bind-mount fallback needs host paths.

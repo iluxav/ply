@@ -250,6 +250,19 @@ pub fn build(
             prefix_len: switch::PREFIX_LEN,
             gateway: switch::GATEWAY.to_string(),
         }),
+        // Restore images ride AFTER the spec disk in attach order (see
+        // `vm::launch`), so their device names start one past the last
+        // volume plus the spec disk itself.
+        restores: spec
+            .restores
+            .iter()
+            .enumerate()
+            .map(|(j, r)| ply_vm_proto::RestoreSpec {
+                path: r.path.clone(),
+                dev: device_name(layer_count + volumes.len() + 1 + j),
+                subdir: r.subdir.clone(),
+            })
+            .collect(),
         volumes: volumes
             .iter()
             .enumerate()
@@ -334,6 +347,7 @@ mod tests {
 
     fn instance_spec(images: usize) -> InstanceSpec {
         InstanceSpec {
+            restores: vec![],
             app: "db".into(),
             package: "postgres".into(),
             n: 0,
@@ -360,6 +374,7 @@ mod tests {
 
     fn instance_spec_with_env(env: Vec<(String, String)>) -> InstanceSpec {
         InstanceSpec {
+            restores: vec![],
             env,
             ..instance_spec(2)
         }
@@ -367,6 +382,7 @@ mod tests {
 
     fn instance_spec_with_volumes(paths: Vec<String>) -> InstanceSpec {
         InstanceSpec {
+            restores: vec![],
             binds: paths
                 .iter()
                 .map(|p| {

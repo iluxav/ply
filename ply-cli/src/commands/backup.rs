@@ -13,7 +13,7 @@
 
 use anyhow::{bail, Result};
 
-use crate::cli::{BackupTarget, RestoreArgs};
+use crate::cli::{BackupRestoreArgs, BackupTarget};
 
 /// Where the service's scripts live: its declared workdir, else the
 /// package's own directory. Computed from the image, because the instance
@@ -67,7 +67,7 @@ pub fn ls(args: &BackupTarget) -> Result<()> {
     Ok(())
 }
 
-pub fn restore(args: &RestoreArgs) -> Result<()> {
+pub fn restore(args: &BackupRestoreArgs) -> Result<()> {
     let mode = match (&args.to, args.replace) {
         (Some(db), false) => format!("--to '{}'", db.replace('\'', "")),
         // The live database's name comes from the instance's own env, in
