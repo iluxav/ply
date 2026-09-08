@@ -10,8 +10,9 @@ order: 14.7
 ply works entirely from the terminal. The dashboard is the optional web
 face on top: apps with live CPU/mem sparklines, log tailing, an events
 journal, a deploy wizard for GitHub repos, update indicators with a
-one-click deploy, and a real shell into any container — served by a single
-static Go binary that is **itself just a ply app**.
+one-click deploy, volume snapshots with take and restore, and a real shell
+into any container — served by a single static Go binary that is **itself
+just a ply app**.
 
 The honest premise: they sell a dashboard that needs a server; ply is a
 server that happens to have a dashboard.
@@ -43,9 +44,10 @@ The dashboard reads ply's state through explicitly granted bind mounts
 `grant_links = true`). What it may *do* follows from what was granted:
 
 - state, logs, cgroups mounted read-only → observe-only dashboard
-- apps dir mounted read-write → **scale, restart, and terminal** work,
-  because commands are files in `<apps>/<app>/control/` and the app's own
-  run parent consumes them
+- apps dir mounted read-write → **scale, restart, terminal, and
+  snapshot/restore** work, because commands are files in
+  `<apps>/<app>/control/` and the app's own run parent consumes them
+  (`snapshot` takes a volume backup; `restore` rolls a slot back onto one)
 - deployments dir read-write → the deploy pages work
 
 No roles, no tokens, no API surface. Granting the apps dir read-write

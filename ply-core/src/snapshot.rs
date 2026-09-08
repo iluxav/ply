@@ -69,9 +69,44 @@ pub struct Meta {
     pub volumes: BTreeMap<String, String>,
 }
 
-/// Where an app's snapshots live.
+/// Where an app's snapshots live (the images themselves).
 pub fn dir(app: &str) -> PathBuf {
     crate::paths::data_dir().join("snapshots").join(app)
+}
+
+/// Where a small JSON index of each snapshot lives, UNDER the apps dir —
+/// so a reader with only the apps dir granted (the dashboard) can list an
+/// app's snapshots without opening a squashfs. One `<name>.json` per image,
+/// written by `take`, removed by `remove`.
+pub fn index_dir(app: &str) -> PathBuf {
+    crate::paths::apps_dir().join(app).join("snapshots")
+}
+
+/// The index line for one snapshot: its metadata plus what a listing shows.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Index {
+    pub name: String,
+    pub bytes: u64,
+    #[serde(flatten)]
+    pub meta: Meta,
+}
+
+fn write_index(app: &str, name: &str, bytes: u64, meta: &Meta) {
+    let dir = index_dir(app);
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let index = Index {
+        name: name.to_string(),
+        bytes,
+        meta: meta.clone(),
+    };
+    if let Ok(text) = serde_json::to_string(&index) {
+        let tmp = dir.join(format!(".{name}.json.tmp"));
+        if std::fs::write(&tmp, text).is_ok() {
+            let _ = std::fs::rename(&tmp, dir.join(format!("{name}.json")));
+        }
+    }
 }
 
 /// `YYYYMMDD.HHMMSS.<slot>`: a version that sorts by time and names the
@@ -302,6 +337,7 @@ fn take_one(instance: &InstanceState, ply: &Path) -> Result<Taken> {
         source,
     })?;
     let bytes = std::fs::metadata(&final_path).map(|m| m.len()).unwrap_or(0);
+    write_index(&instance.app, &image_name.to_string(), bytes, &meta);
     Ok(Taken {
         instance: name,
         path: final_path,
@@ -382,7 +418,31 @@ pub fn remove(app: &str, which: &str) -> Result<Entry> {
         path: entry.path.clone(),
         source,
     })?;
+    let _ = std::fs::remove_file(index_dir(app).join(format!("{}.json", entry.name)));
     Ok(entry)
+}
+
+/// Write the restore marker for `entry`'s slot, for the run parent to
+/// consume on its next roll of that slot. This is the half of `restore`
+/// that does not itself roll: the CLI follows it with a `deploy`, and the
+/// run parent (handling a `restore` control command) follows it by queuing
+/// the slot in its own roll.
+pub fn mark_restore(app: &str, entry: &Entry) -> Result<()> {
+    let marker = marker_path(app);
+    if let Some(parent) = marker.parent() {
+        std::fs::create_dir_all(parent).map_err(|source| Error::Io {
+            path: parent.to_path_buf(),
+            source,
+        })?;
+    }
+    std::fs::write(
+        &marker,
+        format!("{} {}\n", entry.meta.slot, entry.path.display()),
+    )
+    .map_err(|source| Error::Io {
+        path: marker,
+        source,
+    })
 }
 
 /// One line of the restore marker: which slot, from which image.
@@ -413,21 +473,7 @@ pub fn restore(
                 entry.meta.slot
             ))
         })?;
-    let marker = marker_path(app);
-    if let Some(parent) = marker.parent() {
-        std::fs::create_dir_all(parent).map_err(|source| Error::Io {
-            path: parent.to_path_buf(),
-            source,
-        })?;
-    }
-    std::fs::write(
-        &marker,
-        format!("{} {}\n", entry.meta.slot, entry.path.display()),
-    )
-    .map_err(|source| Error::Io {
-        path: marker.clone(),
-        source,
-    })?;
+    mark_restore(app, entry)?;
     // The roll: the app's current image over itself. The parent's launch
     // for the marked slot does the actual restore.
     let image = instance
@@ -437,7 +483,7 @@ pub fn restore(
     let report = crate::lifecycle::deploy(Path::new(&image), timeout_secs);
     // A marker nobody consumed (the roll never reached the slot) must not
     // ambush the next ordinary deploy.
-    let _ = std::fs::remove_file(&marker);
+    let _ = std::fs::remove_file(marker_path(app));
     report
 }
 

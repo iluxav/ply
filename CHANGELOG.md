@@ -5,6 +5,20 @@ breaking changes, and known limitations. Write under **Unreleased** as work
 lands; `make release-cli` turns that heading into the version and date, and
 the release workflow publishes the entry as the GitHub release notes.
 
+## Unreleased
+
+### What changed
+- **Snapshot and restore from the dashboard.** The run parent now accepts
+  two control-dir commands — `snapshot` (take a volume snapshot now) and
+  `restore <name>` (roll the slot back onto one) — so the dashboard, which
+  drives every action by writing a file the parent consumes, gets a
+  snapshots panel with take and per-snapshot restore. `ply snapshot take`
+  also writes a small JSON index per snapshot under
+  `<apps>/<app>/snapshots/`, so a reader holding only the apps-dir grant
+  (the dashboard) lists an app's snapshots without opening a squashfs. Both
+  actions are journal events. Needs ply ≥ 0.1.89 on the host and the
+  matching dashboard build.
+
 ## v0.1.88 — 2026-09-08
 
 ### What changed

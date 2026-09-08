@@ -10,6 +10,9 @@
 //! Commands:
 //!   scale       content = target instance count
 //!   restart     rolling restart on the current image (content ignored)
+//!   snapshot    take a volume snapshot now (content ignored)
+//!   restore     content = a snapshot name, or `latest` — roll the slot
+//!               back onto it
 //!   next-image  the deploy pointer (lives one level up, unchanged — the
 //!               poll makes file-only deploys work; SIGHUP stays instant)
 //!
@@ -29,6 +32,11 @@ pub enum Command {
     /// `ply scale APP auto`: hand the count back to the `[scale]` policy.
     ScaleAuto,
     Restart,
+    /// Take a volume snapshot of every instance now.
+    Snapshot,
+    /// Roll the slot the snapshot came from back onto it. The string is a
+    /// snapshot name (as `ply snapshot ls` shows it) or `latest`.
+    Restore(String),
     /// Open a terminal into a slot: the parent answers with a PTY served
     /// on `control/term-<nonce>.sock`.
     Exec {
@@ -65,6 +73,29 @@ pub fn poll(app: &str) -> Vec<Command> {
     if restart.exists() {
         let _ = std::fs::remove_file(&restart);
         out.push(Command::Restart);
+    }
+
+    let snapshot = dir.join("snapshot");
+    if snapshot.exists() {
+        let _ = std::fs::remove_file(&snapshot);
+        out.push(Command::Snapshot);
+    }
+
+    let restore = dir.join("restore");
+    if let Ok(text) = std::fs::read_to_string(&restore) {
+        let _ = std::fs::remove_file(&restore);
+        let which = text.trim();
+        // A name is a filename component; nothing with a slash or a NUL is.
+        if which.is_empty() || which.contains(['/', '\0']) {
+            write_result(
+                app,
+                "restore",
+                false,
+                "restore wants a snapshot name or `latest`",
+            );
+        } else {
+            out.push(Command::Restore(which.to_string()));
+        }
     }
 
     let exec = dir.join("exec");
@@ -152,7 +183,17 @@ mod tests {
         with_apps_dir(|| {
             submit("web", "scale", "4").unwrap();
             submit("web", "restart", "").unwrap();
-            assert_eq!(poll("web"), vec![Command::Scale(4), Command::Restart]);
+            submit("web", "snapshot", "").unwrap();
+            submit("web", "restore", "latest\n").unwrap();
+            assert_eq!(
+                poll("web"),
+                vec![
+                    Command::Scale(4),
+                    Command::Restart,
+                    Command::Snapshot,
+                    Command::Restore("latest".into()),
+                ]
+            );
             // consumed: second poll is empty
             assert_eq!(poll("web"), vec![]);
         });

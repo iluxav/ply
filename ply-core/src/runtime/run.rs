@@ -908,6 +908,82 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
                             );
                         }
                     }
+                    crate::runtime::control::Command::Snapshot => {
+                        // Take a snapshot of every live instance, via our own
+                        // ply binary (`ply exec` into each). Blocks the poll
+                        // for the freeze — seconds — which is acceptable for
+                        // an operator-triggered action.
+                        let ply = std::env::current_exe()
+                            .unwrap_or_else(|_| std::path::PathBuf::from("ply"));
+                        match crate::snapshot::take(&app_name, &ply) {
+                            Ok(taken) => {
+                                let detail = taken
+                                    .iter()
+                                    .map(|t| {
+                                        t.path
+                                            .file_name()
+                                            .map(|n| n.to_string_lossy().into_owned())
+                                            .unwrap_or_default()
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join(", ");
+                                crate::runtime::events::emit(&app_name, "snapshot", &detail);
+                                crate::runtime::control::write_result(
+                                    &app_name, "snapshot", true, &detail,
+                                );
+                            }
+                            Err(e) => {
+                                let e = format!("{e}");
+                                crate::runtime::events::emit(&app_name, "snapshot-failed", &e);
+                                crate::runtime::control::write_result(
+                                    &app_name, "snapshot", false, &e,
+                                );
+                            }
+                        }
+                    }
+                    crate::runtime::control::Command::Restore(which) => {
+                        // A restore is a rolling restart that also fills the
+                        // slot's volumes from the snapshot: mark it, then
+                        // queue that slot's roll (launch_instance consumes
+                        // the marker). No `deploy` call — this IS the parent.
+                        match crate::snapshot::resolve(&app_name, &which)
+                            .and_then(|e| crate::snapshot::mark_restore(&app_name, &e).map(|_| e))
+                        {
+                            Ok(entry) if roll_queue.is_empty() => {
+                                let slot = entry.meta.slot;
+                                if instances.iter().any(|i| i.n == slot) {
+                                    roll_queue = vec![slot];
+                                    let detail = format!("{}.{slot} <- {}", app_name, entry.name);
+                                    crate::runtime::events::emit(&app_name, "restore", &detail);
+                                    crate::runtime::control::write_result(
+                                        &app_name, "restore", true, &detail,
+                                    );
+                                } else {
+                                    let _ = std::fs::remove_file(crate::snapshot::marker_path(
+                                        &app_name,
+                                    ));
+                                    crate::runtime::control::write_result(
+                                        &app_name,
+                                        "restore",
+                                        false,
+                                        &format!("slot {slot} is not running"),
+                                    );
+                                }
+                            }
+                            Ok(_) => crate::runtime::control::write_result(
+                                &app_name,
+                                "restore",
+                                false,
+                                "a roll is already in progress",
+                            ),
+                            Err(e) => crate::runtime::control::write_result(
+                                &app_name,
+                                "restore",
+                                false,
+                                &format!("{e}"),
+                            ),
+                        }
+                    }
                     crate::runtime::control::Command::Exec { slot, nonce } => {
                         if !slots.contains_key(&slot) {
                             crate::runtime::control::write_result(
