@@ -5,6 +5,18 @@ breaking changes, and known limitations. Write under **Unreleased** as work
 lands; `make release-cli` turns that heading into the version and date, and
 the release workflow publishes the entry as the GitHub release notes.
 
+## Unreleased
+
+### What changed
+- `ply setup` writes the host's PUBLIC key to `<data>/config/host.pub`, so
+  the dashboard can **seal secrets** with it — a "seal a secret" box on the
+  deploy page turns a value into an `enc:v1:…` blob for the host's `[env]`,
+  and the notify page can seal the Telegram token. Sealing needs only the
+  public key, so the private `host.key` never reaches the dashboard: it can
+  create sealed values and never read one back. The seal is the same
+  construction as `sealed.rs`, verified by a value sealed in the dashboard
+  and opened by `ply` at launch. Dashboard code is in the iluxav/ply-dashboard repo.
+
 ## v0.1.92 — 2026-09-08
 
 ### What changed

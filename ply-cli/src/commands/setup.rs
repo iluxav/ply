@@ -44,11 +44,19 @@ mod linux {
         }
 
         // The config dir the dashboard can be granted for notify.toml — a
-        // grant source that exists, holding no secrets.
+        // grant source that exists, holding no secrets. The host's PUBLIC
+        // key goes here too (`host.pub`), so the dashboard can SEAL values
+        // with it — sealing needs only the public half; the private
+        // `host.key` never leaves the data root.
         {
             let dir = ply_core::notify::config_dir();
             if std::fs::create_dir_all(&dir).is_ok() {
                 println!("ok: config dir {}", dir.display());
+                if let Ok((key, _)) =
+                    ply_core::sealed::HostKey::load_or_create(&ply_core::sealed::key_path())
+                {
+                    let _ = std::fs::write(dir.join("host.pub"), format!("{}\n", key.public()));
+                }
             }
         }
 

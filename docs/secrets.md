@@ -61,6 +61,12 @@ printf '%s' "$PASSWORD" | ply secret seal DB_PASSWORD=- --for ply-host-…
 Without `--for`, the value is sealed for the host you are on: the
 single-server case, where you seal and run in the same place.
 
+**From the dashboard.** The [dashboard](/docs/dashboard/) can seal too —
+its deploy page has a "seal a secret" box, and the notify page can seal the
+Telegram token. It uses only the host's public key (`ply setup` writes it
+to the granted config dir), so it creates sealed values and, by design, can
+never read one back. The private key never leaves the host.
+
 A value is sealed **under its name**. `DATABASE_URL = "enc:v1:…"` opens
 only as `DATABASE_URL`: moving the ciphertext to another variable, or
 another host, fails with a message that names the variable and never the
