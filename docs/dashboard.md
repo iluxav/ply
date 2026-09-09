@@ -34,7 +34,7 @@ grant_links = true
 First boot prints a **setup token** to the app's log
 (`ply logs dashboard`); the create-account page requires it, which closes
 the first-visitor-owns-the-box race. Credentials live in one `auth.json`
-in the app's volume — deleting that file is the documented password reset.
+in the app's volume — deleting that file is the documented password reset — delete it and refresh the page and the create-account flow returns on the next request (no restart), with a fresh setup token in `ply logs dashboard`.
 The filesystem is the admin API.
 
 ## Permissions ARE the ACL
