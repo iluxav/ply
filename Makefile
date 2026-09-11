@@ -78,10 +78,10 @@ release-cli:
 	echo "release: $$CUR -> $$V"; \
 	if grep -Eq "^## v$$V( |$$)" CHANGELOG.md; then :; \
 	elif grep -q '^## Unreleased' CHANGELOG.md; then \
-	  sed -i "s/^## Unreleased.*/## v$$V — $$(date -u +%F)/" CHANGELOG.md; \
+	  sed "s/^## Unreleased.*/## v$$V — $$(date -u +%F)/" CHANGELOG.md > CHANGELOG.md.tmp && mv CHANGELOG.md.tmp CHANGELOG.md; \
 	else echo "release: CHANGELOG.md needs a '## Unreleased' or '## v$$V' entry — write what changed first"; exit 1; fi; \
 	$(MAKE) check; \
-	sed -i "s/^version = \".*\"/version = \"$$V\"/" Cargo.toml; \
+	sed "s/^version = \".*\"/version = \"$$V\"/" Cargo.toml > Cargo.toml.tmp && mv Cargo.toml.tmp Cargo.toml; \
 	cargo update --workspace >/dev/null 2>&1; \
 	git add Cargo.toml Cargo.lock CHANGELOG.md; \
 	git commit -m "v$$V"; \
