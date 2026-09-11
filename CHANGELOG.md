@@ -5,6 +5,32 @@ breaking changes, and known limitations. Write under **Unreleased** as work
 lands; `make release-cli` turns that heading into the version and date, and
 the release workflow publishes the entry as the GitHub release notes.
 
+## Unreleased
+
+### What changed
+- **`ply clean`** reaps orphaned instances. A `ply run` (especially rootless)
+  that crashes or is killed leaves its instance running — by design, so a
+  replacement supervisor can re-adopt it — but when none does, the instance
+  lingered with no command to stop it: rootless, it runs under a subuid the
+  launching user's `kill` cannot reach. `ply clean` (no args) stops and reaps
+  only orphans (an instance reparented off its `ply run`), which is safe while
+  other apps run; `ply clean APP` and `ply clean --all` reap more. It signals
+  the instance's pid-namespace init, so the kernel tears down the whole
+  container, subuid processes included.
+- `ply run` now sweeps orphaned instances of OTHER apps at startup, so a
+  crashed run's leftovers stop piling up on their own — the launching user
+  could not otherwise reach a rootless instance under a subuid. The app being
+  started is skipped on purpose: a fresh run of it would race its own orphan's
+  netns/port teardown, so that one stays `ply clean`'s job. Bounded (one
+  SIGTERM sweep, a grace, one SIGKILL) and free on a clean host.
+
+### Fixes
+- `reap_stale` (run on every `ply run` startup, and by `ply clean`) could bail
+  before removing a dead instance's state file: rootless, rewriting the
+  root-owned `/etc/hosts` fails, and that error propagated. Hosts cleanup is
+  best-effort now, so a killed rootless instance's state is actually reaped
+  instead of lingering as a `dead` row in `ply ps`.
+
 ## v0.1.94 — 2026-09-11
 
 ### What changed

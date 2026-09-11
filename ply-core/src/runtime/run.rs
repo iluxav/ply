@@ -320,6 +320,18 @@ pub fn run(opts: &RunOptions) -> Result<i32> {
 
     let _ = state::reap_stale(); // free IPs/dirs leaked by killed runs
 
+    // Sweep abandoned instances of OTHER apps: a `ply run` that crashed leaves
+    // its instances with no supervisor, and nothing re-adopts them, so without
+    // this they pile up. The app being started is skipped on purpose — a fresh
+    // run of it would race its own orphan's netns/port teardown; `ply clean`
+    // handles that one. Free on a clean host (no orphan, no wait).
+    for st in state::reap_other_orphans(&identity) {
+        eprintln!(
+            "ply: reaped orphaned {}.{} (pid {}) left by a previous run",
+            st.app, st.n, st.pid
+        );
+    }
+
     // Same app already running? That's legal (canary: old + new side by
     // side) — but say so, and point at deploy for the replace case.
     let already_running = state::list()?

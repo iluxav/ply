@@ -94,6 +94,15 @@ pub enum Command {
     /// List running instances
     Ps(PsArgs),
 
+    /// Stop and reap orphaned instances a dead `ply run` left behind
+    ///
+    /// A `ply run` (especially rootless) that crashes or is killed leaves its
+    /// instance running, by design, so a replacement supervisor can re-adopt
+    /// it. When none does, the instance lingers — this reaps it. No arguments
+    /// reaps only orphans (safe while other apps run); name an app or `--all`
+    /// to reap more.
+    Clean(CleanArgs),
+
     /// Live per-instance usage: CPU, memory, pids, network, throttling
     ///
     /// Reads the kernel's cgroup v2 files and veth counters — no agent.
@@ -574,6 +583,17 @@ pub struct PsArgs {
     /// Machine-readable output
     #[arg(long)]
     pub json: bool,
+}
+
+#[derive(Args)]
+pub struct CleanArgs {
+    /// Reap all instances of this app (`myapp` or `myapp.2`), not just orphans
+    #[arg(value_name = "APP")]
+    pub app: Option<String>,
+
+    /// Reap every instance on this host, even ones a live `ply run` supervises
+    #[arg(long, conflicts_with = "app")]
+    pub all: bool,
 }
 
 #[derive(Args)]

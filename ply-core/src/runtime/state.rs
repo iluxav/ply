@@ -224,9 +224,211 @@ pub fn reap_stale() -> Result<Vec<InstanceState>> {
             crate::runtime::backend::scrub_instance_dir(&instance_dir);
             let _ = crate::paths::force_remove_dir_all(&instance_dir);
         }
-        crate::runtime::hosts::remove_entry(&state.app, state.n)?;
+        // Best-effort: rootless cannot rewrite root-owned /etc/hosts (and has
+        // no `.ply` entry there anyway), and that must not block reaping the
+        // rest — the state file and dir removal below are what matter.
+        let _ = crate::runtime::hosts::remove_entry(&state.app, state.n);
         InstanceState::remove(&state.app, state.n);
         reaped.push(state);
     }
     Ok(reaped)
+}
+
+/// What [`clean`] stops and reaps.
+pub enum CleanTarget {
+    /// Only orphans: an instance whose supervisor died is reparented away from
+    /// its `ply run` (to init, or to a process that is not `ply`). Safe — it
+    /// never touches an instance a live `ply run` is still supervising.
+    Orphans,
+    /// Every instance recorded on this host, supervised or not.
+    All,
+    /// Every instance of one app (`myapp`) or a single instance (`myapp.2`).
+    App(String),
+}
+
+/// Does a pid exist? `kill(pid, 0)`: `0` = yes; `ESRCH` = no; `EPERM` = yes
+/// (it exists, it is just not ours to signal). [`InstanceState::alive`] reads
+/// only `== 0`, so it calls an `EPERM` process dead; this does not.
+fn pid_exists(pid: i32) -> bool {
+    if unsafe { nix::libc::kill(pid, 0) } == 0 {
+        return true;
+    }
+    std::io::Error::last_os_error().raw_os_error() != Some(nix::libc::ESRCH)
+}
+
+/// The parent pid from `/proc/<pid>/stat`. The 2nd field (`comm`) is wrapped
+/// in parentheses and may itself contain spaces or `)`, so the numeric fields
+/// begin after the LAST `)`: then `<state> <ppid> ...`.
+fn ppid_of(pid: i32) -> Option<i32> {
+    parse_ppid(&std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?)
+}
+
+/// The ppid is the 4th field of `/proc/<pid>/stat`: `pid (comm) state ppid …`.
+fn parse_ppid(stat: &str) -> Option<i32> {
+    let after_comm = &stat[stat.rfind(')')? + 1..];
+    after_comm.split_whitespace().nth(1)?.parse().ok()
+}
+
+fn comm_of(pid: i32) -> Option<String> {
+    std::fs::read_to_string(format!("/proc/{pid}/comm"))
+        .ok()
+        .map(|s| s.trim().to_string())
+}
+
+/// A supervised instance's parent is its `ply run` (comm `ply`). Reparented to
+/// init, or to anything that is not `ply`, means the supervisor is gone.
+fn is_orphan(pid: i32) -> bool {
+    match ppid_of(pid) {
+        Some(1) => true,
+        Some(ppid) => comm_of(ppid).as_deref() != Some("ply"),
+        None => false,
+    }
+}
+
+/// The process group (5th field of `/proc/<pid>/stat`) — every process of one
+/// `ply run` shares it: the instance's pid-namespace init, its parked netns
+/// holder, slirp, and the app. Reaping the whole group is the only way to take
+/// the holder too; leaving it behind wedges the next run of the same app.
+fn pgid_of(pid: i32) -> Option<i32> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    parse_pgid(&stat)
+}
+
+/// pgid is the 5th field: `pid (comm) state ppid pgrp …`.
+fn parse_pgid(stat: &str) -> Option<i32> {
+    let after_comm = &stat[stat.rfind(')')? + 1..];
+    after_comm.split_whitespace().nth(2)?.parse().ok()
+}
+
+/// Signal a run's whole process group — its pid-namespace init, parked netns
+/// holder, slirp and the app all share one pgid — plus the pid itself as a
+/// fallback. Killing the pid-namespace init also tears down anything it left
+/// under a subuid, which a bare `kill` by the launching user could not reach.
+/// Hard-guarded so it never signals our OWN group.
+fn signal_group(pid: i32, sig: i32) {
+    let own = unsafe { nix::libc::getpgrp() };
+    unsafe {
+        if let Some(g) = pgid_of(pid).filter(|&g| g > 1 && g != own) {
+            nix::libc::kill(-g, sig);
+        }
+        nix::libc::kill(pid, sig);
+    }
+}
+
+/// SIGTERM the run's process group, wait up to 5s for the instance to exit,
+/// then SIGKILL the group to sweep the parked netns holder and slirp (they do
+/// not exit on their own).
+fn stop_pid(pid: i32) {
+    signal_group(pid, nix::libc::SIGTERM);
+    for _ in 0..50 {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        if !pid_exists(pid) {
+            break;
+        }
+    }
+    signal_group(pid, nix::libc::SIGKILL);
+    for _ in 0..20 {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        if !pid_exists(pid) {
+            return;
+        }
+    }
+}
+
+/// Reap abandoned instances of every app EXCEPT `except` — orphans whose
+/// supervisor died, which nothing re-adopts (a fresh run ADDS instances). Run
+/// at `ply run <except>` startup so a crashed run's leftovers do not pile up.
+/// The app being started is skipped on purpose: a fresh run of it would race
+/// its own orphan's netns/port teardown (that one is `ply clean`'s job).
+///
+/// Bounded regardless of how many orphans exist — one SIGTERM sweep, one 1s
+/// grace, one SIGKILL — and free when there are none (no orphan, no wait), so
+/// it adds nothing to a normal startup. Returns what it actually took down.
+pub fn reap_other_orphans(except: &str) -> Vec<InstanceState> {
+    let Ok(states) = list() else {
+        return Vec::new();
+    };
+    let orphans: Vec<InstanceState> = states
+        .into_iter()
+        .filter(|st| st.app != except && pid_exists(st.pid) && is_orphan(st.pid))
+        .collect();
+    if orphans.is_empty() {
+        return orphans;
+    }
+    for st in &orphans {
+        signal_group(st.pid, nix::libc::SIGTERM);
+    }
+    std::thread::sleep(std::time::Duration::from_secs(1));
+    for st in &orphans {
+        if pid_exists(st.pid) {
+            signal_group(st.pid, nix::libc::SIGKILL);
+        }
+    }
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let _ = reap_stale();
+    orphans
+        .into_iter()
+        .filter(|st| !pid_exists(st.pid))
+        .collect()
+}
+
+/// Stop and reap selected instances, then clear the state of everything now
+/// dead. Returns the instances it stopped. A rootless `ply run` that dies
+/// abnormally leaves its instance running (by design, so a replacement
+/// supervisor can re-adopt it); when none ever does, this is what reaps it.
+pub fn clean(target: &CleanTarget) -> Result<Vec<InstanceState>> {
+    let mut stopped = Vec::new();
+    for st in list()? {
+        if !pid_exists(st.pid) {
+            continue; // already dead — reap_stale below clears its state
+        }
+        let selected = match target {
+            CleanTarget::All => true,
+            CleanTarget::App(a) => st.app == *a || format!("{}.{}", st.app, st.n) == *a,
+            CleanTarget::Orphans => is_orphan(st.pid),
+        };
+        if selected {
+            stop_pid(st.pid);
+            stopped.push(st);
+        }
+    }
+    let _ = reap_stale();
+    Ok(stopped)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_ppid;
+
+    #[test]
+    fn parse_ppid_reads_the_fourth_field() {
+        assert_eq!(
+            parse_ppid("568904 (ply) S 568884 568876 568876 0"),
+            Some(568884)
+        );
+    }
+
+    #[test]
+    fn parse_ppid_survives_parens_and_spaces_in_comm() {
+        // A comm may itself contain spaces and a `)`; fields start after the last `)`.
+        assert_eq!(parse_ppid("42 (odd )name) R 7 1 1 0"), Some(7));
+        assert_eq!(parse_ppid("9 (a) Z 1 9"), Some(1));
+    }
+
+    #[test]
+    fn parse_ppid_rejects_garbage() {
+        assert_eq!(parse_ppid("no parens here"), None);
+        assert_eq!(parse_ppid("12 (x) S notanumber"), None);
+    }
+
+    #[test]
+    fn parse_pgid_reads_the_fifth_field() {
+        use super::parse_pgid;
+        // pid (comm) state ppid pgrp ...
+        assert_eq!(
+            parse_pgid("570258 (ply) S 570238 570224 570224 0"),
+            Some(570224)
+        );
+        assert_eq!(parse_pgid("42 (odd )name) R 7 99 99"), Some(99));
+    }
 }

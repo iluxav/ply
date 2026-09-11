@@ -4,6 +4,7 @@ mod account;
 mod add;
 mod backup;
 mod build;
+mod clean;
 mod control;
 mod craft;
 mod egress;
@@ -47,6 +48,7 @@ pub fn dispatch(command: Command) -> Result<()> {
         Command::Restart(args) => control::restart(args),
         Command::Reconcile(args) => reconcile::exec(args),
         Command::Ps(args) => ps::exec(args),
+        Command::Clean(args) => clean::exec(args),
         Command::Stats(args) => stats::exec(args),
         Command::Check(args) => lifecycle::check(args),
         Command::Inspect(args) => images::inspect(args),
