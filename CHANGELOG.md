@@ -5,7 +5,7 @@ breaking changes, and known limitations. Write under **Unreleased** as work
 lands; `make release-cli` turns that heading into the version and date, and
 the release workflow publishes the entry as the GitHub release notes.
 
-## Unreleased
+## v0.1.95 — 2026-09-11
 
 ### What changed
 - **`ply clean`** reaps orphaned instances. A `ply run` (especially rootless)
