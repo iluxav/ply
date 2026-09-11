@@ -5,6 +5,28 @@ breaking changes, and known limitations. Write under **Unreleased** as work
 lands; `make release-cli` turns that heading into the version and date, and
 the release workflow publishes the entry as the GitHub release notes.
 
+## Unreleased
+
+### What changed
+- Documentation and examples only — no runtime or behavior changes; the
+  binary is functionally identical to v0.1.93 (only the version string moves).
+- README rewritten for a first-time reader: a disambiguation line up top
+  (this is not the [iovisor/ply](https://github.com/iovisor/ply) BPF tracer
+  or the [dabeaz/ply](https://github.com/dabeaz/ply) lex-yacc library), a
+  "how it isolates" paragraph naming the exact primitives (its own user,
+  mount, PID, network, UTS and IPC namespaces, `pivot_root`, a seccomp
+  filter, every capability dropped, `no_new_privs`, and a cgroup v2 slice on
+  rootful), a copy-paste Quickstart, a Dockerfile → ply.toml comparison, and
+  a "builds on a 512 MB box" section (the `ply setup --swap` memory-fenced
+  builder). All claims verified against a running instance on Linux.
+- New `examples/hello-next`: a minimal Next.js app packaged as a single
+  ~4 MiB ply image — `output: "standalone"`, a `postbuild` step that places
+  static assets, verified building and serving under `ply run`.
+- New docs page: **ply vs Kamal vs Coolify**, an honest comparison for the
+  one-to-five-server case, including where ply is behind.
+- Removed a stale hardcoded binary size ("4.7 MiB") from the docs; the
+  released binary is larger and still growing, so no fixed number is quoted.
+
 ## v0.1.93 — 2026-09-09
 
 ### What changed
