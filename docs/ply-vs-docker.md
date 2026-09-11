@@ -27,7 +27,7 @@ An honest comparison. Short version: **Docker is a universal container platform;
 
 ## Where ply wins
 
-**Startup latency and footprint.** Measured on the same machine, same kernel, both rootful: `ply run` 67 ms vs `docker run` 167 ms per container — with no daemon running between invocations. The binary is 4.7 MiB; a clean install touches exactly one file.
+**Startup latency and footprint.** Measured on the same machine, same kernel, both rootful: `ply run` 67 ms vs `docker run` 167 ms per container — with no daemon running between invocations. It is a single static binary; a clean install touches exactly one file.
 
 **Under load, measured.** One REST + Postgres workload, the same static Go binary in both runtimes, the same box, back to back, Docker as the reference (the harness is `bench/` in the repo; the write-up is `bench/RESULTS-2026-09-05.md`):
 

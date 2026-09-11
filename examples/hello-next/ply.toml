@@ -1,0 +1,25 @@
+[package]
+name = "hello-next"
+version = "0.1.0"
+base = "debian@13"
+# `next build` (output: standalone) emits a runnable server under
+# .next/standalone/. Its server.js chdirs to its own directory and looks for
+# assets under .next/standalone/.next/static — which is why the build step in
+# the README copies static there before packaging.
+entrypoint = ["node", ".next/standalone/server.js"]
+include = [".next/standalone/"]
+
+[dependencies]
+node = "22"
+
+[env]
+# Next's standalone server defaults HOSTNAME to localhost; bind all
+# interfaces so ply can publish it.
+HOSTNAME = "0.0.0.0"
+PORT = "3000"
+
+[ports]
+web = 3000
+
+[sources]
+default = "https://registry.plybox.sh/ply/{package}"

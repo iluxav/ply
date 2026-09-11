@@ -39,7 +39,7 @@ process, and your app runs as an ordinary child process. `Ctrl-C` stops it.
 ## Where it shines
 
 - **1–5 VPSs, small teams** — deploys are `scp` + one command; the whole
-  platform is a 5 MiB binary
+  platform is a single static binary
 - **CI sandboxes** — hermetic, content-addressed, offline-capable
 - **Edge / IoT** — no daemon to babysit, factory reset = `rm -rf /var/lib/ply`
 - **AI-agent sandboxing** — thousands of cheap, isolated, throwaway executions
@@ -59,4 +59,5 @@ process, and your app runs as an ordinary child process. `Ctrl-C` stops it.
 - [Dependencies & lockfiles](/docs/dependencies/) — how resolution works
 - [Registries & publishing](/docs/registries/) — shipping images anywhere
 - [ply vs Docker](/docs/ply-vs-docker/) — an honest comparison
+- [ply vs Kamal vs Coolify](/docs/ply-vs-kamal-coolify/) — deploying to your own servers: where each fits
 - [Glossary](/docs/glossary/) — the words ply uses, and the ones it bans

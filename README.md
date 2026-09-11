@@ -2,11 +2,25 @@
 
 **A daemonless container runtime and package manager for Linux.**
 
-Package your app with explicit, versioned dependencies. Build an image, copy it to a server, and run it as a foreground process.
+*Not the [BPF tracer](https://github.com/iovisor/ply) or the [lex-yacc library](https://github.com/dabeaz/ply).* This **ply** packages your app with explicit, versioned dependencies, resolves them into one deterministic image, and runs it as a foreground process — no daemon, no Dockerfile, no registry to operate.
+
+**How it isolates.** Not a wrapper around Docker or runc: `ply run` forks straight into its own user, mount, PID, network, UTS and IPC namespaces, pivots root with `pivot_root`, applies a seccomp filter, drops every Linux capability (a native package keeps none; imported OCI images get Docker's default set), and sets `no_new_privs`. Rootful runs additionally bound each instance with a cgroup v2 slice for memory and CPU; rootless enters the user namespace first, so none of this needs root (and skips cgroup limits).
 
 [Website](https://plybox.sh/) · [Documentation](https://plybox.sh/docs/) · [Releases](https://github.com/iluxav/ply/releases) · [Report an issue](https://github.com/iluxav/ply/issues)
 
 **Status:** pre-1.0. The CLI and image format may change. Linux x86_64 and arm64 are the primary targets; the native Apple Silicon backend is experimental — the same installer installs it, each instance runs in its own microVM. See the [macOS guide](https://plybox.sh/docs/macos/) for what it does not do yet.
+
+## Quickstart
+
+```sh
+curl -fsSL https://plybox.sh/install.sh | sh   # one small binary, no daemon
+cd my-node-or-python-app
+ply init                                        # detects the project, writes ply.toml
+ply build .                                      # → one deterministic .img + ply.lock
+ply run --publish 8080 myapp-1.0.0-linux-x64.img # foreground; Ctrl-C stops it
+```
+
+Nothing is resident between deploys. The full walkthrough — with a manifest you can copy — is [below](#try-it-on-linux).
 
 ## Why ply?
 
@@ -16,6 +30,48 @@ Ply is designed for developers deploying applications to individual Linux hosts 
 - **Shared packages.** Applications reference dependency packages stored separately on the host. Apps using the same package content can reuse it.
 - **File-based distribution.** Copy an application image with `scp` or serve packages over HTTP. Missing dependencies are fetched from the configured sources and checked against their locked hashes.
 - **Foreground execution.** Run without a central Ply daemon. Logs go to your terminal, signals reach the application, and exit codes propagate.
+
+## Dockerfile → ply.toml
+
+A typical multi-stage Node Dockerfile:
+
+```dockerfile
+FROM node:22 AS build
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
+FROM node:22-slim
+COPY --from=build /app/dist ./dist
+COPY --from=build /app/node_modules ./node_modules
+CMD ["node", "server.js"]
+```
+
+The same app in ply — no build steps, no layers, no `build-essential` baked into the image:
+
+```toml
+[package]
+name = "web"
+version = "1.0.0"
+entrypoint = ["node", "server.js"]
+include = ["dist/", "package.json"]
+base = "debian@13"
+
+[dependencies]
+node = "22"
+```
+
+`node` is a content-hashed package resolved once and shared by every app on the host; the image ships only your files, and `ply.lock` pins the closure so a rebuild is byte-identical.
+
+## Builds on a 512 MB box
+
+Docker keeps a daemon resident; a typical self-hosted PaaS wants ~2 GB before you deploy anything. Ply keeps nothing running between deploys — a small binary that exits — so a 512 MB droplet has its whole memory budget free to *build*.
+
+For memory-hungry JS builds, `sudo ply setup --swap 2G` gives the memory-fenced builder somewhere to spill: it stays inside a cgroup and spills to swap rather than OOM-killing the build or evicting the app you are already serving. The same small box builds and runs, with no registry hop.
+
+A complete, runnable Next.js app — building to a ~4 MiB image — is in [`examples/hello-next`](examples/hello-next).
 
 ## Try it on Linux
 
