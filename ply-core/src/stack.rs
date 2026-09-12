@@ -1,12 +1,16 @@
-//! A stack: several `ply run`s, written down. The compose equivalent.
+//! A composition: several `ply run`s, written down. The compose equivalent.
 //!
-//! A stack file is pure wiring — it builds no image of its own. It is a
-//! `[stack]` metadata header (name/description) followed by an `[[app]]`
-//! array, and **each `[[app]]` block is exactly one `ply run`**: its fields
-//! map 1:1 to run flags (`run`→the image, `name`→`--name`, `e`→`-e`,
-//! `publish`→`--publish`, `after`→`--after`, `volume`→`--volume`,
-//! `domain`→`--domain`, `scale`→`--scale`). There is no stack concept beyond
+//! A composition is just a `ply.toml` — the same `[package]` header an app
+//! uses, plus an `[[service]]` array. It builds no image of its own; each
+//! `[[service]]` block is exactly one `ply run`, its fields mapping 1:1 to
+//! run flags (`run`→the image, `name`→`--name`, `e`→`-e`, `publish`→
+//! `--publish`, `after`→`--after`, `volume`→`--volume`, `domain`→`--domain`,
+//! `scale`→`--scale`). There is no separate stack file or concept beyond
 //! "these runs, in dependency order."
+//!
+//! Legacy aliases, still read so existing files keep working: `[[app]]` for
+//! `[[service]]`, a `[stack]` header for `[package]`, and a `stack.toml`
+//! filename. New files use `[package]` + `[[service]]`.
 //!
 //! `after` edges name other members (by their `name`) and ride the existing
 //! `--after` readiness gate. `$VAR` in an `e` value is substituted from the
@@ -257,7 +261,8 @@ fn parse_overlay(text: &str, path: &Path) -> Result<StackOverlay> {
         .parse()
         .map_err(|e| Error::Manifest(format!("{}: {e}", path.display())))?;
     let env_file = doc
-        .get("stack")
+        .get("package")
+        .or_else(|| doc.get("stack"))
         .and_then(|s| s.get("env_file"))
         .and_then(|v| v.as_str())
         .map(str::to_string);
@@ -379,12 +384,6 @@ pub fn parse(text: &str, path: &Path) -> Result<Option<Stack>> {
     let Some(apps) = member_array(&doc, path)? else {
         return Ok(None);
     };
-    if doc.get("package").is_some() {
-        return Err(Error::Manifest(format!(
-            "{}: has both [package] and [[service]] — a composition is pure wiring; move the app into its own directory and reference it with `run = \"./dir\"` (or `run = \"git+https://…\"`)",
-            path.display()
-        )));
-    }
     if apps.is_empty() {
         return Err(Error::Manifest(format!(
             "{}: [[service]] has no entries",
@@ -392,44 +391,29 @@ pub fn parse(text: &str, path: &Path) -> Result<Option<Stack>> {
         )));
     }
 
-    let (mut name, mut owner, mut version, mut description, mut env_file) =
-        (None, None, None, None, None);
-    if let Some(meta) = doc.get("stack") {
-        let meta = meta.as_table().ok_or_else(|| {
-            Error::Manifest(format!("{}: [stack] must be a table", path.display()))
-        })?;
-        for key in meta.keys() {
-            if !matches!(
-                key.as_str(),
-                "name" | "owner" | "version" | "description" | "env_file"
-            ) {
-                return Err(Error::Manifest(format!(
-                    "{}: [stack] has unknown key `{key}` (expected name, owner, version, description, env_file)",
-                    path.display()
-                )));
-            }
-        }
-        name = meta
-            .get("name")
+    // Identity: `[package]` is the ONE header a ply.toml uses — the same one
+    // an app uses — so a composition is not a second file concept. A ply.toml
+    // is a composition when it has `[[service]]`; the app-vs-composition
+    // decision is that array, not a separate header. `[package]` + `[[service]]`
+    // together IS the composition form (no longer rejected). `[stack]` is the
+    // legacy alias, still read so already-published compositions and files on
+    // running hosts keep working untouched. env_file (deploy secrets) lives on
+    // the deployment ORDER now; still read from a header here for legacy.
+    let ident = doc
+        .get("package")
+        .or_else(|| doc.get("stack"))
+        .and_then(|v| v.as_table());
+    let field = |key: &str| {
+        ident
+            .and_then(|t| t.get(key))
             .and_then(|v| v.as_str())
-            .map(str::to_string);
-        owner = meta
-            .get("owner")
-            .and_then(|v| v.as_str())
-            .map(str::to_string);
-        version = meta
-            .get("version")
-            .and_then(|v| v.as_str())
-            .map(str::to_string);
-        description = meta
-            .get("description")
-            .and_then(|v| v.as_str())
-            .map(str::to_string);
-        env_file = meta
-            .get("env_file")
-            .and_then(|v| v.as_str())
-            .map(str::to_string);
-    }
+            .map(str::to_string)
+    };
+    let name = field("name");
+    let owner = field("owner");
+    let version = field("version");
+    let description = field("description");
+    let env_file = field("env_file");
 
     let mut members = Vec::new();
     for (i, entry) in apps.iter().enumerate() {
@@ -2067,13 +2051,30 @@ scale = 2
     }
 
     #[test]
-    fn rejects_package_plus_app() {
-        let err = parse(
-            "[package]\nname = \"x\"\n[[app]]\nrun = \"redis\"\n",
-            Path::new("p"),
-        )
-        .unwrap_err();
-        assert!(err.to_string().contains("pure wiring"));
+    fn package_plus_services_is_a_composition() {
+        // The new model: `[package]` is the ONE identity header, `[[service]]`
+        // makes it a composition. They coexist (previously rejected).
+        let s = stack_of(
+            "[package]\nname = \"todos\"\nversion = \"0.1.0\"\nowner = \"iluxav\"\n\n[[service]]\nrun = \"postgres@17\"\nname = \"db\"\n\n[[service]]\nrun = \"git+https://github.com/iluxav/rm-server\"\nname = \"server\"\nafter = [\"db\"]\n",
+        );
+        assert_eq!(s.name.as_deref(), Some("todos"));
+        assert_eq!(s.owner.as_deref(), Some("iluxav"));
+        assert_eq!(s.version.as_deref(), Some("0.1.0"));
+        let names: Vec<&str> = s.members.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(names, vec!["db", "server"]);
+        assert!(matches!(s.members[1].source, MemberSource::Repo { .. }));
+    }
+
+    #[test]
+    fn legacy_stack_header_still_reads() {
+        // A [stack]-header composition (already published / on running hosts)
+        // keeps parsing identically — the legacy alias.
+        let s = stack_of(
+            "[stack]\nname = \"todos\"\nversion = \"0.1.0\"\n\n[[app]]\nrun = \"postgres@17\"\nname = \"db\"\n",
+        );
+        assert_eq!(s.name.as_deref(), Some("todos"));
+        assert_eq!(s.version.as_deref(), Some("0.1.0"));
+        assert_eq!(s.members[0].name, "db");
     }
 
     #[test]

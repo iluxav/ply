@@ -128,7 +128,7 @@ pub fn exec(args: RunArgs) -> Result<()> {
         let dir = image_path.to_path_buf();
         if ply_core::stack::load(&dir)?.is_some() {
             bail!(
-                "{} is a stack (it has [[app]]) — `ply up` starts stacks; `ply run` runs one app",
+                "{} is a composition (it has [[service]]) — `ply up` starts compositions; `ply run` runs one app",
                 dir.join("ply.toml").display()
             );
         }
