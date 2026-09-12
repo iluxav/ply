@@ -1,7 +1,27 @@
 # Deployment model, simplified: recipe vs order
 
-Status: agreed design, 2026-09-11. This is the north star for the `ply ui`
-deploy flow and the reconcile/stack code it sits on.
+Status: agreed design, 2026-09-11. Phase 1 (core) implemented and validated
+end-to-end on 2026-09-11. This is the north star for the `ply ui` deploy flow
+and the reconcile/stack code it sits on.
+
+## Phase 1 — DONE (commits on `deploy-model-simplify`)
+
+- **1b** — `MemberSource::Repo`: a `run = "git+https://…"` member the host
+  clones and builds (carrying `build`/`runtime`/`ref`), expanded into a
+  `repo=` spec that flows through the existing `build_from_repo`.
+- **1a** — a `repo=` deployment whose **ply.toml** is a composition
+  (`[[service]]`/`[[app]]`) converges the whole set via `converge_stack`,
+  building each member on the box. Reads **ply.toml only** (`stack::load`,
+  not `discover`): an app repo that merely *ships* a `stack.toml` (a `ply up`
+  convenience) still deploys as its app — topology lives in the recipe, so a
+  repo opts into multi-service by putting `[[service]]` in its `ply.toml`.
+
+Validated on a VM: a composition repo (`ply.toml` with a prebuilt `redis`
+member + a `git+file://` build member) deployed via one `repo = <path>`
+order — the host cloned it, fetched the prebuilt member, **built the git+
+member on the box**, wrote both systemd units, and wired them with `after`
+(`After=ply-ct-cache.service`, `--after ct-cache`). A plain app repo
+(rm-web, whose ply.toml is a single `web` app) still deploys as one app.
 
 ## The problem
 
