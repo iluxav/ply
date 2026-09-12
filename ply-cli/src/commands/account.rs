@@ -428,7 +428,8 @@ fn plan_stack(stack: &ply_core::stack::Stack, toml_path: &Path) -> Result<PushPl
         if let ply_core::stack::MemberSource::Path(path) = &member.source {
             bail!(
                 "member `{}` runs {} — a published stack's members must be registry refs \
-                 (`postgres@17`) or URLs; publish that app first, then reference it by name",
+                 (`postgres@17`), URLs, or git repos (`git+https://…`); publish that app \
+                 first, or point it at a git+ repo the host can build",
                 member.name,
                 path.display()
             );

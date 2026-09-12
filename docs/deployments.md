@@ -16,6 +16,14 @@ converging, and a timer re-runs it once a minute so *follow-latest*
 deployments update themselves. There is no daemon, no agent, no webhook
 endpoint — a timer is a clock, not a process.
 
+Keep two things apart: the **recipe** and the **order**. The recipe is the
+`ply.toml` in your repo — how the thing is built and run (a single app, or a
+[composition](/docs/stacks/)); the developer owns it. The order is this
+deployment file — *which* source to run here plus host overrides
+(`publish`/`env`/`scale`/`domain`); the operator owns it. Topology lives in
+the recipe, never inline in the order: an order points at a source and the
+recipe there decides whether that is one app or a whole set.
+
 One-time host setup:
 
 ```sh
@@ -129,6 +137,57 @@ Rules of thumb: Go, Python and static sites build fine on 512 MB;
 JavaScript wants `ply setup --swap 2G` (ply refuses a JS build on a small
 host without swap, and tells you the fix); Rust belongs in CI — build it
 there and deploy with `from`.
+
+## A repo that is a composition
+
+`repo =` deploys **whatever its `ply.toml` is**. If that `ply.toml` is a
+single app (`[package]`), the host builds one image. If it is a
+[composition](/docs/stacks/) (`[[service]]`), the host deploys the **whole
+set** from one line — building each member on the box, wiring them with
+`after`, one systemd unit per member:
+
+```toml
+# todos.toml — the order is one line; the topology lives in the repo's ply.toml
+repo = "https://github.com/you/todos"
+```
+
+That repo's `ply.toml` is the recipe — say, `postgres@17` plus two `git+`
+services it builds on the host:
+
+```toml
+[stack]
+name = "todos"
+
+[[service]]
+run = "postgres@17"
+name = "db"
+publish = ["internal:5432"]
+
+[[service]]
+run = "git+https://github.com/you/api"
+name = "server"
+build = "npm ci && npm run build"
+after = ["db"]
+publish = ["internal:3001"]
+
+[[service]]
+run = "git+https://github.com/you/web"
+name = "web"
+build = "npm ci && npm run build"
+after = ["server"]
+publish = ["8080:3000"]
+```
+
+Because the host builds `git+` members itself, **publishing to the registry
+is optional** — no "publish first" tax to stand a multi-service product up
+on one box. (In a host composition, a build-from-source member names its own
+`git+` repo; a `./dir` member is a `ply up` dev thing, not a host source.)
+
+One subtlety: `repo =` reads the repo's **`ply.toml`**, not a `stack.toml`.
+A repo that is an app but merely *ships* a `stack.toml` (a `ply up`
+convenience — see [Stacks](/docs/stacks/)) still deploys as its app. To
+deploy a product as a composition from one `repo=` order, the composition
+must be the repo's `ply.toml`.
 
 ## What the host reports back
 
@@ -270,3 +329,9 @@ step creates `<name>-db` / `<name>-cache` alongside your app, generates
 the shared password, and writes the `after` line. One pass, one running
 stack. (One instance of each service per host — two stacks wanting
 their own postgres is a planned refinement.)
+
+The other way to run a stack is to let the topology live in **one repo's
+`ply.toml`** and point a single `repo=` order at it — see [A repo that is a
+composition](#a-repo-that-is-a-composition). Files-referencing-files keeps
+per-file rollback and review; a repo composition keeps the wiring in one
+version-controlled recipe.

@@ -1,6 +1,6 @@
 ---
 title: Stacks & local dev
-description: ply up starts several apps from one stack file — each [[app]] block is one ply run — and ply.dev.toml / stack.dev.toml overlay dev behavior without touching the image.
+description: ply up starts several apps from one composition — each [[service]] block is one ply run — and ply.dev.toml / stack.dev.toml overlay dev behavior without touching the image.
 section: Guides
 order: 12.6
 ---
@@ -8,30 +8,36 @@ order: 12.6
 # Stacks & local dev
 
 A typical project is a database, a server, and maybe a web app. One file
-wires them; one command runs them. A stack file is just **several `ply run`s
-written down** — each `[[app]]` block maps one-to-one to a run:
+wires them; one command runs them. A composition is just **several `ply run`s
+written down** — each `[[service]]` block maps one-to-one to a run:
 
 ```toml
 # ply.toml at the project root — pure wiring, no [package]
 [stack]
 name = "todos"
 
-[[app]]
+[[service]]
 run     = "postgres@17"                    # → ply run postgres@17
 name    = "db"                             # → --name db
 publish = ["internal:5432"]
 params  = { database = "todos" }           # override; password stays minted
 
-[[app]]
+[[service]]
 run     = "./server"                       # → ply run ./server
 e       = ["DATABASE_URL={db.url}"]        # reference IS the edge — see below
 publish = ["internal:3001"]
 
-[[app]]
+[[service]]
 run     = "./web"
 e       = ["SERVER_URL={server.base_url}"]
 publish = ["3000"]
 ```
+
+`[[service]]` is the spelling; `[[app]]` is the original alias and still
+works — but never both in one file. A composition lives in a `ply.toml` with
+member blocks; it is not a separate file type. (The older `stack.toml`
+filename is still read by `ply up`, but a `ply.toml` with `[[service]]` is
+the model to reach for.)
 
 Note what wires the members: a line you wrote, and only one of them.
 `{db.url}` in `server`'s env is simultaneously the connection string *and*
@@ -65,10 +71,35 @@ source:
 | `"./server"` | `ply run ./server` | build that directory's own `ply.toml` — skipped when nothing changed — and run it |
 | `"https://…/app.img"` | `ply run <url>` | fetch the image at that URL |
 | `"docker://redis:7"` | `ply run docker://redis:7` | import the OCI image once (cached, pinned to the first pull — `--refresh` pulls again) and run it as a fat image; the member is named after the image (`redis`) |
+| `"git+https://github.com/org/repo"` | — | a git repo the **host** clones and builds (see below); the member is named after the repo (`repo`) |
 
 A directory member keeps its own manifest — the same one `ply build` and
 `ply deploy` use for production. The stack file adds only wiring: there is no
 second place where an app is defined, so dev and prod cannot drift.
+
+### `git+` — a member the host builds from source
+
+A member can name a git repo the **host** clones and builds into an image,
+so a composition can carry build-from-source services without publishing them
+to the registry first:
+
+```toml
+[[service]]
+run     = "git+https://github.com/org/api"   # also: a .git URL, or git@github.com:org/api.git
+name    = "api"
+build   = "npm ci && npm run build"           # run in a memory-fenced container before packing
+runtime = "node@24"                           # builder toolchain (default: node@24)
+ref     = "main"                              # branch/committish (default: remote HEAD)
+after   = ["db"]
+publish = ["internal:3001"]
+```
+
+`build`, `runtime`, and `ref` apply **only** to a `git+` member — putting
+them on any other member is an error. This is a **host** source: `ply up`
+rejects a `git+` member (it has nothing to build locally) and tells you to
+override that member's `run` to a local `./dir` in a `stack.dev.toml`. The
+committed recipe keeps the `git+` source; the dev overlay swaps in your
+checkout. See [Deploying a composition](/docs/deployments/#a-repo-that-is-a-composition).
 
 Each member runs under its own **`--name`** (the member `name`, defaulting to
 the image name). That identity is what `after`, the `<member>.ply` bridge
@@ -413,10 +444,11 @@ ply push stack.toml     # any stack file
 
 `owner` picks the namespace the same way `[package] owner` does for an
 app: set it in the `[stack]` table, or pass `--as NAMESPACE` when the file
-names none. Members must be registry refs (`postgres@17`) or URLs — a
-`./dir` member is refused, since it names nothing on someone else's
-machine; publish that app first, then reference it by name. The registry
-writes the template to `{owner}/{name}/{name}-{version}.toml`.
+names none. Members must be registry refs (`postgres@17`), URLs, or `git+`
+repos — a `./dir` member is refused, since it names nothing on someone
+else's machine; publish that app first, or point it at a `git+` repo the
+host can build. The registry writes the template to
+`{owner}/{name}/{name}-{version}.toml`.
 
 Anyone can then run it by name — the toml is fetched and brought up, holes
 filled from the environment at launch:

@@ -65,29 +65,36 @@ instances → `--name db1`, `--name db2`).
 A stack file is `ply run` × N, in dependency order. Nothing else.
 
 ```toml
-# umami.stack.toml
+# ply.toml — a composition (no [package]; pure wiring)
 [stack]
 name = "umami"
 description = "Privacy-first web analytics — app + its database."
 
-[[app]]
+[[service]]
 run    = "postgres@17"                 # → ply run postgres@17
 name   = "umami-db"                    # → --name umami-db   (default: image name)
 volume = ["/var/lib/postgresql/data"]  # → --volume …
 env    = ["POSTGRES_PASSWORD=$PW", "POSTGRES_DB=umami"]
 
-[[app]]
+[[service]]
 run     = "umami@3"
 after   = ["umami-db"]                 # → --after umami-db   (a member name)
 publish = ["internal:3000"]            # → --publish internal:3000
 env     = ['DATABASE_URL=postgresql://postgres:$PW@umami-db.ply:5432/umami']
 ```
 
-Every `[[app]]` block is exactly one `ply run`. Fields map 1:1 to flags:
+Every `[[service]]` block is exactly one `ply run`. Fields map 1:1 to flags:
 `run`→the image, `name`→`--name`, `env`→`-e` (older files spell it `e`;
 both work, but not both on one member), `publish`→`--publish`,
 `after`→`--after`, `volume`→`--volume`, `domain`→`--domain`,
 `scale`→`--scale`. There is no stack concept beyond "these runs, ordered."
+
+`[[service]]` is the spelling; `[[app]]` is the original alias and still
+works (never both in one file). A member's `run` can also be
+`git+https://github.com/org/repo` — a git repo the **host** clones and
+builds (with member keys `build`/`runtime`/`ref`), so a composition can
+carry build-from-source services without publishing them first. See
+[Stacks](/docs/stacks/) and [Deployments](/docs/deployments/#a-repo-that-is-a-composition).
 
 ### Filling `$VAR`
 
