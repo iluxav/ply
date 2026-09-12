@@ -5,6 +5,36 @@ breaking changes, and known limitations. Write under **Unreleased** as work
 lands; `make release-cli` turns that heading into the version and date, and
 the release workflow publishes the entry as the GitHub release notes.
 
+## Unreleased
+
+### What changed
+- **Deployment model, simplified: recipe vs order.** A composition is now just
+  a `ply.toml` with `[[service]]` blocks — not a separate file to learn. The
+  developer's `ply.toml` is the recipe (an app or a composition); the host
+  deployment file is the order (a source plus overrides), and topology lives in
+  the recipe. `[[app]]` still works as an alias for `[[service]]` (naming both
+  in one file is an error).
+- **`repo =` deploys a whole composition.** A host deployment whose repo's
+  `ply.toml` is a composition builds every member on the box, writes one unit
+  per member, and wires them with `after` — one `repo = <url>` order brings up
+  the whole app. It reads the repo's **`ply.toml` only**, so a repo that merely
+  ships a `stack.toml` (a `ply up` convenience) still deploys as its single app.
+- **`git+` members build on the host.** A member `run = "git+https://…"` (also
+  a `.git` URL or a `git@…` ssh form) is cloned and built on the host, with
+  optional `build` / `runtime` / `ref` keys. A multi-service product no longer
+  needs every service published to the registry first — the box builds them.
+- **`ply ui`** — a lazydocker-style terminal dashboard: an apps tab (live
+  cpu/mem against machine and container caps, scale, restart, in-TUI log tail,
+  domains), a host tab (systemd services, Caddy install/status, reconcile), and
+  a deploy tab that shows a composition's services as sub-rows with per-service
+  status.
+
+### Notes
+- Backward-compatible: existing `[[app]]` stacks and published-stack
+  deployments reconcile identically (smoke-tested against plybox.sh).
+- `ply up` rejects a `git+` member (it builds on a host) and points you to a
+  `stack.dev.toml` that overrides its `run` to a local `./dir` for dev.
+
 ## v0.1.95 — 2026-09-11
 
 ### What changed
