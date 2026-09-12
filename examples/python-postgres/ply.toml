@@ -1,21 +1,24 @@
-# A stack: a Postgres database and a Python server that writes to it.
+# A composition: a Postgres database and a Python server that writes to it.
+# A composition is just a `ply.toml` with `[[service]]` blocks — not a
+# separate file. Run it with `ply up`.
 #
 #   ply up          # starts db, waits for it to be healthy, then starts server
 #   curl http://127.0.0.1:8080
 #
-# Each [[app]] block is one `ply run`. The only wiring is the {db.url}
+# Each [[service]] block is one `ply run`. The only wiring is the {db.url}
 # reference below: it fills DATABASE_URL from postgres's own [params]
 # (user, minted password, host, port, database) AND it is the start order —
 # server does not start until db answers on its port.
+# (`[[app]]` is still accepted as an alias for `[[service]]`.)
 [stack]
 name = "guestbook"
 
-[[app]]
+[[service]]
 run    = "postgres@17"                  # the registry's prebuilt service, data in a ply volume
 name   = "db"
 params = { database = "guestbook" }     # the password is minted on the first `ply up`
 
-[[app]]
+[[service]]
 run     = "./server"                    # built from server/ply.toml, rebuilt when it changes
 name    = "server"
 env     = ["DATABASE_URL={db.url}"]
