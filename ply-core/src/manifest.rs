@@ -683,10 +683,57 @@ pub struct Requires {
     pub abi: String,
 }
 
+/// Accept the grouped authoring form — `[package]` / `[build]` / `[run]` —
+/// by remapping it into the flat internal layout before deserializing. A
+/// manifest with neither `[build]` nor `[run]` is already flat and passes
+/// through untouched (existing images embed the flat form, and this keeps
+/// reading them). This is a READ convenience only: the flat layout stays the
+/// canonical stored/embedded form, so nothing in the registry has to change.
+fn ungroup_build_run(value: toml::Value) -> toml::Value {
+    let toml::Value::Table(mut root) = value else {
+        return value;
+    };
+    if !root.contains_key("build") && !root.contains_key("run") {
+        return toml::Value::Table(root); // already flat — leave it alone
+    }
+    // Keys that live INSIDE [package] in the flat layout; everything else a
+    // group carries is a top-level table (dependencies, env, ports, …).
+    const PKG_FROM_BUILD: &[&str] = &["base", "include", "provides_abi"];
+    const PKG_FROM_RUN: &[&str] = &[
+        "entrypoint",
+        "isolation",
+        "user",
+        "workdir",
+        "capabilities",
+        "stop_signal",
+    ];
+    let mut package = match root.remove("package") {
+        Some(toml::Value::Table(t)) => t,
+        _ => toml::value::Table::new(),
+    };
+    for (group, pkg_keys) in [("build", PKG_FROM_BUILD), ("run", PKG_FROM_RUN)] {
+        let Some(toml::Value::Table(tbl)) = root.remove(group) else {
+            continue;
+        };
+        for (k, v) in tbl {
+            if pkg_keys.contains(&k.as_str()) {
+                package.insert(k, v);
+            } else {
+                root.insert(k, v);
+            }
+        }
+    }
+    root.insert("package".into(), toml::Value::Table(package));
+    toml::Value::Table(root)
+}
+
 impl Manifest {
     pub fn parse(text: &str) -> Result<Self> {
-        let manifest: Manifest =
+        let value: toml::Value =
             toml::from_str(text).map_err(|e| Error::Manifest(e.to_string()))?;
+        let manifest: Manifest = ungroup_build_run(value)
+            .try_into()
+            .map_err(|e| Error::Manifest(e.to_string()))?;
         manifest.validate()?;
         Ok(manifest)
     }
@@ -1288,6 +1335,70 @@ mod tests {
         // canonical roundtrip
         let round = Manifest::parse(&m.to_toml().unwrap()).unwrap();
         assert_eq!(round.to_toml().unwrap(), m.to_toml().unwrap());
+    }
+
+    #[test]
+    fn parses_grouped_build_run_form() {
+        // The new authoring shape: identity / build / run. Every field must
+        // land where the flat struct expects it.
+        let grouped = r#"
+            [package]
+            name = "hello"
+            version = "0.1.0"
+            owner = "iluxav"
+
+            [build]
+            base = "debian@13"
+            include = ["dist/"]
+            dependencies = { node = "22" }
+            sources = { default = "https://registry.plybox.sh/ply/{package}" }
+
+            [run]
+            entrypoint = ["node", "server.js"]
+            user = "app:1000:1000"
+            env = { NODE_ENV = "production" }
+            ports = { web = 3000 }
+            health = { port = 3000, grace = "15s" }
+        "#;
+        let m = Manifest::parse(grouped).unwrap();
+        // identity
+        assert_eq!(m.package.name, "hello");
+        assert_eq!(m.package.owner.as_deref(), Some("iluxav"));
+        // build → package.base/include + top-level dependencies/sources
+        assert_eq!(
+            m.base_dep(),
+            Some(DepSpec {
+                package: "debian".into(),
+                constraint: "13".into(),
+                source: None,
+            })
+        );
+        assert_eq!(m.package.include, vec!["dist/"]);
+        assert!(m.dependencies.contains_key("node"));
+        assert!(m.sources.contains_key("default"));
+        // run → package.entrypoint/user + top-level env/ports/health
+        assert_eq!(
+            m.package.entrypoint.as_deref(),
+            Some(&["node".to_string(), "server.js".to_string()][..])
+        );
+        assert!(m.package.user.is_some());
+        assert_eq!(
+            m.env.get("NODE_ENV").map(String::as_str),
+            Some("production")
+        );
+        assert_eq!(m.ports.get("web"), Some(&3000));
+        assert!(m.health.is_some());
+    }
+
+    #[test]
+    fn grouped_and_flat_parse_identically() {
+        // The grouped form and its flat equivalent must produce the same
+        // manifest (proving the remap is faithful).
+        let grouped = "[package]\nname = \"x\"\nversion = \"0.1.0\"\n\n[build]\nbase = \"debian@13\"\ndependencies = { node = \"22\" }\n\n[run]\nentrypoint = [\"node\", \"i.js\"]\nenv = { A = \"b\" }\n";
+        let flat = "[package]\nname = \"x\"\nversion = \"0.1.0\"\nbase = \"debian@13\"\nentrypoint = [\"node\", \"i.js\"]\n\n[dependencies]\nnode = \"22\"\n\n[env]\nA = \"b\"\n";
+        let g = Manifest::parse(grouped).unwrap();
+        let f = Manifest::parse(flat).unwrap();
+        assert_eq!(g.to_toml().unwrap(), f.to_toml().unwrap());
     }
 
     #[test]

@@ -590,26 +590,36 @@ fn toml_str(s: &str) -> String {
 /// The quickstart's manifest, commented. Must always pass `Manifest::parse`.
 pub(crate) fn render_manifest(a: &Answers) -> String {
     let mut t = String::new();
+    // identity
     t.push_str("[package]\n");
     t.push_str(&format!("name = {}\n", toml_str(&a.name)));
     t.push_str(&format!("version = {}\n", toml_str(&a.version)));
-    let args: Vec<String> = a.entrypoint.iter().map(|s| toml_str(s)).collect();
-    t.push_str(&format!("entrypoint = [{}]\n", args.join(", ")));
+
+    // build — what makes the image
+    t.push_str("\n[build]\n");
     t.push_str(&format!("base = {}\n", toml_str(&a.base)));
     t.push_str("# include = [\"dist/\"]   # ship only these paths (default: everything in this directory)\n");
     if let Some((name, range)) = &a.runtime {
-        t.push_str("\n[dependencies]\n");
-        t.push_str(&format!("{name} = {}\n", toml_str(range)));
+        t.push_str(&format!(
+            "dependencies = {{ {name} = {} }}\n",
+            toml_str(range)
+        ));
     }
+
+    // run — how it runs (overridable at deploy)
+    t.push_str("\n[run]\n");
+    let args: Vec<String> = a.entrypoint.iter().map(|s| toml_str(s)).collect();
+    t.push_str(&format!("entrypoint = [{}]\n", args.join(", ")));
     if !a.env.is_empty() {
-        t.push_str("\n[env]\n");
-        for (k, v) in &a.env {
-            t.push_str(&format!("{k} = {}\n", toml_str(v)));
-        }
+        let pairs: Vec<String> = a
+            .env
+            .iter()
+            .map(|(k, v)| format!("{k} = {}", toml_str(v)))
+            .collect();
+        t.push_str(&format!("env = {{ {} }}\n", pairs.join(", ")));
     }
     if let Some(port) = a.port {
-        t.push_str("\n[ports]\n");
-        t.push_str(&format!("http = {port}\n"));
+        t.push_str(&format!("ports = {{ http = {port} }}\n"));
     }
     // No [sources]: the official registry is the resolver's fallback
     // (`resolve::source_spec_for`). A manifest declares [sources] when it
@@ -1030,7 +1040,12 @@ mod tests {
             "init must not emit a [sources] stanza"
         );
         assert!(text.contains("# include = [\"dist/\"]"));
-        assert!(text.contains("[dependencies]\npython3 = \"3.13\""));
+        // grouped authoring form: [build] carries the dependency, [run] the
+        // entrypoint. The dep resolves the same after the parser ungroups it.
+        assert!(text.contains("[build]"));
+        assert!(text.contains("[run]"));
+        assert!(text.contains("dependencies = { python3 = \"3.13\" }"));
+        assert!(m.dependencies.contains_key("python3"));
     }
 
     #[test]
