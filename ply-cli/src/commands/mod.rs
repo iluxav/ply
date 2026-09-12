@@ -24,6 +24,7 @@ mod self_update;
 mod setup;
 mod snapshot;
 mod stats;
+mod ui;
 mod up;
 mod volume;
 mod why;
@@ -48,6 +49,7 @@ pub fn dispatch(command: Command) -> Result<()> {
         Command::Restart(args) => control::restart(args),
         Command::Reconcile(args) => reconcile::exec(args),
         Command::Ps(args) => ps::exec(args),
+        Command::Ui(args) => ui::exec(args),
         Command::Clean(args) => clean::exec(args),
         Command::Stats(args) => stats::exec(args),
         Command::Check(args) => lifecycle::check(args),

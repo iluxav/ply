@@ -21,6 +21,7 @@ ureq.workspace = true
 semver.workspace = true
 toml_edit.workspace = true
 nix.workspace = true
+ratatui.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -94,6 +94,14 @@ pub enum Command {
     /// List running instances
     Ps(PsArgs),
 
+    /// A terminal dashboard — apps, logs, events and host services in one view
+    ///
+    /// A lazydocker-style TUI over the same state `ply ps` and the events
+    /// journal expose: apps and per-instance detail, plus a host tab showing
+    /// the edge (Caddy) and per-app systemd units, with restart/install from
+    /// the keyboard. No web server, no auth — it runs where you SSH.
+    Ui(UiArgs),
+
     /// Stop and reap orphaned instances a dead `ply run` left behind
     ///
     /// A `ply run` (especially rootless) that crashes or is killed leaves its
@@ -584,6 +592,9 @@ pub struct PsArgs {
     #[arg(long)]
     pub json: bool,
 }
+
+#[derive(Args)]
+pub struct UiArgs {}
 
 #[derive(Args)]
 pub struct CleanArgs {
