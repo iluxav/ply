@@ -432,7 +432,7 @@ the container, no rebuild loop.
 Better: put dev behavior in a gitignorable `ply.dev.toml` next to the
 manifest (entrypoint swap, extra links, env) and just `ply run .` — the
 overlay applies to dir runs only, never to builds or deploys. And when the
-project is several apps, one `[stack]` file runs them all: `ply up`. Both
+project is several apps, one `ply.toml` (a composition) runs them all: `ply up`. Both
 in [Stacks & local dev](/docs/stacks/).
 
 ## Observing

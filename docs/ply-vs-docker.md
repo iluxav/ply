@@ -67,7 +67,7 @@ Both runtimes publish ports with kernel DNAT, so neither spends CPU on the reque
 
 **Platform reach.** Docker Desktop covers macOS and Windows with prebuilt installers. ply runs natively on Apple Silicon through its [built-in microVM backend](/docs/macos/) — one small VM per instance, no resident VM product, installed by the same curl line — but it is experimental: `ply exec` and egress enforcement have not reached it, Intel Macs need Lima, and Windows means WSL2.
 
-**Orchestration on-ramps.** Multi-service dev is covered — `ply up` starts a `[stack]` the way compose does — and scaling on one host is built in, but Docker's images carry to Kubernetes when you outgrow a host. ply deliberately stops at one host: if you need overlay networks, service discovery across hosts, or a scheduler placing work on many machines, ply's answer is "that's not this tool."
+**Orchestration on-ramps.** Multi-service dev is covered — `ply up` starts a composition the way compose does — and scaling on one host is built in, but Docker's images carry to Kubernetes when you outgrow a host. ply deliberately stops at one host: if you need overlay networks, service discovery across hosts, or a scheduler placing work on many machines, ply's answer is "that's not this tool."
 
 **Build caching for slow builds.** Docker's layer cache (and BuildKit's graph) shines when builds are expensive — big compiles, multi-stage toolchains. ply has no build cache by design; it assumes your own toolchain (`npm run build`, `cargo build`) produced the files and packaging them is cheap. True for most server apps, not for all.
 

@@ -5,6 +5,22 @@ breaking changes, and known limitations. Write under **Unreleased** as work
 lands; `make release-cli` turns that heading into the version and date, and
 the release workflow publishes the entry as the GitHub release notes.
 
+## Unreleased
+
+### What changed
+- **One manifest, one header.** A `ply.toml` uses a single identity header —
+  `[package]` — whether it describes one app or a composition. `[[service]]`
+  blocks are what make it a composition (an app has an `entrypoint`/`build`
+  instead); `[package]` + `[[service]]` in one file is the normal composition
+  form. There is no separate `stack.toml` file and no `[stack]` header to
+  learn — one file, one thing to reason about.
+
+### Notes
+- Backward-compatible: a `[stack]` header, `[[app]]` blocks, and a
+  `stack.toml` filename are all still read, so every existing file —
+  published compositions and running host deployments, plybox.sh included —
+  keeps working untouched. New files use `[package]` + `[[service]]`.
+
 ## v0.1.96 — 2026-09-12
 
 ### What changed

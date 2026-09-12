@@ -1,6 +1,6 @@
 # A composition: a Postgres database and a Python server that writes to it.
-# A composition is just a `ply.toml` with `[[service]]` blocks — not a
-# separate file. Run it with `ply up`.
+# A composition is just a `ply.toml` — the same `[package]` header an app
+# uses, plus `[[service]]` blocks. Not a separate file. Run it with `ply up`.
 #
 #   ply up          # starts db, waits for it to be healthy, then starts server
 #   curl http://127.0.0.1:8080
@@ -9,9 +9,9 @@
 # reference below: it fills DATABASE_URL from postgres's own [params]
 # (user, minted password, host, port, database) AND it is the start order —
 # server does not start until db answers on its port.
-# (`[[app]]` is still accepted as an alias for `[[service]]`.)
-[stack]
+[package]
 name = "guestbook"
+version = "0.1.0"
 
 [[service]]
 run    = "postgres@17"                  # the registry's prebuilt service, data in a ply volume

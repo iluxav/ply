@@ -136,7 +136,7 @@ replaces the manifest's list — pass `--egress-allow ""` for an empty one.
 ```sh
 ply up [MEMBER…] [-C DIR] [--refresh] [--source SPEC] [--after-timeout 60s]
 ```
-Start a `[stack]` — several apps from one ply.toml, dependency-ordered,
+Start a **composition** — several apps from one ply.toml, dependency-ordered,
 one Ctrl-C teardown. Named members start with their `after` dependencies;
 no members = everything. `run =` members pin version + digest in the stack
 `ply.lock` (offline-capable); `--refresh` re-resolves. See
@@ -239,7 +239,7 @@ ply import docker://image:tag -o FILE             # OCI bridge (fat mode)
 ```
 
 ```sh
-ply inspect postgres@17 | owner/name@1.2 | ./the.img | ./dir | stack.toml
+ply inspect postgres@17 | owner/name@1.2 | ./the.img | ./dir | ply.toml
                          [--json] [--manifest]
 ```
 Show what a package declares, read straight off its manifest — a registry
@@ -308,7 +308,7 @@ ply sync                          # pre-fetch the host policy's packages
 ```sh
 ply login                         # GitHub device flow; first sign-in chooses a username
 ply whoami                        # your namespace, and any others you may publish to
-ply push .                        # app/keg dir, or a stack dir/stack.toml
+ply push .                        # app/keg dir, or a composition dir
 ply push myapp-1.0.0-linux-x64.img   # a built image (append-only)
 ply push myapp-1.0.0-linux-x64.img --src https://…/myapp-{version}-linux-{arch}.img
 ```
@@ -323,7 +323,7 @@ app, which may differ from what got built.
 | `TARGET` = `.img` | no | yes | same |
 | `TARGET` (dir) `--src URL` | yes, for sha256/bytes | no | `verified: false`; `URL` may template `{version}`/`{arch}` |
 | `TARGET` = `.img` `--src URL` | no | no | same |
-| `TARGET` = stack dir / `stack.toml` | no | no | `type = "stack"`, no artifacts; members must be registry refs or URLs |
+| `TARGET` = a composition dir | no | no | `type = "stack"` (registry classification), no artifacts; members must be registry refs, URLs, or `git+` repos |
 | `… --arch arm64` | cross-builds a DIR, as `ply build --arch` | yes/no | appends the arm64 artifact to the version |
 | `… --dry-run` | as above | no | prints the record instead of sending it |
 | `… --as NAMESPACE` | | | sets `owner` when the manifest has none; conflicts with a different `[package] owner` |
@@ -338,7 +338,7 @@ unless the manifest or `--as` names one).
 
 A bare `https://` target carries no manifest and is refused: `ply push
 ./the.img --src https://…` instead. Owner resolution: `[package] owner`
-(or `[stack] owner`) wins; `--as` fills a manifest that names none; the two
+(or `[package] owner`) wins; `--as` fills a manifest that names none; the two
 disagreeing stops the push (`manifest says owner = "ply" but --as other
 was given — drop one of them`). Neither, and you haven't chosen a
 namespace yet: `ply push` points you at `plybox.sh/account/`.

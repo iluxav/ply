@@ -12,9 +12,11 @@ wires them; one command runs them. A composition is just **several `ply run`s
 written down** — each `[[service]]` block maps one-to-one to a run:
 
 ```toml
-# ply.toml at the project root — pure wiring, no [package]
-[stack]
+# ply.toml at the project root — the same [package] header an app uses,
+# plus [[service]] blocks. That array is what makes it a composition.
+[package]
 name = "todos"
+version = "0.1.0"
 
 [[service]]
 run     = "postgres@17"                    # → ply run postgres@17
@@ -33,11 +35,14 @@ e       = ["SERVER_URL={server.base_url}"]
 publish = ["3000"]
 ```
 
-`[[service]]` is the spelling; `[[app]]` is the original alias and still
-works — but never both in one file. A composition lives in a `ply.toml` with
-member blocks; it is not a separate file type. (The older `stack.toml`
-filename is still read by `ply up`, but a `ply.toml` with `[[service]]` is
-the model to reach for.)
+A composition is not a separate file or concept — it is a `ply.toml` whose
+`[[service]]` blocks make it several runs instead of one. There is nothing
+else to learn.
+
+> **Legacy files still read.** Older compositions use a `[stack]` header
+> instead of `[package]`, `[[app]]` blocks instead of `[[service]]`, and a
+> `stack.toml` filename — all three are still accepted, so nothing needs
+> rewriting. New files use `[package]` + `[[service]]` in `ply.toml`.
 
 Note what wires the members: a line you wrote, and only one of them.
 `{db.url}` in `server`'s env is simultaneously the connection string *and*
@@ -74,7 +79,7 @@ source:
 | `"git+https://github.com/org/repo"` | — | a git repo the **host** clones and builds (see below); the member is named after the repo (`repo`) |
 
 A directory member keeps its own manifest — the same one `ply build` and
-`ply deploy` use for production. The stack file adds only wiring: there is no
+`ply deploy` use for production. The composition adds only wiring: there is no
 second place where an app is defined, so dev and prod cannot drift.
 
 ### `git+` — a member the host builds from source
@@ -97,7 +102,7 @@ publish = ["internal:3001"]
 `build`, `runtime`, and `ref` apply **only** to a `git+` member — putting
 them on any other member is an error. This is a **host** source: `ply up`
 rejects a `git+` member (it has nothing to build locally) and tells you to
-override that member's `run` to a local `./dir` in a `stack.dev.toml`. The
+override that member's `run` to a local `./dir` in a `ply.dev.toml`. The
 committed recipe keeps the `git+` source; the dev overlay swaps in your
 checkout. See [Deploying a composition](/docs/deployments/#a-repo-that-is-a-composition).
 
@@ -114,7 +119,7 @@ A member's `run =` image may declare a `[network] egress` claim (see
 the member is the stack's word over it:
 
 ```toml
-[[app]]
+[[service]]
 run    = "postgres@17"
 name   = "db"
 egress = { mode = "enforce" }                     # enforce the keg's declared list
@@ -216,7 +221,7 @@ Override precedence: a stack `params =` value beats an existing secret
 file, which beats minting:
 
 ```toml
-[[app]]
+[[service]]
 name   = "db"
 params = { password = "$PROD_PW" }     # ambient beats minting
 ```
@@ -242,9 +247,9 @@ ply secret ls -C .                  # or --deployments STACK on a host
 ply secret set db.password s3cret   # or omit VALUE to read one line from stdin
 ```
 
-`[stack] env_file` (a file of `KEY=VALUE` lines filling every `$VAR` hole)
-is **still supported** — it fills the *shape* a published stack ships
-with holes in — but is **superseded for secrets by `[params]`**: a minted
+A composition's `env_file` (a file of `KEY=VALUE` lines filling every `$VAR`
+hole) is **still supported** — it fills the *shape* a published composition
+ships with holes in — but is **superseded for secrets by `[params]`**: a minted
 or external secret needs no `env_file` entry, no `$VAR` hole, and never
 appears in the published template at all.
 
@@ -378,31 +383,29 @@ PW=dev ply up     # db from the registry, server under tsx watch on live code
 Delete the file (or clone fresh) and the identical tree runs the production
 entrypoint. Nothing to remember, nothing to ship.
 
-## stack.dev.toml — the same overlay, one level up
+## ply.dev.toml — the composition overlay
 
-`ply.dev.toml` fixes an app's dev behavior; a stack has its own version of
-the problem. The committed stack describes **production**: members reach
-each other by their `<name>.ply` bridge names, and secrets are minted files
-or `$VAR` holes — never plaintext. A laptop differs in fewer ways than it
-used to: a rootless stack gets its own network too, so `<name>.ply` and the
+The committed `ply.toml` describes **production**: members reach each other
+by their `<name>.ply` bridge names, and secrets are minted files or `$VAR`
+holes — never plaintext. A laptop differs in fewer ways than it used to: a
+rootless composition gets its own network too, so `<name>.ply` and the
 members' real ports mean the same thing here as there. What is still local
 is a published port that has to dodge whatever the machine already runs,
 and building the checkout next door instead of pulling a release.
 
-Put those local truths in the overlay beside the stack file, named after
-it: `stack.dev.toml` next to `stack.toml`, `ply.dev.toml` next to a
-`ply.toml` that carries `[stack]` (both are gitignored by the repo's own
-`.gitignore`):
+Put those local truths in `ply.dev.toml` beside the `ply.toml` (gitignored
+by the repo's own `.gitignore`). (A legacy `stack.dev.toml` beside a
+`stack.toml` works the same way.)
 
 ```toml
-# stack.dev.toml   (or ply.dev.toml, beside a ply.toml stack)
-[[app]]
+# ply.dev.toml   (beside the composition's ply.toml)
+[[service]]
 name    = "db"                      # WHICH member — matched by name
 publish = ["internal:5433:5432"]    # the container still serves 5432; only
                                     # the HOST side moves, because this box
                                     # runs its own postgres there
 
-[[app]]
+[[service]]
 name = "server"
 run  = "../server"                  # the checkout next door — {db.url} still
                                     # resolves correctly, dev password and all
@@ -412,7 +415,7 @@ run  = "../server"                  # the checkout next door — {db.url} still
   is an error, not a silent no-op.
 - `env` and `params` **merge by key** — the override adds or replaces one
   entry and leaves the member's others alone. `publish`, `domain`, `volume`,
-  `scale` and `run` replace outright; `[stack] env_file` replaces too.
+  `scale` and `run` replace outright; `env_file` replaces too.
 - Overlays override members, they never add them.
 
 Same structural rule as `ply.dev.toml`: **`ply up` applies it, a host never
@@ -432,18 +435,17 @@ ply run ./server      # same, from anywhere
 
 ## Publishing and running a stack from the registry
 
-A stack with a `[stack] name`, `version`, and optional `owner` is
-publishable — `ply push` records its toml **template** verbatim (the
+A composition with a `[package] name`, `version`, and optional `owner` is
+publishable — `ply push` records its ply.toml **template** verbatim (the
 `$VAR` holes stay in). There is no image, so nothing builds and nothing
 uploads:
 
 ```sh
-ply push .              # a directory whose ply.toml is a stack, or
-ply push stack.toml     # any stack file
+ply push .              # a directory whose ply.toml is a composition
 ```
 
 `owner` picks the namespace the same way `[package] owner` does for an
-app: set it in the `[stack]` table, or pass `--as NAMESPACE` when the file
+app: set it in `[package]`, or pass `--as NAMESPACE` when the file
 names none. Members must be registry refs (`postgres@17`), URLs, or `git+`
 repos — a `./dir` member is refused, since it names nothing on someone
 else's machine; publish that app first, or point it at a `git+` repo the

@@ -60,14 +60,16 @@ or a URL. Everything after it is runtime, layered on at launch. `--name`
 gives the instance an identity distinct from its image (two `postgres`
 instances → `--name db1`, `--name db2`).
 
-## A stack is the runs, written down
+## A composition is the runs, written down
 
-A stack file is `ply run` × N, in dependency order. Nothing else.
+A composition is `ply run` × N, in dependency order. Nothing else — the same
+`ply.toml`, with `[[service]]` blocks instead of an `entrypoint`.
 
 ```toml
-# ply.toml — a composition (no [package]; pure wiring)
-[stack]
+# ply.toml — a composition: [package] identity + [[service]] blocks
+[package]
 name = "umami"
+version = "3.0.0"
 description = "Privacy-first web analytics — app + its database."
 
 [[service]]
@@ -103,7 +105,7 @@ carry build-from-source services without publishing them first. See
 
 - **`ply up`** — from the shell environment (and any `--env-file`).
 - **host** — from the deployment's own `env_file`, then the process
-  environment. A stack uses `[stack] env_file`; a single-app spec uses its
+  environment. A composition uses its own `env_file`; a single-app spec uses its
   own `env_file`, which defaults to `.env/<name>.env` when that file exists.
 
 An undefined `$VAR` is a **hard error at launch**, never a silent empty
@@ -113,7 +115,7 @@ value. A missing password fails loudly at deploy — not at 3am.
 
 | | how | lifecycle |
 |---|---|---|
-| **dev** | `ply up <stack.toml>` | foreground supervised **group**; Ctrl-C stops all; nothing persists |
+| **dev** | `ply up <dir>` | foreground supervised **group**; Ctrl-C stops all; nothing persists |
 | **host** | the stack file lands in the deployments dir (by hand, the dashboard, or a fleet git sync) | reconcile **expands** it into N `--name`'d apps — each independently reconcile-managed, shown in `ply ps`, rolled on its own |
 
 It is the **same file**. The verb (`ply up`) or the location (the
@@ -219,7 +221,7 @@ your shell or `--env-file`, exactly as a local `ply up`:
 ```sh
 PW=s3cret ply up iluxav/umami           # fetch + run the whole stack
 ply up iluxav/umami db                  # just the db member (+ its deps)
-ply up ./umami.stack.toml               # a local stack file
+ply up ./umami                          # a local composition dir
 ```
 
 The verb still tells you the shape: `ply run <namespace>/<name>` on a stack

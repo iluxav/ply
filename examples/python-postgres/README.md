@@ -1,7 +1,7 @@
 # python-postgres
 
-A two-member [stack](https://plybox.sh/docs/stacks/): the registry's prebuilt
-Postgres and a Python HTTP server that records every visit in it.
+A two-service [composition](https://plybox.sh/docs/stacks/): the registry's
+prebuilt Postgres and a Python HTTP server that records every visit in it.
 
 From this directory:
 
@@ -19,9 +19,9 @@ again and the count continues: the data lives in a ply-managed volume.
 
 What the two manifests say:
 
-- `ply.toml` is wiring only — one `[[service]]` per `ply run` (`[[app]]` is
-  still accepted as an alias). The `{db.url}` reference is the connection
-  string *and* the start order; there is no separate `after`.
+- `ply.toml` is wiring only — a `[package]` header plus one `[[service]]`
+  per `ply run`. The `{db.url}` reference is the connection string *and* the
+  start order; there is no separate `after`.
 - `server/ply.toml` is an ordinary app: `python3` and `python3-psycopg2`
   from the registry on a `debian@13` base, a `[health]` port so the stack
   and `ply deploy` know when it is ready. psycopg2 lives in its own keg

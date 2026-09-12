@@ -168,7 +168,7 @@ decision, not a gap — the third column says why.
 | `docker run -p 8080:80` | `ply run --publish 8080:80` | not a port *mapping*: the run parent load-balances the whole pool |
 | `docker run -v` / `volume` | `[volumes]` in ply.toml | volumes are declared per app; plain host directories underneath |
 | `docker run -e` / `--env-file` | same flags | identical on purpose |
-| `docker compose up` | `ply up` — a `[stack]` in ply.toml wires the members | registry apps + local dirs, `after` waits on the health gate; members reach each other at `<name>.ply` — write the connection down rather than relying on the injected `<APP>_ADDR`; see [Stacks](/docs/stacks/) |
+| `docker compose up` | `ply up` — `[[service]]` blocks in ply.toml wire the members | registry apps + local dirs, `after` waits on the health gate; members reach each other at `<name>.ply` — write the connection down rather than relying on the injected `<APP>_ADDR`; see [Stacks](/docs/stacks/) |
 | `docker ps` / `exec` / `stats` | same verbs | identical on purpose |
 | `docker logs` | stdout / `journalctl -u ply-<app>` | apps are foreground processes; logging is the supervisor's job |
 | `docker pull` | — | lockfiles fetch exact hashes on demand; `ply sync` pre-fetches a host's policy set |
@@ -186,7 +186,7 @@ friends answer with a one-line pointer to the row above instead of an error.
 ## What doesn't cross the bridge
 
 Dockerfiles (ply builds from a manifest, not a script), compose files as a
-format (`ply up` reads a `[stack]` in ply.toml instead), docker-compose
+format (`ply up` reads `[[service]]` blocks in ply.toml instead), docker-compose
 (ply's unit is the app; wiring is `[ports]`, names, and emitted proxy
 config), and Docker volumes/networks (redeclare in the manifest). The
 comparison is laid out honestly in [ply vs Docker](/docs/ply-vs-docker/).

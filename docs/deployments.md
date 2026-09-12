@@ -155,8 +155,9 @@ That repo's `ply.toml` is the recipe — say, `postgres@17` plus two `git+`
 services it builds on the host:
 
 ```toml
-[stack]
+[package]
 name = "todos"
+version = "0.1.0"
 
 [[service]]
 run = "postgres@17"

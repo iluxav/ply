@@ -163,7 +163,7 @@ this is an env file, not a shell script.
 On a host, a deployment's `env_file` holds the values while the spec holds
 only the *reference* — which is what keeps a fleet repo publishable. For a
 single-app spec, a file named `.env/<deployment>.env` is picked up
-automatically; a stack file names its own with `[stack] env_file`, and a
+automatically; a composition names its own with an `env_file`, and a
 stack *reference* takes `env_file` beside `stack =`. See
 [Deployments & CD](/docs/deployments/).
 
@@ -223,7 +223,7 @@ claim does not include. An operator using them says so in the stack file,
 next to where the destination is configured:
 
 ```toml
-[[app]]
+[[service]]
 run    = "postgres@17"
 e      = ["BACKUP_DEST=s3:my-bucket/pg"]
 egress = { mode = "audit", allow = ["s3.eu-central-1.amazonaws.com"] }
@@ -235,7 +235,7 @@ fails in `enforce` — the contract working, not a bug in the keg.
 ### The policy
 
 ```toml
-[[app]]
+[[service]]
 run    = "postgres@17"
 egress = { mode = "enforce" }                     # enforce the keg's declared list
 egress = { mode = "enforce", allow = [] }         # override: nothing at all

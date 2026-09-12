@@ -303,16 +303,18 @@ whether or not the key it names reads a secret. A manifest with no
 
 ## Two more files, same grammar
 
-**`[[app]]`** — a file with `[[app]]` blocks is a stack file: several apps
-wired for `ply up`, optionally headed by a `[stack]` table (name, owner,
-version, description, `env_file`). `owner` is the registry namespace
-`ply push` publishes the stack under — same rules as `[package] owner`.
-It is the `[[app]]` array that makes it a stack — a `[stack]`
-table alone does not. Each member is `run = "postgres@17"` (registry app) or
-`run = "./server"` (local app dir), plus `name`, `env`, `params`, `after`,
-`publish`, `domain`, `volume`, `scale`. Registry members pin into the stack
-dir's `ply.lock` (`ref`, `version`, `digest.<arch>`). See
-[Stacks & local dev](/docs/stacks/).
+**`[[service]]`** — a `ply.toml` with `[[service]]` blocks is a
+**composition**: several apps wired for `ply up`, under the same `[package]`
+header an app uses (name, owner, version, description). `owner` is the
+registry namespace `ply push` publishes it under — same `[package] owner` as
+an app. It is the `[[service]]` array that makes it a composition — a
+`[package]` header alone is still just an app. Each member is
+`run = "postgres@17"` (registry app), `run = "./server"` (local app dir), or
+`run = "git+https://…"` (a repo the host builds), plus `name`, `env`,
+`params`, `after`, `publish`, `domain`, `volume`, `scale`. Registry members
+pin into the dir's `ply.lock` (`ref`, `version`, `digest.<arch>`). See
+[Compositions](/docs/stacks/). *(Legacy files use `[[app]]` blocks and a
+`[stack]` header; both are still read.)*
 
 **`ply.dev.toml`** — a gitignorable dev overlay next to an app's ply.toml,
 applied only by `ply run DIR` / `ply up` (never by `build` — a shipped

@@ -94,7 +94,7 @@ ply run postgres@17 -e POSTGRES_PASSWORD=dev -e POSTGRES_DB=todos --publish inte
 host (`[ports]` in a manifest are labels, not host bindings; rootless, an
 instance has no address anyone can dial until something is published).
 
-And when the project is db + server + web, one `[stack]` file starts them
+And when the project is db + server + web, one `ply.toml` (a composition) starts them
 all in order: [`ply up`](/docs/stacks/).
 
 ## Inspect
