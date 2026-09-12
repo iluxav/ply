@@ -82,7 +82,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "apk2pkg"
-version = "0.1.96"
+version = "0.1.97"
 dependencies = [
  "anyhow",
  "clap",
@@ -493,7 +493,7 @@ dependencies = [
 
 [[package]]
 name = "deb2pkg"
-version = "0.1.96"
+version = "0.1.97"
 dependencies = [
  "anyhow",
  "clap",
@@ -1028,7 +1028,7 @@ checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 
 [[package]]
 name = "ply-cli"
-version = "0.1.96"
+version = "0.1.97"
 dependencies = [
  "anyhow",
  "clap",
@@ -1046,7 +1046,7 @@ dependencies = [
 
 [[package]]
 name = "ply-core"
-version = "0.1.96"
+version = "0.1.97"
 dependencies = [
  "applevisor",
  "backhand",
@@ -1077,7 +1077,7 @@ dependencies = [
 
 [[package]]
 name = "ply-guest-init"
-version = "0.1.96"
+version = "0.1.97"
 dependencies = [
  "libc",
  "ply-vm-proto",
@@ -1085,7 +1085,7 @@ dependencies = [
 
 [[package]]
 name = "ply-vm-proto"
-version = "0.1.96"
+version = "0.1.97"
 dependencies = [
  "serde",
  "serde_json",
