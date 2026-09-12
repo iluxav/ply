@@ -40,6 +40,22 @@ pub enum MemberSource {
     /// through the same cache `ply run docker://` uses (pinned to the first
     /// pull; `--refresh` pulls again), then run like an `.img` member.
     Docker(String),
+    /// `run = "git+https://github.com/org/app"` — a git repo a HOST clones
+    /// and builds into an image (via reconcile's `build_from_repo`), then
+    /// runs like any member. This is the "build from source on the box"
+    /// member: the recipe stays publishable, the build happens where it
+    /// deploys. For local `ply up`, override the member's `run` to a local
+    /// `./dir` in a `stack.dev.toml` — a repo member is a host construct.
+    Repo {
+        url: String,
+        /// Build command, run in a memory-fenced container before packing
+        /// (`spec.build`). `None` = the repo is already ply-native.
+        build: Option<String>,
+        /// Builder toolchain, e.g. `node@24` (`spec.runtime`).
+        runtime: Option<String>,
+        /// Branch/committish to build (`spec.ref`); `None` = remote HEAD.
+        git_ref: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -519,6 +535,7 @@ pub fn parse(text: &str, path: &Path) -> Result<Option<Stack>> {
 
 const MEMBER_KEYS: &[&str] = &[
     "run", "name", "env", "e", "after", "publish", "volume", "domain", "scale", "params", "egress",
+    "build", "runtime", "ref",
 ];
 
 /// A member's environment: `env` is the spelling, `e` the original alias.
@@ -565,6 +582,41 @@ fn parse_member(index: usize, entry: &toml::Value, path: &Path) -> Result<Member
             ))
         })?;
     let (source, default_name) = classify_run(run, path, index)?;
+
+    // `build` / `runtime` / `ref` describe how a git-repo member is built on
+    // the host; they belong to the repo source and are meaningless elsewhere.
+    let opt_str = |key: &str| -> Result<Option<String>> {
+        match table.get(key) {
+            None => Ok(None),
+            Some(toml::Value::String(s)) => Ok(Some(s.clone())),
+            Some(_) => Err(Error::Manifest(format!(
+                "{}: [[app]] #{}: `{key}` must be a string",
+                path.display(),
+                index + 1
+            ))),
+        }
+    };
+    let build = opt_str("build")?;
+    let runtime = opt_str("runtime")?;
+    let git_ref = opt_str("ref")?;
+    let source = match source {
+        MemberSource::Repo { url, .. } => MemberSource::Repo {
+            url,
+            build,
+            runtime,
+            git_ref,
+        },
+        other => {
+            if build.is_some() || runtime.is_some() || git_ref.is_some() {
+                return Err(Error::Manifest(format!(
+                    "{}: [[app]] #{}: `build`/`runtime`/`ref` apply only to a git repo member (`run = \"git+https://…\"`)",
+                    path.display(),
+                    index + 1
+                )));
+            }
+            other
+        }
+    };
 
     let name = match table.get("name") {
         Some(v) => v
@@ -675,11 +727,49 @@ pub fn docker_member_name(reference: &str) -> Option<String> {
     (!name.is_empty()).then(|| name.to_string())
 }
 
+/// Is this `run` value a git repo the host should clone and build? Accepts
+/// an explicit `git+<url>` prefix, an ssh shorthand (`git@host:org/repo`),
+/// or any URL ending in `.git`. Returns the normalized clone URL (the
+/// `git+` prefix stripped) — a plain `https://…` without `.git` stays a URL
+/// image, so the intent is never guessed.
+fn repo_url(run: &str) -> Option<String> {
+    if let Some(rest) = run.strip_prefix("git+") {
+        return (!rest.is_empty()).then(|| rest.to_string());
+    }
+    if run.starts_with("git@") || run.ends_with(".git") {
+        return Some(run.to_string());
+    }
+    None
+}
+
+/// The member name a repo URL implies: the last path (or `:`) segment,
+/// without a `.git` suffix — `git@github.com:org/rm-server.git` → `rm-server`.
+fn repo_member_name(url: &str) -> Option<String> {
+    let tail = url.rsplit(['/', ':']).next()?;
+    let name = tail.strip_suffix(".git").unwrap_or(tail);
+    (!name.is_empty()).then(|| name.to_string())
+}
+
 fn classify_run(run: &str, path: &Path, index: usize) -> Result<(MemberSource, Option<String>)> {
     if run.starts_with("docker://") {
         return Ok((
             MemberSource::Docker(run.to_string()),
             docker_member_name(run),
+        ));
+    }
+    // A git repo the host clones and builds — checked before the URL branch
+    // so `git+https://…` and a `.git` URL don't read as URL images. `build`
+    // / `runtime` / `ref` are attached by the member parser.
+    if let Some(url) = repo_url(run) {
+        let stem = repo_member_name(&url);
+        return Ok((
+            MemberSource::Repo {
+                url,
+                build: None,
+                runtime: None,
+                git_ref: None,
+            },
+            stem,
         ));
     }
     if run.starts_with("http://") || run.starts_with("https://") {
@@ -1865,6 +1955,48 @@ scale = 2
         .unwrap()
         .unwrap();
         assert_eq!(s.owner.as_deref(), Some("iluxav"));
+    }
+
+    #[test]
+    fn git_repo_member_carries_build_runtime_ref() {
+        let stack = stack_of(
+            "[[app]]\nrun = \"git+https://github.com/iluxav/rm-server\"\nbuild = \"cargo build --release\"\nruntime = \"rust@1\"\nref = \"main\"\npublish = [\"internal:3000\"]\n",
+        );
+        let m = &stack.members[0];
+        // name derives from the repo basename
+        assert_eq!(m.name, "rm-server");
+        assert_eq!(
+            m.source,
+            MemberSource::Repo {
+                url: "https://github.com/iluxav/rm-server".into(),
+                build: Some("cargo build --release".into()),
+                runtime: Some("rust@1".into()),
+                git_ref: Some("main".into()),
+            }
+        );
+    }
+
+    #[test]
+    fn git_suffix_and_ssh_shorthand_are_repos() {
+        let a = stack_of("[[app]]\nrun = \"https://github.com/iluxav/rm-web.git\"\n");
+        assert_eq!(a.members[0].name, "rm-web");
+        assert!(matches!(a.members[0].source, MemberSource::Repo { .. }));
+
+        let b = stack_of("[[app]]\nrun = \"git@github.com:iluxav/rm-server.git\"\n");
+        assert_eq!(b.members[0].name, "rm-server");
+        assert!(matches!(b.members[0].source, MemberSource::Repo { .. }));
+    }
+
+    #[test]
+    fn build_on_non_repo_member_is_rejected() {
+        let err = stack_err("[[app]]\nrun = \"postgres@17\"\nbuild = \"make\"\n");
+        assert!(err.contains("git repo member"), "{err}");
+    }
+
+    #[test]
+    fn plain_https_without_git_stays_a_url_image() {
+        let stack = stack_of("[[app]]\nrun = \"https://cdn.example.com/app-1.0.0.img\"\n");
+        assert!(matches!(stack.members[0].source, MemberSource::Url(_)));
     }
 
     #[test]

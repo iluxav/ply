@@ -82,6 +82,9 @@ fn image_fact(source: &MemberSource, target: &str) -> Option<String> {
         MemberSource::Url(_) => Some(target.to_string()),
         // Imported at `up` time: the target is the cached .img file.
         MemberSource::Docker(_) => Some(target.to_string()),
+        // A repo member builds on a host, not under `ply up` — never reached
+        // (prepare_target bails first), but the fact has no local answer.
+        MemberSource::Repo { .. } => None,
     }
 }
 
@@ -113,6 +116,7 @@ fn resolve_members(
                 stack::member_manifest(&p.target, None)
                     .with_context(|| format!("member `{}`: reading its manifest", p.member))?,
             ),
+            MemberSource::Repo { .. } => None,
         };
         inputs.push(stack::MemberInput {
             name: p.member.clone(),
@@ -248,6 +252,7 @@ fn member_policies(prepared: &[Prepared]) -> Result<BTreeMap<String, ply_core::e
                 stack::member_manifest(&p.target, None)
                     .with_context(|| format!("member `{}`: reading its manifest", p.member))?,
             ),
+            MemberSource::Repo { .. } => None,
         };
         let declared = match &manifest {
             Some(m) => m
@@ -752,6 +757,7 @@ fn describe_run_spec(source: &MemberSource) -> String {
         MemberSource::Path(p) => p.display().to_string(),
         MemberSource::Url(u) => u.clone(),
         MemberSource::Docker(r) => r.clone(),
+        MemberSource::Repo { url, .. } => format!("git+{url}"),
     }
 }
 
@@ -825,6 +831,15 @@ fn prepare_target(member: &Member, args: &UpArgs, lock: &mut StackLock) -> Resul
             Ok(dir.display().to_string())
         }
         MemberSource::Url(url) => Ok(url.clone()),
+        // A repo member is built on the HOST by reconcile, not under `ply up`
+        // (whose children are `ply run`, which does not clone git). For local
+        // dev, override this member's `run` to a local `./dir` in a
+        // stack.dev.toml — the committed recipe keeps its `git+…` source.
+        MemberSource::Repo { url, .. } => bail!(
+            "stack member `{}`: `run = \"git+{url}\"` builds on a host, not under `ply up` — \
+             add a stack.dev.toml overriding this member's `run` to a local `./dir` for dev",
+            member.name
+        ),
         // Import now — the same cache `ply run docker://` keeps, pinned to
         // the first pull — so the member has a readable manifest (its
         // egress claim, its `{image}` fact) like any `.img` member.

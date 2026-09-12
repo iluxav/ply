@@ -275,12 +275,53 @@ impl Spec {
         lookup: &impl Fn(&str) -> Option<String>,
     ) -> Result<Spec> {
         use crate::stack::MemberSource;
+        // A repo member carries its own build recipe: expand it into a
+        // `repo=` spec so the host's `build_from_repo` clones and builds it,
+        // exactly like a single-app repo deployment. The build machinery is
+        // shared — this arm only routes the fields.
+        if let MemberSource::Repo {
+            url,
+            build,
+            runtime,
+            git_ref,
+        } = &member.source
+        {
+            let env = crate::stack::expand_member_env(member, lookup)?
+                .into_iter()
+                .collect();
+            return Ok(Spec {
+                repo: Some(url.clone()),
+                build: build.clone(),
+                runtime: runtime.clone(),
+                r#ref: git_ref.clone(),
+                env,
+                publish: crate::stack::expand_member_list(
+                    &member.publish,
+                    &member.name,
+                    "publish",
+                    lookup,
+                )?,
+                domain: crate::stack::expand_member_list(
+                    &member.domain,
+                    &member.name,
+                    "domain",
+                    lookup,
+                )?,
+                volumes: member.volume.clone(),
+                after: member.after.clone(),
+                scale: member.scale,
+                egress: member.egress.clone(),
+                stack: stack_name.map(str::to_string),
+                auto: true,
+                ..Default::default()
+            });
+        }
         let (app, version, url) = match &member.source {
             MemberSource::Run { name, version } => (Some(name.clone()), version.clone(), None),
             MemberSource::Url(u) => (None, None, Some(u.clone())),
             MemberSource::Path(p) => {
                 return Err(Error::Manifest(format!(
-                    "stack member `{}`: `run = \"{}\"` is a local path — a host stack uses registry refs or URLs (a local dir is a `ply up` dev thing)",
+                    "stack member `{}`: `run = \"{}\"` is a local path — a host stack uses registry refs, URLs, or a git repo (`run = \"git+https://…\"`); a local dir is a `ply up` dev thing",
                     member.name,
                     p.display()
                 )))
@@ -291,6 +332,7 @@ impl Spec {
                     member.name
                 )))
             }
+            MemberSource::Repo { .. } => unreachable!("repo members handled above"),
         };
         let env = crate::stack::expand_member_env(member, lookup)?
             .into_iter()
@@ -592,6 +634,36 @@ REDIS_PASSWORD = "s3cret"
             .unwrap_err()
             .to_string();
         assert!(err.contains("local path"), "{err}");
+    }
+
+    /// A git-repo member expands to a `repo=` spec so the host's
+    /// `build_from_repo` clones and builds it — the whole point of Phase 1.
+    #[test]
+    fn stack_member_repo_expands_to_repo_spec() {
+        let stack = stack_of(
+            "[[app]]\nrun=\"postgres@17\"\nname=\"db\"\n\n[[app]]\nrun=\"git+https://github.com/iluxav/rm-server\"\nname=\"server\"\nbuild=\"cargo build --release\"\nruntime=\"rust@1\"\nref=\"main\"\npublish=[\"internal:3000\"]\nafter=[\"db\"]\n",
+        );
+        let server = stack.members.iter().find(|m| m.name == "server").unwrap();
+        let spec = Spec::from_stack_member(server, Some("todos"), &|_: &str| None).unwrap();
+        assert_eq!(
+            spec.repo.as_deref(),
+            Some("https://github.com/iluxav/rm-server")
+        );
+        assert_eq!(spec.build.as_deref(), Some("cargo build --release"));
+        assert_eq!(spec.runtime.as_deref(), Some("rust@1"));
+        assert_eq!(spec.r#ref.as_deref(), Some("main"));
+        assert!(spec.app.is_none() && spec.url.is_none());
+        assert_eq!(spec.publish, vec!["internal:3000"]);
+        assert_eq!(spec.after, vec!["db"]);
+        assert_eq!(spec.stack.as_deref(), Some("todos"));
+        assert!(spec.auto);
+        // exactly one source lane is set (the invariant Spec::parse enforces)
+        let sources = spec.app.is_some() as u8
+            + spec.image.is_some() as u8
+            + spec.url.is_some() as u8
+            + spec.github.is_some() as u8
+            + spec.repo.is_some() as u8;
+        assert_eq!(sources, 1, "exactly one source lane");
     }
 
     /// The host path must fill publish/domain holes too — this is where a
