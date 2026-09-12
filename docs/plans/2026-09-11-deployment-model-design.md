@@ -146,15 +146,20 @@ To make the model real:
 
 ## Phasing
 
-- **Phase 1 — core:** lift the host restriction so a `repo =` deployment
-  pointing at a composition builds its build-members on the host and runs the
-  set. Fixes rm-web end to end. (Items 2 + 3.)
-- **Phase 2 — `ply ui`:** the deploy form writes orders in this shape
-  (source = image/app/repo + overrides), and shows a composition's members.
-- **Phase 3 — docs/naming:** rename `[[app]]` → `[[service]]` (alias kept),
-  rewrite the stack docs around "a `ply.toml` with `[[service]]`," retire
-  `stack.toml` from the teaching path.
-- **Phase 4 — later:** per-service overrides in the order.
+- **Phase 1 — core: DONE + VM-validated.** `MemberSource::Repo` (git+
+  members build on the host) and a `repo =` deployment whose ply.toml is a
+  composition converges the whole set via `converge_stack`.
+- **Phase 2 — `ply ui`: DONE.** The deploy tab shows a composition's
+  services as sub-rows, each with its own reconcile status; the guided
+  new-deployment flow writes a `repo=` order.
+- **Phase 3 — docs/naming: DONE.** `[[service]]` is the spelling (`[[app]]`
+  alias kept, both-in-one-file is an error); stacks/deployments/model docs
+  rewritten around recipe vs order, git+ members, and `repo=` compositions;
+  `stack.toml` retired from the teaching path.
+- **Phase 4 — DEFERRED:** per-service overrides in the order (a
+  `[service.<name>]` table). Not needed to migrate production — the
+  composition recipe carries per-service publish/env today. Revisit when a
+  concrete need appears.
 
 ## Non-goals / YAGNI
 
