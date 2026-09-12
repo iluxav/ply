@@ -2030,6 +2030,34 @@ scale = 2
         assert!(err.contains("not both"), "{err}");
     }
 
+    /// The exact shape of the plybox.sh production deployment (a stack FILE
+    /// with [[app]] members that are registry refs, one namespaced). Proves
+    /// the [[service]]/git+ work left it byte-for-byte in behavior.
+    #[test]
+    fn plybox_production_shape_is_unchanged() {
+        let stack = stack_of(
+            "[stack]\nname = \"plybox\"\nversion = \"1.0.0\"\n\n[[app]]\nrun = \"postgres@17\"\nname = \"plybox-db\"\n\n[[app]]\nrun = \"ply/plybox-web\"\nname = \"plybox-web\"\nafter = [\"plybox-db\"]\npublish = [\"internal:3000\"]\n",
+        );
+        assert_eq!(stack.name.as_deref(), Some("plybox"));
+        assert_eq!(
+            stack.members[0].source,
+            MemberSource::Run {
+                name: "postgres".into(),
+                version: Some("17".into())
+            }
+        );
+        // the namespaced registry ref stays a Run member (member name is the
+        // package tail), NOT mistaken for a repo/url
+        assert_eq!(
+            stack.members[1].source,
+            MemberSource::Run {
+                name: "ply/plybox-web".into(),
+                version: None
+            }
+        );
+        assert_eq!(stack.members[1].after, vec!["plybox-db"]);
+    }
+
     #[test]
     fn no_app_array_is_none() {
         assert!(parse("[package]\nname = \"x\"\n", Path::new("p"))
