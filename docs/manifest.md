@@ -1,71 +1,88 @@
 ---
 title: ply.toml reference
-description: Every key in the ply manifest — package, dependencies, env, ports, volumes, resources, health, restart, sources.
+description: Every key in the ply manifest — the [package] / [build] / [run] groups and all their fields.
 section: Reference
 order: 20
 ---
 
 # ply.toml reference
 
-The complete manifest surface. Only `[package]` is required.
+The complete manifest surface, in three groups:
+
+- **`[package]`** — identity (name, version, and the registry-facing fields).
+- **`[build]`** — what makes the image: base, dependencies, include, sources.
+- **`[run]`** — how it runs: entrypoint, env, ports, health, resources, … — all baked in as defaults, all overridable at deploy.
+
+Only `[package]` is required.
 
 ```toml
-[package]
+[package]                         # identity
 name = "myapp"                    # required; may not contain "-<digit>"
 version = "1.2.0"                 # semver; part of the image filename
 owner = "myname"                  # optional: registry namespace ply push uses
 description = "One line for ply search / the registry"     # optional
 license = "MIT"                   # optional: SPDX id or free text
 homepage = "https://example.com"  # optional
+
+[build]                           # what makes the image
+base = "debian@13"                # exactly one base per app; or
+                                  # { name = "debian", version = "13", source = "alias" }
+include = ["dist/"]               # optional: ship only these paths (default: everything)
+
+[build.dependencies]
+node   = "22"                     # range: lowest satisfying version wins (MVS)
+ffmpeg = { source = "alias", version = "6.1" }
+
+[build.requires]
+abi = "linux-x64-gnu"             # what the app layer's native deps were built against
+
+[build.sources]                   # OPTIONAL — omit it and the official registry is used
+alias = "github:org/repo"
+
+[run]                             # how it runs — baked-in defaults, overridable at deploy
 entrypoint = ["node", "server.js"]
 user = "appuser:1000:1000"        # optional: run as name:uid:gid
 workdir = "/opt/myapp"            # optional: cwd before exec (default: the app prefix)
 stop_signal = "SIGTERM"           # optional: how to ask it to shut down
 capabilities = []                 # optional: keep nothing (the default) — see below
-base = "debian@13"                # exactly one base per app; or
-                                  # { name = "debian", version = "13", source = "alias" }
 
-[dependencies]
-node   = "22"                     # range: lowest satisfying version wins (MVS)
-ffmpeg = { source = "alias", version = "6.1" }
-
-[env]
+[run.env]
 NODE_ENV = "production"
 
-[params]                          # optional: named values other apps read as {myapp.x} — see below
+[run.params]                      # optional: named values other apps read as {myapp.x} — see below
 api_key = { secret = true }       # minted per stack; add external = true for BYO
 
-[ports]
+[run.ports]
 web = 3000                        # label of what the app binds — not a host claim
 
-[volumes]
+[run.volumes]
 data   = "/var/lib/myapp"                                 # per-instance
 shared = { path = "/srv/uploads", scope = "shared" }      # opt-in shared
 cache  = { path = "/var/cache/myapp", ephemeral = true }  # GC-able
 
-[network]                         # optional: the egress contract — see below
+[run.network]                     # optional: the egress contract — see below
 egress = ["api.stripe.com", "*.amazonaws.com", "1.1.1.1"]
 
-[resources]
+[run.resources]
 mem  = "512M"                     # memory.max (+ memory.high)
 cpu  = "1.5"                      # cores
 pids = 256                        # always enforced; default guards fork bombs
 
-[health]
+[run.health]
 port  = 3000                      # TCP connect gate for deploys/restarts
 grace = "30s"                     # cold-start budget
 
-[restart]
+[run.restart]
 policy = "on-failure"             # "never" (default) | "on-failure" | "always"
 backoff = "1s"                    # doubles per failure…
 max_backoff = "60s"               # …up to this cap; resets after healthy uptime
-
-[requires]
-abi = "linux-x64-gnu"             # what the app layer's native deps were built against
-
-[sources]                         # OPTIONAL — omit it and the official
-alias = "github:org/repo"         # registry is used
 ```
+
+Small sections read fine as inline tables (`dependencies = { node = "22" }`,
+`ports = { web = 3000 }`, `env = { NODE_ENV = "production" }`); the sub-table
+form above is for when a section grows or wants comments. *(The older flat
+form — every section at the top level, `base`/`entrypoint` under `[package]` —
+is still accepted, so existing manifests keep building.)*
 
 ## Key notes
 
@@ -124,7 +141,7 @@ your own login). The other three surface on the registry page and in
 separate metadata file to keep in sync. See
 [Registries & publishing](/docs/registries/).
 
-**`[dependencies]`** — the key IS the package name. String values are
+**`[build.dependencies]`** — the key IS the package name. String values are
 version ranges against the `default` source; table values pick a source
 alias. Version syntax: `"22"` = any 22.x.y, `"6.1"` = any 6.1.x,
 `"1.2.3"` = exactly 1.2.3. Resolution is
@@ -132,25 +149,25 @@ alias. Version syntax: `"22"` = any 22.x.y, `"6.1"` = any 6.1.x,
 must be TOML-quoted (`"boost1.84" = "1.84"`) — a bare dotted key means a
 nested table in TOML.
 
-**`[env]`** — composed after package contributions, before CLI overrides
+**`[run.env]`** — composed after package contributions, before CLI overrides
 (`-e`, `--env-file`); last wins. A value of the form `enc:v1:…` is a
 [sealed secret](/docs/secrets/): committed as ciphertext, opened by the
 run parent on the one host it was sealed for.
 
-**`[params]`** — named values other apps interpolate with `{app.param}`,
+**`[run.params]`** — named values other apps interpolate with `{app.param}`,
 and this manifest's own `[env]` can reference with bare `{param}`. Secrets,
 computed values, and built-in facts (`host`, `port`, …) all go through the
 same namespace. See below.
 
-**`[ports]`** — documentation the tooling reads: `ply proxy` falls back to
+**`[run.ports]`** — documentation the tooling reads: `ply proxy` falls back to
 these ports for an unpublished app, and `[health]` checks them. Never a host port
 binding — that is `--publish`, deliberately a run-time decision rather than
 a manifest one.
 
-**`[volumes]`** — see [Volumes & data](/docs/volumes/). Per-instance by
+**`[run.volumes]`** — see [Volumes & data](/docs/volumes/). Per-instance by
 default; `scope = "shared"` and `ephemeral = true` are the two modifiers.
 
-**`[network]`** — `egress` is the claim: the outbound destinations this
+**`[run.network]`** — `egress` is the claim: the outbound destinations this
 package needs, as a list of hostnames, `*.suffix` wildcards, IPv4
 addresses, CIDR ranges, or `*` for unrestricted. Omitting `[network]`
 declares nothing (`ply inspect` shows `egress: not declared`); an empty
@@ -160,12 +177,12 @@ it takes a stack member's `egress = { mode, allow }` or `ply run
 --egress`/`--egress-allow` to turn it into audit or enforcement. See
 [Security & rootless](/docs/security/#egress-the-contract).
 
-**`[resources]`** — cgroup v2 limits. `pids` is set even if you omit it.
+**`[run.resources]`** — cgroup v2 limits. `pids` is set even if you omit it.
 `mem` and `cpu` take a fixed value (`"512M"`, `"1.5"`) or a range
 (`{ min = "256M", max = "2G" }`) the run parent resizes live between —
 see [Autoscaling](/docs/autoscale/).
 
-**`[scale]`** — `min`, `max`, `signal` (`cpu`, `memory`, `net`,
+**`[run.scale]`** — `min`, `max`, `signal` (`cpu`, `memory`, `net`,
 `metric:<name>`), `target`, optional `cooldown` and `metrics_path`: the run
 parent grows and shrinks the instance count on that signal. `min = 0` with
 `idle = "10m"` lets the app sleep — the last instance stops after that long
@@ -173,14 +190,14 @@ with no connections and the next connection wakes it; `signal`/`target` are
 then only needed when `max > 1`. Validated at `ply build`; details in
 [Autoscaling](/docs/autoscale/).
 
-**`[health]` / `[restart]`** — see
+**`[run.health]` / `[run.restart]`** — see
 [Deploys, health & restarts](/docs/deploy/).
 
-**`[requires]`** — declares the ABI your app layer's native artifacts were
+**`[build.requires]`** — declares the ABI your app layer's native artifacts were
 built against; the resolver refuses mismatched runtimes loudly instead of
 letting you segfault at 2am.
 
-**`[requests]`** — host access the image asks for:
+**`[run.requests]`** — host access the image asks for:
 `links = ["/abs/host:/abs/container", …]`, or the spelled-out
 `links = [{ host = "/abs/host", at = "/abs/container" }]`. Both paths must be
 absolute in either spelling. Never applied on its own (a manifest ships inside the image — an image must
@@ -188,18 +205,21 @@ not grant itself host access); `ply run --grant-links` is the operator's
 explicit yes, `ply systemd --grant-links` bakes the expansion into a unit.
 Without the flag the requests are listed and not mounted.
 
-**`[sources]`** — URL templates; see
+**`[build.sources]`** — URL templates; see
 [Registries & publishing](/docs/registries/). `{package}` expands to the
 package name, letting one base URL serve per-package directories.
 **The whole table is optional:** a dependency with no `source`, in a manifest
 with no `[sources] default`, resolves from the official registry. Declare
 `[sources]` when you actually fetch from somewhere else.
 
-**`[volumes]`** — `name = "/path"` is the common form. The table form
+**`[run.volumes]`** — `name = "/path"` is the common form. The table form
 (`{ path, scope, ephemeral }`) is for when you need `scope = "shared"` or
 `ephemeral = true`.
 
 ## `[params]`
+
+*(Grouped, this is `[run.params]` and the app configures itself from
+`[run.env]`; the snippets below drop the `run.` prefix for brevity.)*
 
 A param is a named value a package exposes; consumers interpolate it with
 `{app.param}` — see [Stacks & local dev](/docs/stacks/) for the consumer

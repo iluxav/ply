@@ -5,6 +5,22 @@ breaking changes, and known limitations. Write under **Unreleased** as work
 lands; `make release-cli` turns that heading into the version and date, and
 the release workflow publishes the entry as the GitHub release notes.
 
+## Unreleased
+
+### What changed
+- **`ply.toml` reads cleaner: `[package]` / `[build]` / `[run]`.** A manifest
+  is now authored in three groups — identity (`[package]`), the build recipe
+  (`[build]`: base, dependencies, include, sources, …), and the runtime
+  contract (`[run]`: entrypoint, env, ports, health, restart, resources,
+  egress, scale, …) — so you can see at a glance what makes the image versus
+  how it runs. `ply init` writes this form.
+
+### Notes
+- The flat form (sections at the top level) is still accepted, and the
+  stored/embedded manifest is unchanged — so every existing image keeps
+  parsing and nothing in the registry has to move. The grouping is a
+  read/authoring convenience; `ply.toml` remains one file.
+
 ## v0.1.97 — 2026-09-12
 
 ### What changed

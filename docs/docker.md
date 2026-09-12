@@ -82,7 +82,7 @@ almost every official service image uses.
 So `ply import` marks the manifest:
 
 ```toml
-[package]
+[run]
 capabilities = "oci"
 ```
 

@@ -13,7 +13,7 @@ files, coordination is a signal, enforcement is the kernel.
 ## Health gates
 
 ```toml
-[health]
+[run.health]
 port = 5432        # TCP connect check against the instance's IP
 grace = "30s"      # budget for cold start (mounts + app init)
 ```
@@ -117,7 +117,7 @@ ply deploy myapp-1.2.9-linux-x64.img
 ## Restart policies
 
 ```toml
-[restart]
+[run.restart]
 policy = "on-failure"     # or "always" / "never" (default)
 backoff = "1s"            # first respawn delay, doubles each failure
 max_backoff = "60s"

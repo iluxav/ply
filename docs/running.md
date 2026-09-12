@@ -7,6 +7,46 @@ order: 12
 
 # Running & scaling
 
+## How `ply run` works
+
+`ply run <target> [overrides]` is the whole model: the **target** resolves to
+an image, then that image runs with the **defaults baked into it** plus your
+overrides. Everything else on this page is what happens after that.
+
+A target is anything that can become an image:
+
+| Target | Example | Becomes an image by |
+|---|---|---|
+| image file | `ply run app.img` | it already is one |
+| image URL | `ply run https://…/app.img` | fetched |
+| registry ref | `ply run ns/app` · `ply run postgres@17` | resolved and fetched from the registry |
+| directory | `ply run .` · `ply run ./web` | built from its `ply.toml` first (inferred if absent), then run |
+| git repo | `ply run git+https://github.com/org/app` | the host clones and builds it |
+| docker image | `ply run docker://redis:7` | imported once and cached |
+
+All of them reduce to "get an image, then run it" — so scaling, networking
+and publishing below are identical no matter where the image came from.
+
+**Overrides map 1:1 to flags:** `-e KEY=V` (env), `--publish` (ports),
+`--volume`, `--domain`, `--scale`, `--egress` — each a run-time decision
+layered on what the image already declares.
+
+**A composition is just several `ply run`s wired together.** Each
+`[[service]] run = "…"` takes the *same* targets above, and a service's
+`env`/`publish`/`volume`/`domain`/`scale`/`egress` are the same overrides,
+written down instead of typed. Only two things are new in a composition:
+
+- **cross-service references** — `{db.url}` pulls another member's resolved
+  address, port, or minted secret;
+- **derived ordering** — `after` falls out of those references, so start
+  order is not a separate thing to maintain.
+
+**`name` is optional** — it defaults to the image's own name. Set it only to
+run the same image more than once, or to give a role alias that decouples the
+wiring from the image: `name = "db"` keeps `{db.url}` and `after = ["db"]`
+stable even if what's behind `db` changes from `postgres@17` to something
+else.
+
 ## Processes, not pets
 
 ```sh
@@ -163,9 +203,9 @@ re-issues, until Let's Encrypt's duplicate-certificate limit (5 per week, no
 appeal) locks the domain out.
 
 ```toml
-[env]
+[run.env]
 XDG_DATA_HOME = "/data"
-[volumes]
+[run.volumes]
 data = { path = "/data" }
 ```
 

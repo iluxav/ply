@@ -13,14 +13,14 @@ instance count, the health gate, the published pool and the kernel's
 routing table — so autoscaling is a policy it evaluates, not a new process.
 
 ```toml
-[scale]
+[run.scale]
 min = 2
 max = 8
 signal = "cpu"          # cpu | memory | net | metric:<name>
 target = "70%"          # per instance, averaged over the last 30 s
 cooldown = "60s"        # at most one step per cooldown (default)
 
-[resources]
+[run.resources]
 mem = { min = "256M", max = "2G" }   # resized live between these
 cpu = { min = "0.5", max = "4" }
 ```
@@ -108,12 +108,12 @@ published port; the next connection starts an instance and is held until
 it accepts. No daemon watches the port — the parent already owned it.
 
 ```toml
-[scale]
+[run.scale]
 min = 0
 max = 1
 idle = "10m"            # no connections for this long → the last instance stops
 
-[scale]                 # or on top of autoscaling: 0 ↔ 1 by idle, 1 ↔ 4 by cpu
+[run.scale]                 # or on top of autoscaling: 0 ↔ 1 by idle, 1 ↔ 4 by cpu
 min = 0
 max = 4
 idle = "10m"

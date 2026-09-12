@@ -29,14 +29,14 @@ adds a dependency at its latest version. By hand, it is:
 [package]
 name = "hello"
 version = "0.1.0"
-entrypoint = ["node", "-e", "console.log('hello from ply')"]
+
+[build]
 base = "debian@13"
+dependencies = { node = "22" }
+sources = { default = "https://registry.plybox.sh/ply/{package}" }
 
-[dependencies]
-node = "22"
-
-[sources]
-default = "https://registry.plybox.sh/ply/{package}"
+[run]
+entrypoint = ["node", "-e", "console.log('hello from ply')"]
 ```
 
 `base` and `node` come from the [official registry](https://registry.plybox.sh)

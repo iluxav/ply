@@ -51,7 +51,7 @@ If your app drops privileges, declare the runtime user and ply will create
 the passwd entry and chown volumes to match:
 
 ```toml
-[package]
+[run]
 user = "postgres:70:70"       # name:uid:gid
 ```
 

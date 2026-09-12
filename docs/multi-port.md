@@ -35,23 +35,24 @@ compiled in.
 [package]
 name = "myapp"
 version = "0.1.0"
-entrypoint = ["./server"]
-include = ["server"]
+
+[build]
 base = "debian@13"
+include = ["server"]
 
-[ports]
-api     = 8443
-grpc    = 50051
+[run]
+entrypoint = ["./server"]
+ports = { api = 8443, grpc = 50051 }
 
-[env]
+[run.env]
 PORT      = "8443"     # whatever your app actually reads
 GRPC_PORT = "50051"
 
-[health]
+[run.health]
 port  = 8443           # the port that means "really serving"
 grace = "10s"
 
-[restart]
+[run.restart]
 policy = "on-failure"
 ```
 

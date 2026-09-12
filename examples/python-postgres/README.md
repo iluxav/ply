@@ -23,7 +23,7 @@ What the two manifests say:
   per `ply run`. The `{db.url}` reference is the connection string *and* the
   start order; there is no separate `after`.
 - `server/ply.toml` is an ordinary app: `python3` and `python3-psycopg2`
-  from the registry on a `debian@13` base, a `[health]` port so the stack
+  from the registry on a `debian@13` base, a `[run.health]` port so the stack
   and `ply deploy` know when it is ready. psycopg2 lives in its own keg
   under `/opt/python3-psycopg2-2.9.10`, so `PYTHONPATH` names it; the
   dependency is pinned exactly so that path cannot drift.

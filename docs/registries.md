@@ -36,7 +36,7 @@ tampering either way, this is hygiene.
 Dependencies pick a source by alias:
 
 ```toml
-[dependencies]
+[build.dependencies]
 node    = "22"                                    # uses `default`
 mytools = { source = "mine", version = "0.1" }    # uses the alias
 ```

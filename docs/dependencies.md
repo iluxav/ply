@@ -12,9 +12,11 @@ order: 10
 ```toml
 [package]
 # …
-base   = "debian@13"         # exactly one base per app (owns /, libc, /bin/sh)
 
-[dependencies]
+[build]
+base = "debian@13"           # exactly one base per app (owns /, libc, /bin/sh)
+
+[build.dependencies]
 node   = "22"                # any 22.x — range, not a pin
 ffmpeg = { source = "github:someorg/ffmpeg-pkg", version = "6.1" }
 ```

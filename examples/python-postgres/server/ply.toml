@@ -1,27 +1,29 @@
 [package]
 name = "guestbook"
 version = "0.1.0"
+
+[build]
 base = "debian@13"
-entrypoint = ["python3", "server.py"]
 include = ["server.py"]
 
-[dependencies]
+[build.dependencies]
 python3 = "3.13"
-python3-psycopg2 = "2.9.10"     # exact: its keg path is spelled out in [env] below
+python3-psycopg2 = "2.9.10"     # exact: its keg path is spelled out in [run.env] below
 
-[env]
+[build.sources]
+default = "https://registry.plybox.sh/ply/{package}"
+
+[run]
+entrypoint = ["python3", "server.py"]
+ports = { web = 8000 }
+
+[run.env]
 # A dependency is its own keg under /opt/<name>-<version>; python3 only
 # searches its own prefix, so psycopg2 is put on the path here. The version
 # is pinned exactly above, so this path cannot drift from the lock.
 PYTHONPATH = "/opt/python3-psycopg2-2.9.10/usr/lib/python3/dist-packages"
 PYTHONUNBUFFERED = "1"
 
-[ports]
-web = 8000
-
-[health]
+[run.health]
 port = 8000                       # gates `ply up`, `ply deploy` and --after on this app
 grace = "15s"
-
-[sources]
-default = "https://registry.plybox.sh/ply/{package}"

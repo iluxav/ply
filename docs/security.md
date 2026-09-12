@@ -28,7 +28,7 @@ nodes.
 is *always* set, so a fork bomb is contained with zero configuration:
 
 ```toml
-[resources]
+[run.resources]
 mem  = "512M"
 cpu  = "1.5"
 pids = 256
@@ -45,7 +45,7 @@ builds should stay on. A native keg never needs `CAP_CHOWN` or
 Two escape hatches exist, both manifest-visible:
 
 ```toml
-[package]
+[run]
 capabilities = "oci"                          # Docker's default fourteen
 capabilities = ["chown", "net_bind_service"]  # exactly these
 ```
@@ -71,7 +71,7 @@ and says so loudly on every start. Triage, never production.
 ## Running as a non-root user
 
 ```toml
-[package]
+[run]
 user = "appuser:1000:1000"    # name:uid:gid
 ```
 
@@ -191,7 +191,7 @@ construction.
 ### The claim
 
 ```toml
-[network]
+[run.network]
 egress = ["api.stripe.com", "*.amazonaws.com", "140.82.112.0/20", "1.1.1.1"]
 ```
 

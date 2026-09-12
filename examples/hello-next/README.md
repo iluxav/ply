@@ -33,7 +33,7 @@ then packages `.next/standalone/` per the `include` in `ply.toml`.
 holds only your built app, not a copy of Node. That is why a whole Next.js
 app lands in a few MiB.
 
-`HOSTNAME=0.0.0.0` in `[env]` matters: Next's standalone server otherwise
+`HOSTNAME=0.0.0.0` in `[run.env]` matters: Next's standalone server otherwise
 binds `localhost`, which nothing outside the instance could reach.
 
 ## Building on a small box
