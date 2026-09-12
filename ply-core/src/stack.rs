@@ -262,9 +262,7 @@ fn parse_overlay(text: &str, path: &Path) -> Result<StackOverlay> {
         .and_then(|v| v.as_str())
         .map(str::to_string);
     let mut members = Vec::new();
-    for (i, entry) in doc
-        .get("app")
-        .and_then(|a| a.as_array())
+    for (i, entry) in member_array(&doc, path)?
         .map(|a| a.as_slice())
         .unwrap_or_default()
         .iter()
@@ -314,10 +312,28 @@ fn parse_overlay(text: &str, path: &Path) -> Result<StackOverlay> {
     Ok(StackOverlay { env_file, members })
 }
 
-/// Parse a stack file at `path`. `Ok(None)` when there is no `[[app]]` array
-/// — including `app = "name"` as a plain string, which is the single-app
-/// DEPLOYMENT lane's registry key, not a malformed stack. Only an array of
-/// `[[app]]` tables makes a file a stack.
+/// The composition's member array. `[[service]]` is the spelling; `[[app]]`
+/// is the original alias, still accepted so old files keep working. Naming
+/// both in one file is an error, not a silent winner. `app = "name"` as a
+/// plain string is the single-app DEPLOYMENT lane's registry key, not an
+/// array — `as_array` returns None for it, so it is correctly ignored here.
+fn member_array<'a>(doc: &'a toml::Value, path: &Path) -> Result<Option<&'a Vec<toml::Value>>> {
+    let service = doc.get("service").and_then(|a| a.as_array());
+    let app = doc.get("app").and_then(|a| a.as_array());
+    match (service, app) {
+        (Some(_), Some(_)) => Err(Error::Manifest(format!(
+            "{}: a composition uses [[service]] OR the older [[app]] — not both in one file",
+            path.display()
+        ))),
+        (Some(a), None) | (None, Some(a)) => Ok(Some(a)),
+        (None, None) => Ok(None),
+    }
+}
+
+/// Parse a stack file at `path`. `Ok(None)` when there is no `[[service]]`
+/// (or `[[app]]`) array — including `app = "name"` as a plain string, which
+/// is the single-app DEPLOYMENT lane's registry key, not a malformed stack.
+/// Only an array of member tables makes a file a composition.
 /// A deployment file that NAMES a published stack instead of spelling one
 /// out: `stack = "<namespace>/<name>"`. Always newest — the reference carries
 /// no version, so reconcile re-fetches every beat and a republished SHAPE (a
@@ -360,18 +376,18 @@ pub fn parse(text: &str, path: &Path) -> Result<Option<Stack>> {
     let doc: toml::Value = text
         .parse()
         .map_err(|e| Error::Manifest(format!("{}: {e}", path.display())))?;
-    let Some(apps) = doc.get("app").and_then(|a| a.as_array()) else {
+    let Some(apps) = member_array(&doc, path)? else {
         return Ok(None);
     };
     if doc.get("package").is_some() {
         return Err(Error::Manifest(format!(
-            "{}: has both [package] and [[app]] — a stack file is pure wiring; move the app into its own directory and reference it with `run = \"./dir\"`",
+            "{}: has both [package] and [[service]] — a composition is pure wiring; move the app into its own directory and reference it with `run = \"./dir\"` (or `run = \"git+https://…\"`)",
             path.display()
         )));
     }
     if apps.is_empty() {
         return Err(Error::Manifest(format!(
-            "{}: [[app]] has no entries",
+            "{}: [[service]] has no entries",
             path.display()
         )));
     }
@@ -1997,6 +2013,21 @@ scale = 2
     fn plain_https_without_git_stays_a_url_image() {
         let stack = stack_of("[[app]]\nrun = \"https://cdn.example.com/app-1.0.0.img\"\n");
         assert!(matches!(stack.members[0].source, MemberSource::Url(_)));
+    }
+
+    #[test]
+    fn service_is_the_alias_for_app() {
+        let stack = stack_of(
+            "[stack]\nname = \"todos\"\n\n[[service]]\nrun = \"postgres@17\"\nname = \"db\"\n\n[[service]]\nrun = \"redis\"\nname = \"cache\"\n",
+        );
+        let names: Vec<&str> = stack.members.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(names, vec!["db", "cache"]);
+    }
+
+    #[test]
+    fn service_and_app_together_is_an_error() {
+        let err = stack_err("[[service]]\nrun = \"redis\"\n\n[[app]]\nrun = \"postgres@17\"\n");
+        assert!(err.contains("not both"), "{err}");
     }
 
     #[test]
