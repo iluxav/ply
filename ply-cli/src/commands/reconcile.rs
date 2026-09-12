@@ -127,6 +127,55 @@ pub fn exec(args: crate::cli::ReconcileArgs) -> Result<()> {
                     desired.insert(name.clone());
                     continue;
                 }
+                // A `repo =` whose checkout's ply.toml is a COMPOSITION (it
+                // carries [[service]]/[[app]]) deploys the whole set — build
+                // each member on the host, wire them — instead of building one
+                // app. This is the "paste one repo URL, get the whole app"
+                // path. Topology lives in the RECIPE (the ply.toml): `load`
+                // reads ply.toml only, so an app repo that merely SHIPS a
+                // stack.toml (a `ply up` convenience) still deploys as its app.
+                if spec.repo.is_some() {
+                    match sync_repo(&name, &spec) {
+                        Ok((checkout, _commit)) => match ply_core::stack::load(&checkout) {
+                            Ok(Some(mut stack)) => {
+                                // The deployment's env_file (or the conventional
+                                // .env/<name>.env) fills the composition's $VAR
+                                // holes when the recipe names none of its own.
+                                if stack.env_file.is_none() {
+                                    stack.env_file = spec.env_file.clone();
+                                }
+                                converge_stack(
+                                    &name,
+                                    stack,
+                                    &mut desired,
+                                    &mut app_names,
+                                    &mut changed_units,
+                                );
+                                desired.insert(name.clone());
+                                continue;
+                            }
+                            // not a composition — build it as a single app
+                            Ok(None) => {}
+                            Err(e) => {
+                                deployments::write_status(&name, false, &format!("{e:#}"));
+                                desired.insert(name.clone());
+                                eprintln!("ply: reconcile {name}: {e:#}");
+                                continue;
+                            }
+                        },
+                        Err(e) => {
+                            deployments::write_status(&name, false, &format!("{e:#}"));
+                            desired.insert(name.clone());
+                            ply_core::runtime::events::emit(
+                                &name,
+                                "deploy-failed",
+                                &format!("{e:#}"),
+                            );
+                            eprintln!("ply: reconcile {name}: {e:#}");
+                            continue;
+                        }
+                    }
+                }
                 match apply(&name, &spec, &mut app_names, None) {
                     Ok(applied) => {
                         changed_units |= applied.changed;
@@ -1158,7 +1207,14 @@ fn read_token(spec: &Spec) -> Result<Option<String>> {
 /// Lane 2: clone/fetch, build in a fenced ply container, `ply build` the
 /// checkout. The checkout persists — node_modules and framework caches ARE
 /// the cache, so first build pays full price and the rest are incremental.
-fn build_from_repo(name: &str, spec: &Spec) -> Result<(PathBuf, String, bool)> {
+/// Clone (once) or fetch the deployment's repo into
+/// `/var/lib/ply/builds/<name>`, reset to the requested ref, and clean the
+/// tree while preserving the build caches (node_modules, target, …).
+/// Returns the checkout dir and the short commit. Split out of
+/// [`build_from_repo`] so `exec` can peek at a repo's shape (single app vs
+/// composition) before deciding how to build it — a second call on the same
+/// checkout is a cheap fetch, not a re-clone.
+fn sync_repo(name: &str, spec: &Spec) -> Result<(PathBuf, String)> {
     let repo = spec.repo.as_deref().expect("caller checked");
     let checkout = PathBuf::from("/var/lib/ply/builds").join(name);
     std::fs::create_dir_all(checkout.parent().unwrap())?;
@@ -1237,6 +1293,12 @@ fn build_from_repo(name: &str, spec: &Spec) -> Result<(PathBuf, String, bool)> {
         Some(&checkout),
     )?;
     let commit = git(&["rev-parse", "--short=12", "HEAD"], Some(&checkout))?;
+    Ok((checkout, commit))
+}
+
+fn build_from_repo(name: &str, spec: &Spec) -> Result<(PathBuf, String, bool)> {
+    let repo = spec.repo.as_deref().expect("caller checked");
+    let (checkout, commit) = sync_repo(name, spec)?;
     let version = repo_version(&checkout, spec);
 
     // Nothing new to build? (same commit, same spec, image exists) — skip:
