@@ -10,7 +10,7 @@ use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Table
 use ratatui::Frame;
 
 use super::data::{human_duration, human_size, now, AppRow, ServiceStatus};
-use super::{App, Input, Tab};
+use super::{App, DeployForm, FormField, Input, Tab, SOURCES};
 
 const ORANGE: Color = Color::Rgb(0xE0, 0xA0, 0x5A);
 const GREEN: Color = Color::Rgb(0x7E, 0xE0, 0x8A);
@@ -28,9 +28,113 @@ pub fn render(f: &mut Frame, app: &App) {
     header(f, rows[0], app);
     body(f, rows[1], app);
     footer(f, rows[2], app);
-    if let Some(input) = &app.input {
+    if let Some(form) = &app.form {
+        deploy_form_modal(f, f.area(), form);
+    } else if let Some(input) = &app.input {
         input_modal(f, f.area(), input);
     }
+}
+
+/// The new-deployment form: a source selector, the fields for that source
+/// (all visible), a hint for the focused field, and a Deploy button.
+fn deploy_form_modal(f: &mut Frame, area: Rect, form: &DeployForm) {
+    let fields = form.fields();
+    let w = area.width.clamp(48, 84);
+    // source + blank + fields + blank + hint + submit
+    let inner_h = 1 + 1 + fields.len() as u16 + 1 + 1 + 1;
+    let box_area = Rect {
+        x: area.x + (area.width.saturating_sub(w)) / 2,
+        y: area.y + area.height.saturating_sub(inner_h + 2) / 3,
+        width: w,
+        height: inner_h + 2,
+    };
+    f.render_widget(Clear, box_area);
+    let block = Block::bordered()
+        .border_style(Style::new().fg(ORANGE))
+        .title(Span::styled(
+            " new deployment ",
+            Style::new().fg(ORANGE).add_modifier(Modifier::BOLD),
+        ));
+    let inner = block.inner(box_area);
+    f.render_widget(block, box_area);
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    // --- source selector row ---
+    let mut spans = vec![Span::styled("source  ", Style::new().fg(MUTED))];
+    for (i, (label, _, _)) in SOURCES.iter().enumerate() {
+        let picked = i == form.source;
+        let mut st = Style::new().fg(if picked { ORANGE } else { MUTED });
+        if picked {
+            st = st.add_modifier(Modifier::BOLD);
+        }
+        if picked && form.is_source_focus() {
+            st = st.bg(SEL_BG);
+        }
+        spans.push(Span::styled(
+            format!(" {} {label} ", if picked { "●" } else { "○" }),
+            st,
+        ));
+    }
+    if form.is_source_focus() {
+        spans.push(Span::styled("  ‹←→›", Style::new().fg(ORANGE)));
+    }
+    lines.push(Line::from(spans));
+    lines.push(Line::from(""));
+
+    // --- fields ---
+    let focused = form.focused_field();
+    for &field in &fields {
+        let (label, _) = form.field_meta(field);
+        let is_focus = focused == Some(field);
+        let raw = form.value_of(field);
+        let shown = if field == FormField::Token {
+            "*".repeat(raw.chars().count())
+        } else {
+            raw.to_string()
+        };
+        let label_style = if is_focus {
+            Style::new().fg(ORANGE).add_modifier(Modifier::BOLD)
+        } else {
+            Style::new().fg(MUTED)
+        };
+        let mut row = vec![Span::styled(format!("{label:<9} "), label_style)];
+        row.push(Span::raw(shown));
+        if is_focus {
+            row.push(Span::styled("▏", Style::new().fg(ORANGE)));
+        }
+        lines.push(Line::from(row));
+    }
+    lines.push(Line::from(""));
+
+    // --- hint for the current focus ---
+    let hint = if form.is_source_focus() {
+        SOURCES[form.source].2
+    } else if let Some(field) = focused {
+        form.field_meta(field).1
+    } else {
+        "Enter deploys · every source follows-latest by default"
+    };
+    lines.push(Line::from(Span::styled(hint, Style::new().fg(MUTED))));
+
+    // --- submit + footer ---
+    let deploy_style = if form.is_submit_focus() {
+        Style::new()
+            .fg(Color::Black)
+            .bg(GREEN)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::new().fg(GREEN)
+    };
+    lines.push(Line::from(vec![
+        Span::styled(" Deploy ", deploy_style),
+        Span::styled(
+            "   Tab/↑↓ move · ←→ source · Enter deploy · Esc cancel",
+            Style::new().fg(MUTED),
+        ),
+    ]));
+
+    f.render_widget(Paragraph::new(lines), inner);
 }
 
 fn input_modal(f: &mut Frame, area: Rect, input: &Input) {

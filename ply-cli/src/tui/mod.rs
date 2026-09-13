@@ -39,6 +39,8 @@ pub(crate) struct App {
     pub status: String,
     /// A modal text prompt (add-domain, …); when set it captures all keys.
     pub input: Option<Input>,
+    /// The new-deployment form; when set it captures all keys.
+    pub form: Option<DeployForm>,
     last_refresh: Instant,
     quit: bool,
 }
@@ -62,25 +64,142 @@ enum DeploySource {
 }
 
 enum InputTarget {
-    AddDomain(String), // the app the domain is for
-    // New-deployment guided flow: source → publish → env → domain → create.
-    NewSourceChoice,                         // step 1/5: g / r / i
-    NewSourceValue(SourceKind),              // step 2/5: the url/ref/path
-    NewPublish(DeploySource),                // step 3/5: publish override
-    NewEnv(DeploySource, String),            // step 4/5: env override
-    NewDomain(DeploySource, String, String), // step 5/5: domain, then create
-    PinVersion(String),                      // the deployment to pin/roll back
-    SetBuild(String),                        // the deployment to set a `build =` command on
-    RemoveApp(String),                       // stop + remove an app (typed-yes confirm)
-    RemoveDeployment(String),                // delete a deployment spec (typed-yes confirm)
+    AddDomain(String),        // the app the domain is for
+    PinVersion(String),       // the deployment to pin/roll back
+    SetBuild(String),         // the deployment to set a `build =` command on
+    RemoveApp(String),        // stop + remove an app (typed-yes confirm)
+    RemoveDeployment(String), // delete a deployment spec (typed-yes confirm)
 }
 
-/// Which source the user picked at step 1, before they enter its value.
-#[derive(Clone, Copy)]
-enum SourceKind {
-    Repo,
-    App,
-    Image,
+/// The new-deployment form: a source selector plus the fields that apply to
+/// it, all on screen at once (Tab/↑↓ move, ←→ change source, Enter deploys).
+/// The repo source adds build + token fields; all sources share publish / env
+/// / domain. Replaces the old field-by-field prompt.
+pub(crate) struct DeployForm {
+    pub source: usize, // index into SOURCES: 0 repo, 1 registry, 2 image
+    pub value: String, // repo URL / app ref / image url
+    pub build: String, // repo only: build command
+    pub token: String, // repo only: token for a private repo
+    pub publish: String,
+    pub env: String,
+    pub domain: String,
+    /// 0 = source selector; 1..=N = the visible fields; N+1 = the Deploy button.
+    pub focus: usize,
+}
+
+/// (label, value-field label, value hint) for each source, in `source` order.
+pub(crate) const SOURCES: [(&str, &str, &str); 3] = [
+    (
+        "GitHub repo",
+        "Repo URL",
+        "https://github.com/you/app — cloned & built on this box, follows pushes",
+    ),
+    (
+        "Registry app",
+        "App",
+        "iluxav/web — a published image, follows the newest version",
+    ),
+    (
+        "Image URL",
+        "Image",
+        "https://…/app.img or a local path — a fixed image",
+    ),
+];
+
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum FormField {
+    Value,
+    Build,
+    Token,
+    Publish,
+    Env,
+    Domain,
+}
+
+impl DeployForm {
+    fn new() -> Self {
+        DeployForm {
+            source: 0,
+            value: String::new(),
+            build: String::new(),
+            token: String::new(),
+            publish: String::new(),
+            env: String::new(),
+            domain: String::new(),
+            focus: 0,
+        }
+    }
+
+    /// The fields shown for the current source, in display/focus order.
+    pub(crate) fn fields(&self) -> Vec<FormField> {
+        use FormField::*;
+        if self.source == 0 {
+            vec![Value, Build, Token, Publish, Env, Domain]
+        } else {
+            vec![Value, Publish, Env, Domain]
+        }
+    }
+
+    /// Total focus stops: source selector + fields + the Deploy button.
+    fn focus_count(&self) -> usize {
+        self.fields().len() + 2
+    }
+
+    pub(crate) fn is_source_focus(&self) -> bool {
+        self.focus == 0
+    }
+
+    pub(crate) fn is_submit_focus(&self) -> bool {
+        self.focus == self.focus_count() - 1
+    }
+
+    /// The field the cursor is in, if focus is on a field (not source/submit).
+    pub(crate) fn focused_field(&self) -> Option<FormField> {
+        let fields = self.fields();
+        (1..=fields.len())
+            .contains(&self.focus)
+            .then(|| fields[self.focus - 1])
+    }
+
+    pub(crate) fn value_of(&self, f: FormField) -> &str {
+        match f {
+            FormField::Value => &self.value,
+            FormField::Build => &self.build,
+            FormField::Token => &self.token,
+            FormField::Publish => &self.publish,
+            FormField::Env => &self.env,
+            FormField::Domain => &self.domain,
+        }
+    }
+
+    fn value_mut(&mut self, f: FormField) -> &mut String {
+        match f {
+            FormField::Value => &mut self.value,
+            FormField::Build => &mut self.build,
+            FormField::Token => &mut self.token,
+            FormField::Publish => &mut self.publish,
+            FormField::Env => &mut self.env,
+            FormField::Domain => &mut self.domain,
+        }
+    }
+
+    /// Label + hint for a field (the value field's label depends on source).
+    pub(crate) fn field_meta(&self, f: FormField) -> (&'static str, &'static str) {
+        match f {
+            FormField::Value => (SOURCES[self.source].1, SOURCES[self.source].2),
+            FormField::Build => (
+                "Build cmd",
+                "e.g. npm ci && npm run build — for a repo with no ply.toml build step (optional)",
+            ),
+            FormField::Token => (
+                "Token",
+                "GitHub token for a PRIVATE repo (stored 0600); blank = public",
+            ),
+            FormField::Publish => ("Publish", "8080:3000 or internal:3000 (blank = none)"),
+            FormField::Env => ("Env", "KEY=VAL, comma-separated (blank = none)"),
+            FormField::Domain => ("Domain", "app.example.com (blank = none)"),
+        }
+    }
 }
 
 impl App {
@@ -95,6 +214,7 @@ impl App {
             log_follow: false,
             status: String::new(),
             input: None,
+            form: None,
             last_refresh: Instant::now(),
             quit: false,
         }
@@ -174,6 +294,9 @@ fn run_loop(terminal: &mut DefaultTerminal) -> anyhow::Result<()> {
 }
 
 fn handle_key(app: &mut App, terminal: &mut DefaultTerminal, code: KeyCode) {
+    if app.form.is_some() {
+        return handle_form_key(app, code);
+    }
     if app.input.is_some() {
         return handle_input_key(app, code);
     }
@@ -308,13 +431,77 @@ fn open_add_domain(app: &mut App, name: String) {
 }
 
 fn open_new_deployment(app: &mut App) {
-    app.input = Some(Input {
-        title: "new deployment (1/5) · source".into(),
-        prompt: "g = GitHub repo (build on this box)   r = registry app (ns/name)   i = image url"
-            .into(),
-        buffer: String::new(),
-        target: InputTarget::NewSourceChoice,
-    });
+    app.form = Some(DeployForm::new());
+}
+
+/// Drive the new-deployment form: Tab/↑↓ move focus, ←→ change source, typing
+/// edits the focused field, Enter deploys, Esc cancels.
+fn handle_form_key(app: &mut App, code: KeyCode) {
+    let Some(form) = app.form.as_mut() else {
+        return;
+    };
+    let count = form.focus_count();
+    match code {
+        KeyCode::Esc => {
+            app.form = None;
+            app.status = "cancelled".into();
+        }
+        KeyCode::Tab | KeyCode::Down => form.focus = (form.focus + 1) % count,
+        KeyCode::BackTab | KeyCode::Up => form.focus = (form.focus + count - 1) % count,
+        KeyCode::Left if form.is_source_focus() => {
+            form.source = (form.source + SOURCES.len() - 1) % SOURCES.len();
+        }
+        KeyCode::Right if form.is_source_focus() => {
+            form.source = (form.source + 1) % SOURCES.len();
+        }
+        KeyCode::Enter => {
+            if form.is_source_focus() {
+                form.focus = 1; // picked a source → jump to its first field
+            } else {
+                submit_form(app);
+            }
+        }
+        KeyCode::Backspace => {
+            if let Some(f) = form.focused_field() {
+                form.value_mut(f).pop();
+            }
+        }
+        KeyCode::Char(c) => {
+            if let Some(f) = form.focused_field() {
+                form.value_mut(f).push(c);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Build the order from the form's fields and create it.
+fn submit_form(app: &mut App) {
+    let Some(form) = app.form.as_ref() else {
+        return;
+    };
+    let value = form.value.trim().to_string();
+    if value.is_empty() {
+        app.status = format!("enter a {}", SOURCES[form.source].1.to_lowercase());
+        return;
+    }
+    let source = match form.source {
+        0 => DeploySource::Repo(value),
+        1 => DeploySource::App(value),
+        _ => DeploySource::Image(value),
+    };
+    let (build, token) = (form.build.trim().to_string(), form.token.trim().to_string());
+    let (publish, env, domain) = (
+        form.publish.trim().to_string(),
+        form.env.trim().to_string(),
+        form.domain.trim().to_string(),
+    );
+    app.status = match create_deployment(&source, &build, &token, &publish, &env, &domain) {
+        Ok(msg) => format!("✓ {msg}"),
+        Err(e) => format!("✗ {e}"),
+    };
+    app.form = None;
+    app.reload();
 }
 
 fn open_pin_version(app: &mut App, name: String) {
@@ -387,79 +574,6 @@ fn apply_input(app: &mut App, input: Input) {
                 return;
             }
             app.status = match add_domain(&name, &domain) {
-                Ok(msg) => format!("✓ {msg}"),
-                Err(e) => format!("✗ {e}"),
-            };
-            app.reload();
-        }
-        InputTarget::NewSourceChoice => {
-            let (kind, title, prompt) = match input.buffer.trim().to_ascii_lowercase().as_str() {
-                "g" | "github" | "repo" => (
-                    SourceKind::Repo,
-                    "new deployment (2/5) · repo",
-                    "GitHub repo URL — the host clones & builds it, then follows pushes",
-                ),
-                "r" | "registry" | "app" => (
-                    SourceKind::App,
-                    "new deployment (2/5) · registry",
-                    "published app, e.g. iluxav/web — follows the newest version",
-                ),
-                "i" | "image" => (
-                    SourceKind::Image,
-                    "new deployment (2/5) · image",
-                    "image URL or path, e.g. https://…/app.img",
-                ),
-                _ => {
-                    app.status = "cancelled — pick g, r, or i".into();
-                    return;
-                }
-            };
-            app.input = Some(Input {
-                title: title.into(),
-                prompt: prompt.into(),
-                buffer: String::new(),
-                target: InputTarget::NewSourceValue(kind),
-            });
-        }
-        InputTarget::NewSourceValue(kind) => {
-            let value = input.buffer.trim().to_string();
-            if value.is_empty() {
-                app.status = "cancelled — nothing entered".into();
-                return;
-            }
-            let source = match kind {
-                SourceKind::Repo => DeploySource::Repo(value),
-                SourceKind::App => DeploySource::App(value),
-                SourceKind::Image => DeploySource::Image(value),
-            };
-            app.input = Some(Input {
-                title: "new deployment (3/5) · publish".into(),
-                prompt: "publish, e.g. 8080:3000 or internal:3000  (blank = none)".into(),
-                buffer: String::new(),
-                target: InputTarget::NewPublish(source),
-            });
-        }
-        InputTarget::NewPublish(source) => {
-            let publish = input.buffer.trim().to_string();
-            app.input = Some(Input {
-                title: "new deployment (4/5) · env".into(),
-                prompt: "env, KEY=VAL comma-separated  (blank = none)".into(),
-                buffer: String::new(),
-                target: InputTarget::NewEnv(source, publish),
-            });
-        }
-        InputTarget::NewEnv(source, publish) => {
-            let env = input.buffer.trim().to_string();
-            app.input = Some(Input {
-                title: "new deployment (5/5) · domain".into(),
-                prompt: "domain, e.g. app.example.com  (blank = none)".into(),
-                buffer: String::new(),
-                target: InputTarget::NewDomain(source, publish, env),
-            });
-        }
-        InputTarget::NewDomain(source, publish, env) => {
-            let domain = input.buffer.trim().to_string();
-            app.status = match create_deployment(&source, &publish, &env, &domain) {
                 Ok(msg) => format!("✓ {msg}"),
                 Err(e) => format!("✗ {e}"),
             };
@@ -585,25 +699,27 @@ fn set_build(name: &str, cmd: &str) -> anyhow::Result<String> {
 /// (the Spec default `auto = true`), so nothing extra is written for it.
 fn create_deployment(
     source: &DeploySource,
+    build: &str,
+    token: &str,
     publish: &str,
     env: &str,
     domain: &str,
 ) -> anyhow::Result<String> {
-    let (source_line, name, hint) = match source {
+    let (source_line, name, is_repo) = match source {
         DeploySource::Repo(url) => (
             format!("repo = \"{url}\"\n"),
             deploy_name_from_url(url),
-            " — press b to set a build command if it needs one (Next.js/TS)",
+            true,
         ),
         DeploySource::App(reference) => (
             format!("app = \"{reference}\"\n"),
             deploy_name_from_ref(reference),
-            " — follows the newest published version",
+            false,
         ),
         DeploySource::Image(url) => (
             format!("image = \"{url}\"\n"),
             deploy_name_from_url(url),
-            "",
+            false,
         ),
     };
     if name.is_empty() {
@@ -615,6 +731,15 @@ fn create_deployment(
         anyhow::bail!("a deployment named {name} already exists");
     }
     let mut spec = source_line;
+    // repo-only: a build command, and a token for a private repo (written to a
+    // 0600 file the spec references, never inlined into the order).
+    if is_repo && !build.is_empty() {
+        spec.push_str(&format!("build = {}\n", toml_string(build)));
+    }
+    if is_repo && !token.is_empty() {
+        let rel = write_token_file(&dir, &name, token)?;
+        spec.push_str(&format!("token_file = \"{rel}\"\n"));
+    }
     if !publish.is_empty() {
         spec.push_str(&format!("publish = [\"{publish}\"]\n"));
     }
@@ -635,7 +760,27 @@ fn create_deployment(
     }
     std::fs::create_dir_all(&dir)?;
     std::fs::write(&path, spec)?;
-    Ok(format!("created {name}{hint}"))
+    Ok(format!("created {name} — reconcile is deploying it"))
+}
+
+/// A TOML basic string with quotes/backslashes escaped — for a build command.
+fn toml_string(s: &str) -> String {
+    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// Write a private-repo token to `<deployments>/.secrets/<name>.token` (dir
+/// 0700, file 0600) and return the relative path for `token_file =`
+/// (`resolve_secret` resolves it against the deployments dir).
+fn write_token_file(dir: &std::path::Path, name: &str, token: &str) -> anyhow::Result<String> {
+    use std::os::unix::fs::PermissionsExt;
+    let secrets = dir.join(".secrets");
+    std::fs::create_dir_all(&secrets)?;
+    std::fs::set_permissions(&secrets, std::fs::Permissions::from_mode(0o700))?;
+    let rel = format!(".secrets/{name}.token");
+    let path = dir.join(&rel);
+    std::fs::write(&path, format!("{}\n", token.trim()))?;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+    Ok(rel)
 }
 
 /// A deployment name from a registry ref: the package tail (`iluxav/web` →
@@ -931,6 +1076,7 @@ mod tests {
             log_follow: false,
             status: String::new(),
             input: None,
+            form: None,
             last_refresh: Instant::now(),
             quit: false,
         }
