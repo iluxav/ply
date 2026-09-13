@@ -1296,10 +1296,71 @@ fn sync_repo(name: &str, spec: &Spec) -> Result<(PathBuf, String)> {
     Ok((checkout, commit))
 }
 
+/// A recipe synthesized for a repo that ships no ply.toml — the deploy-time
+/// cousin of `ply init`. So a bare `repo=` deploy of a framework app just
+/// works: no manual entrypoint, no build field.
+struct DetectedRecipe {
+    what: &'static str,
+    build: Option<String>,
+    entrypoint: Vec<String>,
+    include: Vec<String>,
+    runtime: String,
+    port: Option<u16>,
+}
+
+/// Recognize a common framework from the checkout and synthesize its recipe.
+/// Next.js (standalone) first — the dominant self-host case; `None` for
+/// anything unrecognized (the caller then asks for a ply.toml).
+fn detect_deploy(checkout: &std::path::Path) -> Option<DetectedRecipe> {
+    let pkg: serde_json::Value = std::fs::read_to_string(checkout.join("package.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())?;
+    let has_dep = |name: &str| {
+        ["dependencies", "devDependencies"]
+            .iter()
+            .any(|k| pkg.get(k).and_then(|d| d.get(name)).is_some())
+    };
+    if has_dep("next") {
+        return Some(DetectedRecipe {
+            what: "Next.js (standalone)",
+            // build, then fold static/public into the standalone tree so it
+            // ships them even when the repo has no postbuild step of its own.
+            build: Some(
+                "npm ci && npm run build && cp -r .next/static .next/standalone/.next/ && { [ -d public ] && cp -r public .next/standalone/ || true; }"
+                    .into(),
+            ),
+            entrypoint: vec!["node".into(), ".next/standalone/server.js".into()],
+            include: vec![".next/standalone/".into()],
+            runtime: "node@24".into(),
+            port: Some(3000),
+        });
+    }
+    None
+}
+
 fn build_from_repo(name: &str, spec: &Spec) -> Result<(PathBuf, String, bool)> {
     let repo = spec.repo.as_deref().expect("caller checked");
     let (checkout, commit) = sync_repo(name, spec)?;
     let version = repo_version(&checkout, spec);
+
+    // No ply.toml and no explicit entrypoint? Recognize the framework and
+    // synthesize a recipe, so a bare `repo=` deploy needs nothing else.
+    let detected = if !checkout.join("ply.toml").exists() && spec.entrypoint.is_empty() {
+        detect_deploy(&checkout)
+    } else {
+        None
+    };
+    // The build command / toolchain: the spec's own wins, else the detected
+    // one (Next.js → `npm ci && npm run build && …`).
+    let build_cmd = spec
+        .build
+        .clone()
+        .or_else(|| detected.as_ref().and_then(|d| d.build.clone()));
+    let build_runtime = spec
+        .runtime
+        .clone()
+        .or_else(|| detected.as_ref().map(|d| d.runtime.clone()))
+        .unwrap_or_else(|| "node@24".into());
 
     // Nothing new to build? (same commit, same spec, image exists) — skip:
     // reconcile fires for every dir change including OTHER deployments'.
@@ -1320,8 +1381,14 @@ fn build_from_repo(name: &str, spec: &Spec) -> Result<(PathBuf, String, bool)> {
     }
 
     // build step, memory-fenced, toolchain from the registry
-    if let Some(build) = &spec.build {
-        let runtime = spec.runtime.as_deref().unwrap_or("node@24");
+    if let Some(build) = &build_cmd {
+        if let Some(d) = &detected {
+            println!(
+                "{name}: no ply.toml — detected {}, building on this box",
+                d.what
+            );
+        }
+        let runtime = build_runtime.as_str();
         let (rt_name, rt_version) = match runtime.split_once('@') {
             Some((n, v)) => (n, v),
             None => (runtime, "*"),
@@ -1406,28 +1473,43 @@ fn build_from_repo(name: &str, spec: &Spec) -> Result<(PathBuf, String, bool)> {
         }
     }
 
-    // the app manifest: the repo's own ply.toml wins; else generate from spec
+    // the app manifest: the repo's own ply.toml wins; else the spec's explicit
+    // entrypoint, else the detected framework recipe. A repo with none of
+    // those cannot be packed — say so and how to fix it.
     if !checkout.join("ply.toml").exists() || !spec.entrypoint.is_empty() {
-        if spec.entrypoint.is_empty() {
+        let (entrypoint, include, runtime, port) = if !spec.entrypoint.is_empty() {
+            (
+                spec.entrypoint.clone(),
+                spec.include.clone(),
+                spec.runtime.clone().unwrap_or_else(|| "node@24".into()),
+                spec.port,
+            )
+        } else if let Some(d) = &detected {
+            (
+                d.entrypoint.clone(),
+                d.include.clone(),
+                d.runtime.clone(),
+                d.port,
+            )
+        } else {
             bail!(
-                "{repo} has no ply.toml — give the deployment an `entrypoint = [\"…\"]` (and usually `include`)"
+                "{repo} has no ply.toml and no recognized framework — run `ply init` in the repo and commit its ply.toml, or give the deployment an `entrypoint = [\"…\"]`"
             );
-        }
+        };
         let mut manifest = format!(
             "[package]\nname = \"{name}\"\nversion = \"{version}\"\nentrypoint = {}\nbase = \"debian@13\"\n",
-            toml_array(&spec.entrypoint)
+            toml_array(&entrypoint)
         );
-        if !spec.include.is_empty() {
-            manifest.push_str(&format!("include = {}\n", toml_array(&spec.include)));
+        if !include.is_empty() {
+            manifest.push_str(&format!("include = {}\n", toml_array(&include)));
         }
-        let runtime = spec.runtime.as_deref().unwrap_or("node@24");
         let (rt_name, rt_version) = match runtime.split_once('@') {
             Some((n, v)) => (n, v),
-            None => (runtime, "*"),
+            None => (runtime.as_str(), "*"),
         };
         manifest.push_str(&format!("\n[dependencies]\n{rt_name} = \"{rt_version}\"\n"));
         manifest.push_str("\n[env]\nNODE_ENV = \"production\"\nHOSTNAME = \"0.0.0.0\"\n");
-        if let Some(port) = spec.port {
+        if let Some(port) = port {
             manifest.push_str(&format!(
                 "\n[ports]\nweb = {port}\n\n[health]\nport = {port}\ngrace = \"15s\"\n"
             ));
@@ -1601,6 +1683,45 @@ fn repo_version(checkout: &std::path::Path, spec: &Spec) -> String {
         }
     }
     fallback
+}
+
+#[cfg(test)]
+mod detect_tests {
+    use super::detect_deploy;
+
+    fn dir_with(tag: &str, files: &[(&str, &str)]) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("ply-detect-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for (name, body) in files {
+            std::fs::write(dir.join(name), body).unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn detects_nextjs_from_package_json() {
+        let dir = dir_with(
+            "next",
+            &[(
+                "package.json",
+                r#"{ "name": "x", "dependencies": { "next": "14", "react": "18" } }"#,
+            )],
+        );
+        let r = detect_deploy(&dir).expect("Next.js detected");
+        assert_eq!(r.entrypoint, ["node", ".next/standalone/server.js"]);
+        assert_eq!(r.include, [".next/standalone/"]);
+        assert!(r.build.as_deref().unwrap().contains("npm run build"));
+        assert_eq!(r.port, Some(3000));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn no_package_json_is_unrecognized() {
+        let dir = dir_with("bare", &[("README.md", "hi")]);
+        assert!(detect_deploy(&dir).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 #[cfg(test)]
