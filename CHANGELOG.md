@@ -5,7 +5,7 @@ breaking changes, and known limitations. Write under **Unreleased** as work
 lands; `make release-cli` turns that heading into the version and date, and
 the release workflow publishes the entry as the GitHub release notes.
 
-## Unreleased
+## v0.1.101 — 2026-09-13
 
 ### What changed
 - **A stack deployment now surfaces its membership and recipe as files.** Every
