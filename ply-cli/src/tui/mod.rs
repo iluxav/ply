@@ -189,7 +189,7 @@ impl DeployForm {
             FormField::Value => (SOURCES[self.source].1, SOURCES[self.source].2),
             FormField::Build => (
                 "Build cmd",
-                "e.g. npm ci && npm run build — for a repo with no ply.toml build step (optional)",
+                "leave blank for a detected framework (Next.js/Node); set only for a custom build",
             ),
             FormField::Token => (
                 "Token",
