@@ -92,7 +92,7 @@ to the registry first:
 [[service]]
 run     = "git+https://github.com/org/api"   # also: a .git URL, or git@github.com:org/api.git
 name    = "api"
-build   = "npm ci && npm run build"           # run in a memory-fenced container before packing
+build   = "npm install && npm run build"      # run in a memory-fenced container before packing
 runtime = "node@24"                           # builder toolchain (default: node@24)
 ref     = "main"                              # branch/committish (default: remote HEAD)
 after   = ["db"]

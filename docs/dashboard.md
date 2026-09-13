@@ -56,13 +56,15 @@ means granting a shell — that is stated here plainly, not hidden.
 ## Deploying from the dashboard
 
 Paste a GitHub URL. Public repos are inspected: a release carrying a ply
-image recommends the *pull CI image* lane; a `package.json` with `next`
-prefills the known-good Next.js build; `ply.toml` in the repo means the
-repo rules. Private repos work identically once you paste a fine-grained
-token (Contents: read, that one repo) — one credential for cloning,
-images, and update checks. The wizard previews the exact TOML it will
-write, because the file is the truth — and every deployment's spec is
-editable in place afterward.
+image recommends the *pull CI image* lane; a `ply.toml` in the repo means
+the recipe rules (its declared port prefills *publish*); a repo with **no
+`ply.toml`** that the host recognises — a `package.json` with `next` —
+deploys as-is, with the detected build command and *publish* prefilled and
+editable, and no entrypoint to fill in (the host supplies it). Private repos
+work identically once you paste a fine-grained token (Contents: read, that
+one repo) — one credential for cloning, images, and update checks. The
+wizard previews the exact TOML it will write, because the file is the
+truth — and every deployment's spec is editable in place afterward.
 
 Each GitHub-backed deployment shows freshness — *update available:
 `<version or commit>`* — with a **deploy now** button. The button just

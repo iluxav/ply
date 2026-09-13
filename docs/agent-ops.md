@@ -69,7 +69,7 @@ Deploy:
 ```sh
 cat > /var/lib/ply/deployments/api.toml <<'EOF'
 repo = "https://github.com/org/api"
-build = "npm ci && npm run build"
+build = "npm install && npm run build"
 runtime = "node@24"
 entrypoint = ["node", "dist/index.js"]
 port = 3000

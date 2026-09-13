@@ -9,6 +9,8 @@ order: 14.5
 
 A deployment is a TOML file in `/var/lib/ply/deployments/`. Drop one in and
 the app runs; edit it and the app converges; delete it and the app stops —
+and its build checkout, generated files and stored token go with it (data
+volumes are kept; `ply gc` reclaims the image later) —
 once the watcher is installed (`sudo ply setup --edge` puts in a timer and
 a path unit). `ply reconcile` run by hand is one pass, and says so.
 systemd's inotify watches the directory, a oneshot `ply reconcile` does the
@@ -47,7 +49,7 @@ from = "github:org/myapp"                           # release assets
 ```toml
 # build here — no CI at all: the host clones and builds the repo itself
 repo = "https://github.com/org/myapp"
-build = "npm ci && npm run build"
+build = "npm install && npm run build"
 runtime = "node@24"
 entrypoint = ["node", "dist/index.js"]
 include = ["dist/", "node_modules/", "package.json"]
@@ -55,6 +57,10 @@ port = 3000
 publish = ["internal:3000"]
 domain = ["app.example.com"]
 ```
+
+That block spells everything out, but usually you don't have to — see
+[what a `repo=` order needs](#a-repo-tells-the-host-how-to-build-itself)
+below.
 
 A whole deployment, then, is that one line plus how to run it:
 
@@ -66,9 +72,33 @@ publish = ["internal:6379"]
 REDIS_PASSWORD = "change-me"
 ```
 
-If the repo carries its own `ply.toml`, the build lane needs none of the
-manifest fields — `repo` plus a `build` command is enough; the repo's
-manifest rules.
+### A repo tells the host how to build itself
+
+Most of the time a `repo=` order is far shorter than the block above,
+because the host learns how to build from the repo — those manifest fields
+are the fallback, not the norm. The host looks in two places, in order:
+
+- **the repo's own `ply.toml`** — the recipe rules, so the order is just
+  `repo =` plus the host overrides (`publish`/`domain`/`env`); no build or
+  entrypoint needed. Add a `build` command only if artifacts must be
+  compiled first.
+- **auto-detection**, when there is no `ply.toml` — the host recognises the
+  framework (Next.js standalone today) and fills the build command,
+  entrypoint, shipped files and port itself. Paste the URL and it deploys
+  as-is:
+
+  ```toml
+  # the whole order — the host detects Next.js and builds it
+  repo = "https://github.com/org/next-app"
+  publish = ["internal:3000"]
+  domain = ["app.example.com"]
+  ```
+
+  The dashboard and `ply ui` prefill that detected build command (and
+  `internal:3000`) into the deploy form, so you see and can tweak it before
+  it runs — nothing is hidden. Only a repo that is **neither** — no
+  `ply.toml`, no recognised framework — needs the fields spelled out, as in
+  the block above.
 
 The older spellings — `app`, `image`, `url`, `github` — still work and mean
 exactly what they meant; `from` normalizes into them. They were four names
@@ -167,14 +197,14 @@ publish = ["internal:5432"]
 [[service]]
 run = "git+https://github.com/you/api"
 name = "server"
-build = "npm ci && npm run build"
+build = "npm install && npm run build"
 after = ["db"]
 publish = ["internal:3001"]
 
 [[service]]
 run = "git+https://github.com/you/web"
 name = "web"
-build = "npm ci && npm run build"
+build = "npm install && npm run build"
 after = ["server"]
 publish = ["8080:3000"]
 ```
@@ -211,7 +241,7 @@ must be the repo's `ply.toml`.
 | `asset` | github lane: app name in `<asset>-<ver>-linux-<arch>.img`; default = deployment name |
 | `ref` | repo lane: branch or committish; default = remote HEAD |
 | `build`, `runtime` | repo lane: build command + toolchain keg (`node@24`) |
-| `entrypoint`, `include`, `port` | repo lane, when the repo has no `ply.toml` |
+| `entrypoint`, `include`, `port` | repo lane, only when the repo has no `ply.toml` and is no framework the host auto-detects (Next.js is detected) |
 | `token_file` / `deploy_key` | private-repo credential (PAT file / SSH key) |
 | `publish`, `domain`, `env`, `env_file`, `scale`, `after` | passed through to `ply run` |
 | | a relative `env_file` (`.env/site.env`) resolves against the deployments dir; omit it and `.env/<name>.env` is used when present |

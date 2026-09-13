@@ -299,7 +299,10 @@ and `Address in use` (a stray parent still holding the port).
 On a server, apps are DEPLOYMENT FILES: write
 `/var/lib/ply/deployments/<name>.toml` naming a source (`app =` registry,
 `github =` release assets, `repo =` build-on-host, `image =` local file)
-and `ply reconcile` — inotify + a 1-minute timer — converges to it.
+and `ply reconcile` — inotify + a 1-minute timer — converges to it. A
+`repo=` reads the repo's own `ply.toml` if it has one, else auto-detects a
+known framework (Next.js standalone) — so `repo =` + `publish` deploys many
+apps with no build/entrypoint spelled out; use `npm install`, not `npm ci`.
 Read the verdict at `deployments/.status/<name>.status`, the history at
 `/var/lib/ply/apps/events.log`, logs (dead builders included) at
 `/run/ply/logs/<app>.<n>.log`. Scale/restart are files under

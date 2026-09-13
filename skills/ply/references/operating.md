@@ -35,7 +35,7 @@ streams), `repo =` (clone + build on this host). Write atomically
 ```sh
 cat > /var/lib/ply/deployments/api.toml <<'EOF'
 repo = "https://github.com/org/api"
-build = "npm ci && npm run build"
+build = "npm install && npm run build"
 runtime = "node@24"
 entrypoint = ["node", "dist/index.js"]
 port = 3000
@@ -43,6 +43,14 @@ publish = ["internal:3000"]
 domain = ["api.example.com"]
 EOF
 ```
+
+Use `npm install`, not `npm ci`, in a `build`: `ci` aborts without a
+committed `package-lock.json`, `install` works either way. A `repo=` spec
+often needs far less than the block above — if the repo carries a `ply.toml`
+the recipe rules (just `repo =` + overrides), and if it has none but is a
+framework the host auto-detects (Next.js standalone today) the host fills
+build/entrypoint/port itself, so `repo =` + `publish` alone deploys it.
+Spell the fields out only for a repo that is neither.
 
 Then poll `.status/api.status` — expect `building @ <commit>…` then
 `deployed`/`rolled …`, or a failure with the reason. Do not retry in a
@@ -65,6 +73,11 @@ even with `auto = false`); editing = converge to the edit.
 
 Rollback = pin the spec: `version = "1.4.2"` (registry/github lanes) or
 `ref = "<commit>"` (repo lane). Remove the pin to follow latest again.
+
+Removing a deployment (delete its `.toml`) stops the app and cleans up after
+it — the build checkout, deploy dir and stored token go too. Data volumes
+are kept (a delete is not a data-loss trap); the image is reclaimed later by
+`ply gc`.
 
 ## Cautions
 

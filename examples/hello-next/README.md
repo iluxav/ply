@@ -44,4 +44,4 @@ build; for a memory-hungry `next build`, `sudo ply setup --swap 2G` lets the
 memory-fenced builder spill to swap instead of OOM-killing the build or
 evicting an app you are already serving. See the
 [deployments guide](https://plybox.sh/docs/deployments/) for a build-on-host
-deployment file (`repo = …` + `build = "npm ci && npm run build"`).
+deployment file (`repo = …` + `build = "npm install && npm run build"`).
