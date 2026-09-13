@@ -116,9 +116,9 @@ fn deploy_form_modal(f: &mut Frame, area: Rect, form: &DeployForm) {
         let content = format!("{shown}{cursor}");
         let pad = box_w.saturating_sub(content.chars().count());
         let (box_bg, box_fg) = if is_focus {
-            (Color::Rgb(0x3a, 0x2e, 0x18), Color::White)
+            (Color::Rgb(0x4d, 0x3b, 0x1c), Color::White) // warm, clearly focused
         } else {
-            (SEL_BG, Color::Rgb(0xBB, 0xBB, 0xBB))
+            (Color::Rgb(0x33, 0x33, 0x36), Color::Rgb(0xCC, 0xCC, 0xCC)) // a visible box on black
         };
         lines.push(Line::from(vec![
             Span::styled(format!("{label:<9} "), label_style),

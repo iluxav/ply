@@ -605,18 +605,13 @@ fn submit_form(app: &mut App) {
         form.domain.trim().to_string(),
     );
     match create_deployment(&source, &build, &token, &publish, &env, &domain) {
-        Ok(msg) => {
-            // Kick reconcile now so the build starts immediately instead of
-            // waiting for the watcher/timer beat — output muted so it can't
-            // corrupt the TUI. The deploy row shows a "deploying" spinner
-            // until reconcile writes a real status.
-            let _ = Command::new("ply")
-                .arg("reconcile")
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn();
-            app.status = format!("⟳ {msg}");
-        }
+        // The deployments watcher (ply-deployments.path → ply-reconcile.service)
+        // picks up the new order within seconds and builds it — serialized by
+        // systemd. We deliberately do NOT kick `ply reconcile` here: a direct
+        // run races the watcher on the same checkout ("shallow file has changed").
+        // The deploy row shows a "deploying" spinner until reconcile writes a
+        // real status.
+        Ok(msg) => app.status = format!("⟳ {msg}"),
         Err(e) => app.status = format!("✗ {e}"),
     }
     app.form = None;
