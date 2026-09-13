@@ -258,6 +258,43 @@ pub fn exec(args: crate::cli::ReconcileArgs) -> Result<()> {
     if changed_units {
         run("systemctl", &["daemon-reload"])?;
     }
+    // Volumes: publish the inventory the dashboard reads (it cannot see the
+    // volumes dir), and honour any reap it requested. Deleting a deployment
+    // keeps its data by default — reaping is opt-in, and only ever what was
+    // explicitly asked for here.
+    {
+        let sdir = deployments::status_dir();
+        let _ = std::fs::create_dir_all(&sdir);
+        let _ = std::fs::write(
+            sdir.join("volumes.json"),
+            crate::commands::volume::inventory_json().to_string(),
+        );
+        let reap_file = sdir.join("reap");
+        if let Ok(text) = std::fs::read_to_string(&reap_file) {
+            use crate::commands::volume::ReapOutcome;
+            let mut keep = Vec::new();
+            for app in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
+                match crate::commands::volume::reap(app) {
+                    ReapOutcome::Removed(bytes) => {
+                        println!("reaped volumes for {app} (freed {bytes} bytes)");
+                        ply_core::runtime::events::emit(
+                            app,
+                            "volume-reaped",
+                            &format!("freed {bytes} bytes (opt-in reclaim)"),
+                        );
+                    }
+                    // a live app: it must stop before its data can go — retry
+                    ReapOutcome::InUse => keep.push(app.to_string()),
+                    ReapOutcome::Missing => {}
+                }
+            }
+            if keep.is_empty() {
+                let _ = std::fs::remove_file(&reap_file);
+            } else {
+                let _ = std::fs::write(&reap_file, keep.join("\n") + "\n");
+            }
+        }
+    }
     // The notifier rides the same beat: read the events since last time and
     // deliver the subscribed ones. Best-effort — a delivery failure must
     // never fail a reconcile.

@@ -5,6 +5,20 @@ breaking changes, and known limitations. Write under **Unreleased** as work
 lands; `make release-cli` turns that heading into the version and date, and
 the release workflow publishes the entry as the GitHub release notes.
 
+## Unreleased
+
+### What changed
+- **Orphaned volumes are visible and reclaimable — data still never deleted on
+  its own.** Deleting a deployment keeps its volumes (config is not data), but
+  a leftover volume could silently be re-adopted by a new deployment reusing an
+  app name (a stale init-secret then fails auth with no hint). Reconcile now
+  publishes `deployments/.status/volumes.json` (the volume inventory, with
+  orphaned/idle/in-use status) so the dashboard can surface reclaimable data,
+  and honours an opt-in `deployments/.status/reap` request (app names, one per
+  line) to remove a stopped app's volumes — an audited `volume-reaped` event,
+  never a live app. The CLI opt-ins (`ply volume rm <app>/<vol>`,
+  `ply volume rm --orphans`) are unchanged.
+
 ## v0.1.101 — 2026-09-13
 
 ### What changed

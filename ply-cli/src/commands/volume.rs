@@ -143,6 +143,77 @@ fn scan(world: &World) -> Vec<Row> {
     rows
 }
 
+/// The volume inventory the dashboard reads from `.status/volumes.json` to
+/// surface orphaned data for reclaim. The dashboard cannot see the volumes
+/// dir (it is not granted), so reconcile publishes this each beat. Size is
+/// walked only for volumes NOT in use — a live database is not re-scanned
+/// every minute; a reclaim candidate (orphaned/idle) is small anyway.
+pub(crate) fn inventory_json() -> serde_json::Value {
+    let world = World::observe();
+    let root = ply_core::paths::volumes_dir();
+    let mut out = Vec::new();
+    if let Ok(apps) = std::fs::read_dir(&root) {
+        for app in apps.flatten() {
+            if !app.path().is_dir() {
+                continue;
+            }
+            let app_name = app.file_name().to_string_lossy().into_owned();
+            let Ok(vols) = std::fs::read_dir(app.path()) else {
+                continue;
+            };
+            for vol in vols.flatten() {
+                if !vol.path().is_dir() {
+                    continue;
+                }
+                let volume = vol.file_name().to_string_lossy().into_owned();
+                let slot = volume.rsplit('.').next().unwrap_or("");
+                let status = world.classify(&app_name, slot);
+                let bytes = if status == Status::InUse {
+                    None
+                } else {
+                    dir_size(&vol.path())
+                };
+                out.push(serde_json::json!({
+                    "app": app_name, "volume": volume,
+                    "status": status.as_str(), "bytes": bytes,
+                }));
+            }
+        }
+    }
+    serde_json::json!(out)
+}
+
+/// The outcome of reaping an app's volumes.
+pub(crate) enum ReapOutcome {
+    Removed(u64),
+    InUse,
+    Missing,
+}
+
+/// Remove every volume an app owns — the opt-in reclaim the dashboard
+/// requests via `.status/reap` (a reclaimed orphan, or a "delete + data"
+/// deployment). Refuses a live app so its data is never yanked out from
+/// under it; the caller retries once it has stopped. ply removes a volume
+/// only when explicitly asked — never on its own.
+pub(crate) fn reap(app: &str) -> ReapOutcome {
+    let world = World::observe();
+    if world.live_apps.contains(app) {
+        return ReapOutcome::InUse;
+    }
+    let dir = ply_core::paths::volumes_dir().join(app);
+    if !dir.is_dir() {
+        return ReapOutcome::Missing;
+    }
+    let freed = dir_size(&dir).unwrap_or(0);
+    match remove(&dir) {
+        Ok(()) => ReapOutcome::Removed(freed),
+        Err(e) => {
+            eprintln!("ply: reap {app}: {e}");
+            ReapOutcome::InUse
+        }
+    }
+}
+
 pub fn ls(args: &VolumeLsArgs) -> Result<()> {
     let rows = scan(&World::observe());
     if args.json {

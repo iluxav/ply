@@ -26,7 +26,7 @@ mod snapshot;
 mod stats;
 mod ui;
 mod up;
-mod volume;
+pub(crate) mod volume;
 mod why;
 
 use anyhow::Result;
