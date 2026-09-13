@@ -1323,15 +1323,7 @@ fn detect_deploy(checkout: &std::path::Path) -> Option<DetectedRecipe> {
     if has_dep("next") {
         return Some(DetectedRecipe {
             what: "Next.js (standalone)",
-            // Always `npm install`, never `npm ci`: ci needs a committed
-            // lockfile and, worse, an install *creates* one — so a later detect
-            // would flip to ci and fail. install works with or without a
-            // lockfile. Then build, and fold static/public into the standalone
-            // tree so they ship even without a postbuild step.
-            build: Some(
-                "npm install && npm run build && cp -r .next/static .next/standalone/.next/ && { [ -d public ] && cp -r public .next/standalone/ || true; }"
-                    .into(),
-            ),
+            build: Some(NEXTJS_BUILD.into()),
             entrypoint: vec!["node".into(), ".next/standalone/server.js".into()],
             include: vec![".next/standalone/".into()],
             runtime: "node@24".into(),
@@ -1340,6 +1332,14 @@ fn detect_deploy(checkout: &std::path::Path) -> Option<DetectedRecipe> {
     }
     None
 }
+
+/// The detected build command for a Next.js standalone app. Shared with the
+/// `ply ui` form so it can PREFILL the Build field (visible + editable),
+/// rather than the host silently deciding. Always `npm install`, never
+/// `npm ci`: ci needs a committed lockfile and an install *creates* one, so
+/// a lockfile-based choice flips and fails; install works either way. Then
+/// build, and fold static/public into the standalone tree.
+pub(crate) const NEXTJS_BUILD: &str = "npm install && npm run build && cp -r .next/static .next/standalone/.next/ && { [ -d public ] && cp -r public .next/standalone/ || true; }";
 
 fn build_from_repo(name: &str, spec: &Spec) -> Result<(PathBuf, String, bool)> {
     let repo = spec.repo.as_deref().expect("caller checked");
@@ -1384,23 +1384,13 @@ fn build_from_repo(name: &str, spec: &Spec) -> Result<(PathBuf, String, bool)> {
     }
 
     // build step, memory-fenced, toolchain from the registry
-    if let Some(raw_build) = &build_cmd {
+    if let Some(build) = &build_cmd {
         if let Some(d) = &detected {
             println!(
                 "{name}: no ply.toml — detected {}, building on this box",
                 d.what
             );
         }
-        // `npm ci` needs a committed package-lock.json; a repo without one
-        // always fails it. Do what the command means — install the deps — and
-        // say so, so a hand-typed `npm ci` on a lockless repo just works.
-        let build = if raw_build.contains("npm ci") && !checkout.join("package-lock.json").exists()
-        {
-            println!("{name}: no package-lock.json — using `npm install` in place of `npm ci`");
-            raw_build.replace("npm ci", "npm install")
-        } else {
-            raw_build.clone()
-        };
         let runtime = build_runtime.as_str();
         let (rt_name, rt_version) = match runtime.split_once('@') {
             Some((n, v)) => (n, v),

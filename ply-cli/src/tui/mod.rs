@@ -537,10 +537,21 @@ fn inspect_repo(app: &mut App) {
             }
         }
         Ok(None) => {
-            // No ply.toml — will the host auto-detect the framework?
+            // No ply.toml — recognize the framework and PREFILL the fields
+            // (visible + editable), rather than the host deciding silently.
             app.status = match fetch_repo_file(&owner, &repo, "package.json", &token) {
                 Ok(Some(pkg)) if pkg.contains("\"next\"") => {
-                    format!("✓ {repo}: no ply.toml — Next.js detected, deploys as-is (built here)")
+                    if let Some(form) = app.form.as_mut() {
+                        if form.build.trim().is_empty() {
+                            form.build = crate::commands::reconcile::NEXTJS_BUILD.to_string();
+                        }
+                        if form.publish.trim().is_empty() {
+                            form.publish = "internal:3000".into();
+                        }
+                    }
+                    format!(
+                        "✓ {repo}: Next.js detected — Build & Publish prefilled (edit as you like)"
+                    )
                 }
                 Ok(Some(_)) => {
                     format!("{repo}: no ply.toml — a Node app; set a Build command, or run `ply init` and commit the ply.toml")

@@ -16,7 +16,7 @@ mod lifecycle;
 mod logs;
 mod notify;
 mod ps;
-mod reconcile;
+pub(crate) mod reconcile;
 mod run;
 mod search;
 mod secret;
