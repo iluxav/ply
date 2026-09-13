@@ -787,11 +787,14 @@ fn remove_app(name: &str) -> anyhow::Result<String> {
         removed.push("unit");
     }
     let _ = Command::new("ply").args(["rm", name]).output();
+    // Also drop the build checkout, image hardlinks, and secrets — volumes
+    // (data) are kept.
+    crate::commands::reconcile::cleanup_deploy_artifacts(name);
     if removed.is_empty() {
         Ok(format!("removed {name} (stopped; volumes kept)"))
     } else {
         Ok(format!(
-            "removed {name} — deleted {} + stopped (volumes kept)",
+            "removed {name} — deleted {} + build cache + stopped (volumes kept)",
             removed.join(" + ")
         ))
     }
@@ -806,7 +809,10 @@ fn remove_deployment(name: &str) -> anyhow::Result<String> {
     std::fs::remove_file(&spec)?;
     let _ = std::fs::remove_file(ply_core::deployments::status_path(name));
     let _ = Command::new("ply").args(["rm", name]).output();
-    Ok(format!("deleted deployment {name} (reconcile stops it)"))
+    crate::commands::reconcile::cleanup_deploy_artifacts(name);
+    Ok(format!(
+        "deleted {name} — spec, build cache & secrets removed, stopped (volumes kept)"
+    ))
 }
 
 /// Set (or, blank, clear) a deployment's `build =` command — the on-host build

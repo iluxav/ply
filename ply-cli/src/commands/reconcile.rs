@@ -239,6 +239,7 @@ pub fn exec(args: crate::cli::ReconcileArgs) -> Result<()> {
         let _ = run("systemctl", &["disable", "--now", &format!("ply-{stem}")]);
         let _ = std::fs::remove_file(entry.path());
         let _ = std::fs::remove_file(deployments::status_path(stem));
+        cleanup_deploy_artifacts(stem);
         changed_units = true;
     }
 
@@ -1207,6 +1208,22 @@ fn read_token(spec: &Spec) -> Result<Option<String>> {
 /// Lane 2: clone/fetch, build in a fenced ply container, `ply build` the
 /// checkout. The checkout persists — node_modules and framework caches ARE
 /// the cache, so first build pays full price and the rest are incremental.
+/// Remove a deployment's build/deploy/secret artifacts when it is deleted —
+/// the repo checkout under `builds/<name>` (clone + node_modules + build
+/// output, often hundreds of MB), the named-image hardlinks under
+/// `deploys/<name>`, and its minted secrets + private-repo token under
+/// `.secrets/`. Data VOLUMES are deliberately left alone. The store `.img`
+/// is `ply gc`'s job. Best-effort; called by the reconcile sweep (any removal
+/// path) and by `ply ui` immediately.
+pub(crate) fn cleanup_deploy_artifacts(name: &str) {
+    let _ = ply_core::paths::force_remove_dir_all(&PathBuf::from("/var/lib/ply/builds").join(name));
+    let _ =
+        ply_core::paths::force_remove_dir_all(&PathBuf::from("/var/lib/ply/deploys").join(name));
+    let secrets = deployments::dir().join(".secrets");
+    let _ = ply_core::paths::force_remove_dir_all(&secrets.join(name));
+    let _ = std::fs::remove_file(secrets.join(format!("{name}.token")));
+}
+
 /// Clone (once) or fetch the deployment's repo into
 /// `/var/lib/ply/builds/<name>`, reset to the requested ref, and clean the
 /// tree while preserving the build caches (node_modules, target, …).
