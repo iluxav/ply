@@ -5,7 +5,7 @@ breaking changes, and known limitations. Write under **Unreleased** as work
 lands; `make release-cli` turns that heading into the version and date, and
 the release workflow publishes the entry as the GitHub release notes.
 
-## Unreleased
+## v0.1.100 — 2026-09-13
 
 ### Fixes
 - **A composition's `git+` members no longer rebuild on every reconcile beat.**
