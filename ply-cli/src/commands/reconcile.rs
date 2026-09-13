@@ -1384,13 +1384,23 @@ fn build_from_repo(name: &str, spec: &Spec) -> Result<(PathBuf, String, bool)> {
     }
 
     // build step, memory-fenced, toolchain from the registry
-    if let Some(build) = &build_cmd {
+    if let Some(raw_build) = &build_cmd {
         if let Some(d) = &detected {
             println!(
                 "{name}: no ply.toml — detected {}, building on this box",
                 d.what
             );
         }
+        // `npm ci` needs a committed package-lock.json; a repo without one
+        // always fails it. Do what the command means — install the deps — and
+        // say so, so a hand-typed `npm ci` on a lockless repo just works.
+        let build = if raw_build.contains("npm ci") && !checkout.join("package-lock.json").exists()
+        {
+            println!("{name}: no package-lock.json — using `npm install` in place of `npm ci`");
+            raw_build.replace("npm ci", "npm install")
+        } else {
+            raw_build.clone()
+        };
         let runtime = build_runtime.as_str();
         let (rt_name, rt_version) = match runtime.split_once('@') {
             Some((n, v)) => (n, v),
