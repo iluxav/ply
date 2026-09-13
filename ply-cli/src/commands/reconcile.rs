@@ -144,6 +144,18 @@ pub fn exec(args: crate::cli::ReconcileArgs) -> Result<()> {
                                 if stack.env_file.is_none() {
                                     stack.env_file = spec.env_file.clone();
                                 }
+                                // Surface the deployed composition recipe where
+                                // the dashboard can read it — it mounts the
+                                // deployments dir, not builds/ — so a stack's
+                                // "what is this?" is one read-only file away.
+                                {
+                                    let sdir = deployments::status_dir();
+                                    let _ = std::fs::create_dir_all(&sdir);
+                                    let _ = std::fs::copy(
+                                        checkout.join("ply.toml"),
+                                        sdir.join(format!("{name}.stack.toml")),
+                                    );
+                                }
                                 converge_stack(
                                     &name,
                                     stack,
@@ -391,19 +403,9 @@ fn converge_stack_ref(
         stack.env_file = Some(ef.clone());
     }
 
-    let members: Vec<String> = stack.members.iter().map(|m| m.name.clone()).collect();
+    // `.members` is written by converge_stack now (both lanes), after it
+    // converges — so a fetch failure above keeps the last-known membership.
     converge_stack(name, stack, desired, app_names, changed_units);
-
-    // Written only after a converge: the file answers "what did this stack
-    // own when we last actually knew?", which is the question the failure
-    // path above asks.
-    let dir = deployments::status_dir();
-    if std::fs::create_dir_all(&dir).is_ok() {
-        let tmp = dir.join(format!(".{name}.members.tmp"));
-        if std::fs::write(&tmp, members.join("\n") + "\n").is_ok() {
-            let _ = std::fs::rename(&tmp, &remembered);
-        }
-    }
 }
 
 fn converge_stack(
@@ -603,6 +605,18 @@ fn converge_stack(
                 eprintln!("ply: reconcile {member}: {e:#}");
                 errs.push(format!("{member}: {e}"));
             }
+        }
+    }
+    // Remember which apps this stack owns, so the deployments dir the dashboard
+    // mounts carries the membership it groups by — a `repo=` composition reaches
+    // here too, not only the `stack=` ref lane. Written after the converge: it
+    // answers "what did this stack own when we last actually knew?".
+    let member_names: Vec<&str> = stack.members.iter().map(|m| m.name.as_str()).collect();
+    let sdir = deployments::status_dir();
+    if std::fs::create_dir_all(&sdir).is_ok() {
+        let tmp = sdir.join(format!(".{name}.members.tmp"));
+        if std::fs::write(&tmp, member_names.join("\n") + "\n").is_ok() {
+            let _ = std::fs::rename(&tmp, sdir.join(format!("{name}.members")));
         }
     }
     write_stack_status(name, oks, &errs);
@@ -1222,6 +1236,11 @@ pub(crate) fn cleanup_deploy_artifacts(name: &str) {
     let secrets = deployments::dir().join(".secrets");
     let _ = ply_core::paths::force_remove_dir_all(&secrets.join(name));
     let _ = std::fs::remove_file(secrets.join(format!("{name}.token")));
+    // the stack membership + recipe the dashboard reads (written by
+    // converge_stack / the repo= composition lane) retire with the deployment
+    let status = deployments::status_dir();
+    let _ = std::fs::remove_file(status.join(format!("{name}.members")));
+    let _ = std::fs::remove_file(status.join(format!("{name}.stack.toml")));
 }
 
 /// Clone (once) or fetch the deployment's repo into

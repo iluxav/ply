@@ -5,6 +5,17 @@ breaking changes, and known limitations. Write under **Unreleased** as work
 lands; `make release-cli` turns that heading into the version and date, and
 the release workflow publishes the entry as the GitHub release notes.
 
+## Unreleased
+
+### What changed
+- **A stack deployment now surfaces its membership and recipe as files.** Every
+  composition (both the `stack=` ref lane and a `repo=` composition) writes
+  `deployments/.status/<name>.members` (its member app names), and a `repo=`
+  composition also writes `deployments/.status/<name>.stack.toml` (the deployed
+  recipe, verbatim). Both retire with the deployment. The dashboard mounts the
+  deployments dir, so it can now group a stack's apps and show its recipe
+  read-only without reading `builds/` or GitHub.
+
 ## v0.1.100 — 2026-09-13
 
 ### Fixes
