@@ -18,6 +18,17 @@ const MUTED: Color = Color::Rgb(0x88, 0x88, 0x88);
 const RED: Color = Color::Rgb(0xE0, 0x6A, 0x6A);
 const SEL_BG: Color = Color::Rgb(0x26, 0x26, 0x26);
 
+/// A braille spinner frame from the wall clock. The render loop redraws every
+/// ~120ms, so this animates on its own with no extra state.
+fn spinner() -> &'static str {
+    const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    let ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    FRAMES[((ms / 100) as usize) % FRAMES.len()]
+}
+
 pub fn render(f: &mut Frame, app: &App) {
     let rows = Layout::vertical([
         Constraint::Length(1), // header
@@ -82,8 +93,9 @@ fn deploy_form_modal(f: &mut Frame, area: Rect, form: &DeployForm) {
     lines.push(Line::from(spans));
     lines.push(Line::from(""));
 
-    // --- fields ---
+    // --- fields (filled input boxes) ---
     let focused = form.focused_field();
+    let box_w = (inner.width as usize).saturating_sub(12).max(10);
     for &field in &fields {
         let (label, _) = form.field_meta(field);
         let is_focus = focused == Some(field);
@@ -98,12 +110,23 @@ fn deploy_form_modal(f: &mut Frame, area: Rect, form: &DeployForm) {
         } else {
             Style::new().fg(MUTED)
         };
-        let mut row = vec![Span::styled(format!("{label:<9} "), label_style)];
-        row.push(Span::raw(shown));
-        if is_focus {
-            row.push(Span::styled("▏", Style::new().fg(ORANGE)));
-        }
-        lines.push(Line::from(row));
+        // the input area: value + cursor, padded on a filled background so it
+        // reads as a real field. Focused = warm bg + white text + cursor.
+        let cursor = if is_focus { "▏" } else { "" };
+        let content = format!("{shown}{cursor}");
+        let pad = box_w.saturating_sub(content.chars().count());
+        let (box_bg, box_fg) = if is_focus {
+            (Color::Rgb(0x3a, 0x2e, 0x18), Color::White)
+        } else {
+            (SEL_BG, Color::Rgb(0xBB, 0xBB, 0xBB))
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!("{label:<9} "), label_style),
+            Span::styled(
+                format!(" {content}{} ", " ".repeat(pad)),
+                Style::new().fg(box_fg).bg(box_bg),
+            ),
+        ]));
     }
     lines.push(Line::from(""));
 
@@ -642,7 +665,24 @@ fn deploy(f: &mut Frame, area: Rect, app: &App) {
     let mut lines = Vec::new();
     for (i, d) in app.snap.deploys.iter().enumerate() {
         let sel = i == app.deploy_sel;
-        let (dot, dc) = if d.ok { ("● ", GREEN) } else { ("✗ ", RED) };
+        // A freshly-created or mid-build deployment is "deploying", not failed
+        // — show an amber spinner, not a red ✗.
+        let deploying = d.detail == "no status yet"
+            || d.detail.starts_with("building")
+            || d.detail.contains("deploying")
+            || d.detail.contains("cloning");
+        let (dot, dc): (String, _) = if deploying {
+            (format!("{} ", spinner()), ORANGE)
+        } else if d.ok {
+            ("● ".into(), GREEN)
+        } else {
+            ("✗ ".into(), RED)
+        };
+        let detail = if deploying && d.detail == "no status yet" {
+            "deploying… (building on this box)".to_string()
+        } else {
+            d.detail.clone()
+        };
         let name_style = if sel {
             Style::new().fg(Color::White).add_modifier(Modifier::BOLD)
         } else {
@@ -656,7 +696,7 @@ fn deploy(f: &mut Frame, area: Rect, app: &App) {
         if let Some(v) = &d.version {
             head.push(Span::styled(format!("@{v} "), Style::new().fg(ORANGE)));
         }
-        head.push(Span::styled(d.detail.clone(), Style::new().fg(dc)));
+        head.push(Span::styled(detail, Style::new().fg(dc)));
         lines.push(Line::from(head));
         lines.push(Line::from(vec![
             Span::raw("    "),

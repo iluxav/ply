@@ -437,41 +437,149 @@ fn open_new_deployment(app: &mut App) {
 /// Drive the new-deployment form: Tab/↑↓ move focus, ←→ change source, typing
 /// edits the focused field, Enter deploys, Esc cancels.
 fn handle_form_key(app: &mut App, code: KeyCode) {
-    let Some(form) = app.form.as_mut() else {
+    // Tabbing off the repo URL (or token) inspects the repo and prefills.
+    let inspect_after;
+    {
+        let Some(form) = app.form.as_mut() else {
+            return;
+        };
+        let count = form.focus_count();
+        let leaving_url = form.source == 0
+            && matches!(
+                form.focused_field(),
+                Some(FormField::Value) | Some(FormField::Token)
+            );
+        let mut moved = false;
+        match code {
+            KeyCode::Esc => {
+                app.form = None;
+                app.status = "cancelled".into();
+                return;
+            }
+            KeyCode::Tab | KeyCode::Down => {
+                form.focus = (form.focus + 1) % count;
+                moved = true;
+            }
+            KeyCode::BackTab | KeyCode::Up => {
+                form.focus = (form.focus + count - 1) % count;
+                moved = true;
+            }
+            KeyCode::Left if form.is_source_focus() => {
+                form.source = (form.source + SOURCES.len() - 1) % SOURCES.len();
+            }
+            KeyCode::Right if form.is_source_focus() => {
+                form.source = (form.source + 1) % SOURCES.len();
+            }
+            KeyCode::Enter => {
+                if form.is_source_focus() {
+                    form.focus = 1; // picked a source → jump to its first field
+                } else {
+                    submit_form(app);
+                    return;
+                }
+            }
+            KeyCode::Backspace => {
+                if let Some(f) = form.focused_field() {
+                    form.value_mut(f).pop();
+                }
+            }
+            KeyCode::Char(c) => {
+                if let Some(f) = form.focused_field() {
+                    form.value_mut(f).push(c);
+                }
+            }
+            _ => {}
+        }
+        inspect_after = moved && leaving_url && !form.value.trim().is_empty();
+    }
+    if inspect_after {
+        inspect_repo(app);
+    }
+}
+
+/// Fetch the repo's ply.toml and prefill/annotate the form: publish from a
+/// declared port, a note for a composition, or a hint when there's no
+/// ply.toml. Best-effort — a failure just leaves the fields for the user.
+fn inspect_repo(app: &mut App) {
+    let (url, token) = match app.form.as_ref() {
+        Some(f) if f.source == 0 => (f.value.trim().to_string(), f.token.trim().to_string()),
+        _ => return,
+    };
+    let Some((owner, repo)) = parse_github(&url) else {
         return;
     };
-    let count = form.focus_count();
-    match code {
-        KeyCode::Esc => {
-            app.form = None;
-            app.status = "cancelled".into();
-        }
-        KeyCode::Tab | KeyCode::Down => form.focus = (form.focus + 1) % count,
-        KeyCode::BackTab | KeyCode::Up => form.focus = (form.focus + count - 1) % count,
-        KeyCode::Left if form.is_source_focus() => {
-            form.source = (form.source + SOURCES.len() - 1) % SOURCES.len();
-        }
-        KeyCode::Right if form.is_source_focus() => {
-            form.source = (form.source + 1) % SOURCES.len();
-        }
-        KeyCode::Enter => {
-            if form.is_source_focus() {
-                form.focus = 1; // picked a source → jump to its first field
-            } else {
-                submit_form(app);
+    match fetch_ply_toml(&owner, &repo, &token) {
+        Ok(Some(text)) => {
+            if let Ok(Some(stack)) = ply_core::stack::parse(&text, std::path::Path::new("ply.toml"))
+            {
+                app.status = format!(
+                    "✓ {repo}: composition · {} services (deployed as a set)",
+                    stack.members.len()
+                );
+                return;
+            }
+            match ply_core::manifest::Manifest::parse(&text) {
+                Ok(m) => {
+                    let port = m.ports.values().next().copied();
+                    if let (Some(p), Some(form)) = (port, app.form.as_mut()) {
+                        if form.publish.trim().is_empty() {
+                            form.publish = format!("internal:{p}");
+                        }
+                    }
+                    app.status = match port {
+                        Some(p) => format!(
+                            "✓ {repo}: app · port {p} — publish prefilled internal:{p} (edit for a public port like 8080:{p})"
+                        ),
+                        None => format!("✓ {repo}: app (no declared port)"),
+                    };
+                }
+                Err(e) => app.status = format!("✗ {repo}: ply.toml didn't parse — {e}"),
             }
         }
-        KeyCode::Backspace => {
-            if let Some(f) = form.focused_field() {
-                form.value_mut(f).pop();
-            }
+        Ok(None) => {
+            app.status =
+                format!("{repo}: no ply.toml — set a Build command, or it must be ply-native")
         }
-        KeyCode::Char(c) => {
-            if let Some(f) = form.focused_field() {
-                form.value_mut(f).push(c);
-            }
+        Err(e) => {
+            app.status = format!("couldn't read {repo}/ply.toml — {e} (private? add a Token)")
         }
-        _ => {}
+    }
+}
+
+/// `(owner, repo)` from a github URL or ssh shorthand; None if not github.
+fn parse_github(url: &str) -> Option<(String, String)> {
+    let s = url.trim().trim_end_matches('/');
+    let rest = s
+        .strip_prefix("https://github.com/")
+        .or_else(|| s.strip_prefix("http://github.com/"))
+        .or_else(|| s.strip_prefix("git+https://github.com/"))
+        .or_else(|| s.strip_prefix("git@github.com:"))?;
+    let rest = rest.strip_suffix(".git").unwrap_or(rest);
+    let mut it = rest.split('/');
+    let owner = it.next()?.to_string();
+    let repo = it.next()?.to_string();
+    (!owner.is_empty() && !repo.is_empty()).then_some((owner, repo))
+}
+
+/// GET the repo's ply.toml via the GitHub contents API (works for public and,
+/// with a token, private). `Ok(None)` = no ply.toml (404).
+fn fetch_ply_toml(owner: &str, repo: &str, token: &str) -> Result<Option<String>, String> {
+    let url = format!("https://api.github.com/repos/{owner}/{repo}/contents/ply.toml");
+    let mut req = ureq::get(&url)
+        .header("User-Agent", "ply")
+        .header("Accept", "application/vnd.github.raw+json");
+    if !token.is_empty() {
+        req = req.header("Authorization", &format!("Bearer {token}"));
+    }
+    match req.call() {
+        Ok(mut resp) => resp
+            .body_mut()
+            .read_to_string()
+            .map(Some)
+            .map_err(|e| e.to_string()),
+        Err(ureq::Error::StatusCode(404)) => Ok(None),
+        Err(ureq::Error::StatusCode(c)) => Err(format!("HTTP {c}")),
+        Err(e) => Err(e.to_string()),
     }
 }
 
@@ -496,10 +604,21 @@ fn submit_form(app: &mut App) {
         form.env.trim().to_string(),
         form.domain.trim().to_string(),
     );
-    app.status = match create_deployment(&source, &build, &token, &publish, &env, &domain) {
-        Ok(msg) => format!("✓ {msg}"),
-        Err(e) => format!("✗ {e}"),
-    };
+    match create_deployment(&source, &build, &token, &publish, &env, &domain) {
+        Ok(msg) => {
+            // Kick reconcile now so the build starts immediately instead of
+            // waiting for the watcher/timer beat — output muted so it can't
+            // corrupt the TUI. The deploy row shows a "deploying" spinner
+            // until reconcile writes a real status.
+            let _ = Command::new("ply")
+                .arg("reconcile")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn();
+            app.status = format!("⟳ {msg}");
+        }
+        Err(e) => app.status = format!("✗ {e}"),
+    }
     app.form = None;
     app.reload();
 }
