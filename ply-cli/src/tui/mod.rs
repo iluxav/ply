@@ -50,15 +50,37 @@ pub(crate) struct Input {
     target: InputTarget,
 }
 
+/// Where a new deployment's app comes from. Two ergonomic sources, matching
+/// the self-host expectations: build a repo on this box (Heroku/Coolify), or
+/// follow a prebuilt image (registry / CI). Both take the same overrides and
+/// both follow-latest by default.
+#[derive(Clone)]
+enum DeploySource {
+    Repo(String),  // `repo = "<url>"` — the host clones & builds it, then follows pushes
+    App(String),   // `app = "<ns/name>"` — a published image, follows the newest version
+    Image(String), // `image = "<url|path>"` — a fixed image file/URL
+}
+
 enum InputTarget {
-    AddDomain(String),                             // the app the domain is for
-    NewDeployUrl,                                  // step 1: the GitHub URL
-    NewDeployPublish { url: String },              // step 2: publish override
-    NewDeployEnv { url: String, publish: String }, // step 3: env, then create
-    PinVersion(String),                            // the deployment to pin/roll back
-    SetBuild(String),                              // the deployment to set a `build =` command on
-    RemoveApp(String),                             // stop + remove an app (typed-yes confirm)
-    RemoveDeployment(String),                      // delete a deployment spec (typed-yes confirm)
+    AddDomain(String), // the app the domain is for
+    // New-deployment guided flow: source → publish → env → domain → create.
+    NewSourceChoice,                         // step 1/5: g / r / i
+    NewSourceValue(SourceKind),              // step 2/5: the url/ref/path
+    NewPublish(DeploySource),                // step 3/5: publish override
+    NewEnv(DeploySource, String),            // step 4/5: env override
+    NewDomain(DeploySource, String, String), // step 5/5: domain, then create
+    PinVersion(String),                      // the deployment to pin/roll back
+    SetBuild(String),                        // the deployment to set a `build =` command on
+    RemoveApp(String),                       // stop + remove an app (typed-yes confirm)
+    RemoveDeployment(String),                // delete a deployment spec (typed-yes confirm)
+}
+
+/// Which source the user picked at step 1, before they enter its value.
+#[derive(Clone, Copy)]
+enum SourceKind {
+    Repo,
+    App,
+    Image,
 }
 
 impl App {
@@ -287,10 +309,11 @@ fn open_add_domain(app: &mut App, name: String) {
 
 fn open_new_deployment(app: &mut App) {
     app.input = Some(Input {
-        title: "new deployment (1/3)".into(),
-        prompt: "GitHub repo URL — the host clones & builds this repo's ply.toml".into(),
+        title: "new deployment (1/5) · source".into(),
+        prompt: "g = GitHub repo (build on this box)   r = registry app (ns/name)   i = image url"
+            .into(),
         buffer: String::new(),
-        target: InputTarget::NewDeployUrl,
+        target: InputTarget::NewSourceChoice,
     });
 }
 
@@ -369,31 +392,74 @@ fn apply_input(app: &mut App, input: Input) {
             };
             app.reload();
         }
-        InputTarget::NewDeployUrl => {
-            let url = input.buffer.trim().to_string();
-            if url.is_empty() {
-                app.status = "cancelled — no URL entered".into();
+        InputTarget::NewSourceChoice => {
+            let (kind, title, prompt) = match input.buffer.trim().to_ascii_lowercase().as_str() {
+                "g" | "github" | "repo" => (
+                    SourceKind::Repo,
+                    "new deployment (2/5) · repo",
+                    "GitHub repo URL — the host clones & builds it, then follows pushes",
+                ),
+                "r" | "registry" | "app" => (
+                    SourceKind::App,
+                    "new deployment (2/5) · registry",
+                    "published app, e.g. iluxav/web — follows the newest version",
+                ),
+                "i" | "image" => (
+                    SourceKind::Image,
+                    "new deployment (2/5) · image",
+                    "image URL or path, e.g. https://…/app.img",
+                ),
+                _ => {
+                    app.status = "cancelled — pick g, r, or i".into();
+                    return;
+                }
+            };
+            app.input = Some(Input {
+                title: title.into(),
+                prompt: prompt.into(),
+                buffer: String::new(),
+                target: InputTarget::NewSourceValue(kind),
+            });
+        }
+        InputTarget::NewSourceValue(kind) => {
+            let value = input.buffer.trim().to_string();
+            if value.is_empty() {
+                app.status = "cancelled — nothing entered".into();
                 return;
             }
+            let source = match kind {
+                SourceKind::Repo => DeploySource::Repo(value),
+                SourceKind::App => DeploySource::App(value),
+                SourceKind::Image => DeploySource::Image(value),
+            };
             app.input = Some(Input {
-                title: "new deployment (2/3)".into(),
+                title: "new deployment (3/5) · publish".into(),
                 prompt: "publish, e.g. 8080:3000 or internal:3000  (blank = none)".into(),
                 buffer: String::new(),
-                target: InputTarget::NewDeployPublish { url },
+                target: InputTarget::NewPublish(source),
             });
         }
-        InputTarget::NewDeployPublish { url } => {
+        InputTarget::NewPublish(source) => {
             let publish = input.buffer.trim().to_string();
             app.input = Some(Input {
-                title: "new deployment (3/3)".into(),
+                title: "new deployment (4/5) · env".into(),
                 prompt: "env, KEY=VAL comma-separated  (blank = none)".into(),
                 buffer: String::new(),
-                target: InputTarget::NewDeployEnv { url, publish },
+                target: InputTarget::NewEnv(source, publish),
             });
         }
-        InputTarget::NewDeployEnv { url, publish } => {
+        InputTarget::NewEnv(source, publish) => {
             let env = input.buffer.trim().to_string();
-            app.status = match new_deployment(&url, &publish, &env) {
+            app.input = Some(Input {
+                title: "new deployment (5/5) · domain".into(),
+                prompt: "domain, e.g. app.example.com  (blank = none)".into(),
+                buffer: String::new(),
+                target: InputTarget::NewDomain(source, publish, env),
+            });
+        }
+        InputTarget::NewDomain(source, publish, env) => {
+            let domain = input.buffer.trim().to_string();
+            app.status = match create_deployment(&source, &publish, &env, &domain) {
                 Ok(msg) => format!("✓ {msg}"),
                 Err(e) => format!("✗ {e}"),
             };
@@ -513,19 +579,47 @@ fn set_build(name: &str, cmd: &str) -> anyhow::Result<String> {
 /// Create a build-on-host deployment from a GitHub URL. Writing the spec into
 /// the deployments dir is enough — the `ply-deployments.path` unit reconciles
 /// it (clone + build + run), so this does not block on the build.
-fn new_deployment(url: &str, publish: &str, env: &str) -> anyhow::Result<String> {
-    let name = deploy_name_from_url(url);
+/// Write a deployment order from a chosen source + overrides. One shape for
+/// all three sources: a source line (`repo`/`app`/`image`), then the shared
+/// overrides (publish, env, domain). Every source follows-latest by default
+/// (the Spec default `auto = true`), so nothing extra is written for it.
+fn create_deployment(
+    source: &DeploySource,
+    publish: &str,
+    env: &str,
+    domain: &str,
+) -> anyhow::Result<String> {
+    let (source_line, name, hint) = match source {
+        DeploySource::Repo(url) => (
+            format!("repo = \"{url}\"\n"),
+            deploy_name_from_url(url),
+            " — press b to set a build command if it needs one (Next.js/TS)",
+        ),
+        DeploySource::App(reference) => (
+            format!("app = \"{reference}\"\n"),
+            deploy_name_from_ref(reference),
+            " — follows the newest published version",
+        ),
+        DeploySource::Image(url) => (
+            format!("image = \"{url}\"\n"),
+            deploy_name_from_url(url),
+            "",
+        ),
+    };
     if name.is_empty() {
-        anyhow::bail!("could not derive a name from {url}");
+        anyhow::bail!("could not derive a name from the source");
     }
     let dir = ply_core::deployments::dir();
     let path = dir.join(format!("{name}.toml"));
     if path.exists() {
         anyhow::bail!("a deployment named {name} already exists");
     }
-    let mut spec = format!("repo = \"{url}\"\n");
+    let mut spec = source_line;
     if !publish.is_empty() {
         spec.push_str(&format!("publish = [\"{publish}\"]\n"));
+    }
+    if !domain.is_empty() {
+        spec.push_str(&format!("domain = [\"{domain}\"]\n"));
     }
     let pairs: Vec<(&str, &str)> = env
         .split(',')
@@ -541,9 +635,28 @@ fn new_deployment(url: &str, publish: &str, env: &str) -> anyhow::Result<String>
     }
     std::fs::create_dir_all(&dir)?;
     std::fs::write(&path, spec)?;
-    Ok(format!(
-        "created {name} — press b to set a build command if it needs one (Next.js/TS)"
-    ))
+    Ok(format!("created {name}{hint}"))
+}
+
+/// A deployment name from a registry ref: the package tail (`iluxav/web` →
+/// `web`), sanitized to the deployment-name grammar.
+fn deploy_name_from_ref(reference: &str) -> String {
+    reference
+        .split('@')
+        .next()
+        .unwrap_or(reference)
+        .rsplit('/')
+        .find(|s| !s.is_empty())
+        .unwrap_or("")
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect()
 }
 
 fn deploy_name_from_url(url: &str) -> String {
@@ -707,7 +820,28 @@ fn journal(terminal: &mut DefaultTerminal, app: &mut App, unit: &str) {
 #[cfg(test)]
 mod tests {
     use super::data::{AppRow, Host, InstanceRow, ServiceStatus, Snapshot};
-    use super::{data, view, App, Tab};
+    use super::{data, deploy_name_from_ref, deploy_name_from_url, view, App, Tab};
+
+    #[test]
+    fn deployment_name_derivation() {
+        // registry refs → the package tail, version stripped
+        assert_eq!(deploy_name_from_ref("iluxav/web"), "web");
+        assert_eq!(deploy_name_from_ref("iluxav/web@1.2.0"), "web");
+        assert_eq!(deploy_name_from_ref("postgres@17"), "postgres");
+        // repo / image URLs → the basename, .git stripped, sanitized
+        assert_eq!(
+            deploy_name_from_url("https://github.com/iluxav/rm-web"),
+            "rm-web"
+        );
+        assert_eq!(
+            deploy_name_from_url("https://github.com/iluxav/rm-web.git"),
+            "rm-web"
+        );
+        assert_eq!(
+            deploy_name_from_url("https://cdn.example.com/app.img"),
+            "app-img"
+        );
+    }
     use ply_core::runtime::events::Event;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;

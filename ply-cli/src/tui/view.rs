@@ -528,7 +528,7 @@ fn deploy(f: &mut Frame, area: Rect, app: &App) {
     if app.snap.deploys.is_empty() {
         f.render_widget(
             Paragraph::new(Line::from(Span::styled(
-                "none yet — press n to deploy from a GitHub URL (the host clones & builds it)",
+                "none yet — press n to deploy: a GitHub repo (built here), a registry app, or an image",
                 Style::new().fg(MUTED),
             ))),
             inner,
