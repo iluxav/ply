@@ -1358,6 +1358,23 @@ fn detect_deploy(checkout: &std::path::Path) -> Option<DetectedRecipe> {
 /// build, and fold static/public into the standalone tree.
 pub(crate) const NEXTJS_BUILD: &str = "npm install && npm run build && cp -r .next/static .next/standalone/.next/ && { [ -d public ] && cp -r public .next/standalone/ || true; }";
 
+/// The image a previous build of this checkout produced — returned only when
+/// the commit+spec `fingerprint` still matches AND that exact image file is
+/// still on disk. `None` means "rebuild". Keyed on the recorded image PATH
+/// rather than a name derived from the member: a member's name need not equal
+/// its repo's package name (a composition member `server` built from package
+/// `qa-server`), and deriving the name mismatched, so every `git+` member
+/// rebuilt on every reconcile beat.
+fn current_build(checkout: &Path, fingerprint: &str) -> Option<PathBuf> {
+    let built = checkout.join(".ply-build/built");
+    if std::fs::read_to_string(&built).unwrap_or_default() != fingerprint {
+        return None;
+    }
+    let image = std::fs::read_to_string(checkout.join(".ply-build/image")).ok()?;
+    let image = PathBuf::from(image.trim());
+    (!image.as_os_str().is_empty() && image.exists()).then_some(image)
+}
+
 fn build_from_repo(name: &str, spec: &Spec) -> Result<(PathBuf, String, bool)> {
     let repo = spec.repo.as_deref().expect("caller checked");
     let (checkout, commit) = sync_repo(name, spec)?;
@@ -1382,20 +1399,18 @@ fn build_from_repo(name: &str, spec: &Spec) -> Result<(PathBuf, String, bool)> {
         .or_else(|| detected.as_ref().map(|d| d.runtime.clone()))
         .unwrap_or_else(|| "node@24".into());
 
-    // Nothing new to build? (same commit, same spec, image exists) — skip:
-    // reconcile fires for every dir change including OTHER deployments'.
+    // Nothing new to build? (same commit, same spec, and the exact image the
+    // last build produced is still on disk) — skip: reconcile fires for every
+    // dir change, including OTHER deployments'. Key on the recorded image
+    // PATH, not a name rebuilt from `name`: the image is named after the
+    // repo's PACKAGE, which need not equal the member `name` (a composition
+    // member `server` is built from package `qa-server`), so deriving it
+    // mismatched and rebuilt every beat.
     let spec_fingerprint = format!("{commit} {}", spec_hash(spec));
-    let marker = checkout.join(".ply-build/built");
-    let canonical = checkout.join(format!(
-        "{name}-{version}-linux-{}.img",
-        ply_core::image::name::Arch::host().as_str()
-    ));
-    if std::fs::read_to_string(&marker).unwrap_or_default() == spec_fingerprint
-        && canonical.exists()
-    {
+    if let Some(prev) = current_build(&checkout, &spec_fingerprint) {
         return Ok((
-            canonical.clone(),
-            format!("{} @ {commit}", basename(&canonical)),
+            prev.clone(),
+            format!("{} @ {commit}", basename(&prev)),
             false,
         ));
     }
@@ -1557,6 +1572,12 @@ fn build_from_repo(name: &str, spec: &Spec) -> Result<(PathBuf, String, bool)> {
     let _ = std::fs::create_dir_all(checkout.join(".ply-build"));
     let _ = std::fs::write(&digest_file, &outcome.digest);
     let _ = std::fs::write(checkout.join(".ply-build/built"), &spec_fingerprint);
+    // Remember the exact image path so the next beat's short-circuit can find
+    // it without guessing the name — see `current_build`.
+    let _ = std::fs::write(
+        checkout.join(".ply-build/image"),
+        outcome.image_path.display().to_string(),
+    );
     println!("{name}: {} @ {commit}", outcome.image_name);
     Ok((
         outcome.image_path,
@@ -2325,5 +2346,50 @@ fn fleet_status(ok: bool, detail: &str) {
     let tmp = dir.join(".fleet.json.tmp");
     if std::fs::write(&tmp, line).is_ok() {
         let _ = std::fs::rename(&tmp, dir.join("fleet.json"));
+    }
+}
+
+#[cfg(test)]
+mod build_skip_tests {
+    use super::*;
+
+    /// The regression: a composition member's name (`server`) differs from
+    /// its repo's package name (`qa-server`), so the image is
+    /// `qa-server-*.img`. The skip must find it by the recorded path, not by
+    /// reconstructing `server-*.img` — otherwise every beat rebuilds.
+    #[test]
+    fn current_build_keys_on_recorded_image_not_member_name() {
+        let dir = std::env::temp_dir().join(format!("ply-current-build-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let bd = dir.join(".ply-build");
+        std::fs::create_dir_all(&bd).unwrap();
+        // image named after the PACKAGE, not the member
+        let img = dir.join("qa-server-0.1.0-linux-x64.img");
+        std::fs::write(&img, b"img").unwrap();
+        std::fs::write(bd.join("built"), "commitA fp").unwrap();
+        std::fs::write(bd.join("image"), img.display().to_string()).unwrap();
+
+        // fingerprint matches + image present → skip, hand back that image
+        assert_eq!(current_build(&dir, "commitA fp"), Some(img.clone()));
+        // a new commit or changed spec → rebuild
+        assert_eq!(current_build(&dir, "commitB fp"), None);
+        // image recorded but gone (e.g. gc'd) → rebuild
+        std::fs::remove_file(&img).unwrap();
+        assert_eq!(current_build(&dir, "commitA fp"), None);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A fresh checkout (no `.ply-build/image` yet, as on the first beat after
+    /// this fix ships) rebuilds once, then records the path.
+    #[test]
+    fn current_build_is_none_without_a_recorded_image() {
+        let dir =
+            std::env::temp_dir().join(format!("ply-current-build-fresh-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".ply-build")).unwrap();
+        std::fs::write(dir.join(".ply-build/built"), "commitA fp").unwrap();
+        assert_eq!(current_build(&dir, "commitA fp"), None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -5,6 +5,23 @@ breaking changes, and known limitations. Write under **Unreleased** as work
 lands; `make release-cli` turns that heading into the version and date, and
 the release workflow publishes the entry as the GitHub release notes.
 
+## Unreleased
+
+### Fixes
+- **A composition's `git+` members no longer rebuild on every reconcile beat.**
+  When a member's service name differed from its repo's package name (a member
+  `server` built from package `qa-server` — the normal case in a multi-repo
+  composition), the build short-circuit reconstructed the wrong image name,
+  never matched, and rebuilt every minute — respinning the builder (and, for a
+  real build like Next.js, re-running it) forever on a small box. The skip now
+  keys on the exact image path the last build recorded, not a name derived
+  from the member. Single-app deploys were unaffected (name usually equals the
+  package).
+- **A stack member's `env` accepts a table.** `env = { KEY = "value" }` now
+  works alongside `env = ["KEY=VALUE"]`, matching a single-app manifest's
+  `[env]` — which is what most people copy first. The error message now names
+  `env` (not the `e` alias) and shows both forms.
+
 ## v0.1.99 — 2026-09-13
 
 ### What changed

@@ -150,6 +150,10 @@ e = ["DATABASE_URL={db.url}?sslmode=disable"]          # composed — templates 
 e = ["PGHOST={db.host}", "PGPASSWORD={db.password}"]   # discrete vars
 ```
 
+The key takes either spelling: the `["KEY=VALUE"]` array above, or a table
+`env = { KEY = "value" }` matching a single-app manifest's `[env]` — the same
+`{app.param}` holes work in both.
+
 - **A `{app.param}` reference IS the ordering edge.** No `after = ["db"]`
   needed alongside it — ply derives `db.state == "healthy"` from the
   reference and waits on it before starting the member that wrote it.

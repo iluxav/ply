@@ -826,9 +826,27 @@ fn parse_env(
     let Some(value) = value else {
         return Ok(Vec::new());
     };
+    // Two spellings, both accepted. A table `{ KEY = "value" }` matches a
+    // single-app manifest's `[env]` and is what most people reach for first;
+    // an array of `"KEY=VALUE"` strings is the original `-e` flag form. Taking
+    // only the array was a papercut — the first stack anyone writes copies an
+    // `[env]` table and hits a confusing `e` error.
+    if let Some(table) = value.as_table() {
+        let mut out = Vec::new();
+        for (k, v) in table {
+            let s = v.as_str().ok_or_else(|| {
+                Error::Manifest(format!(
+                    "{}: member `{member}`: env `{k}` must be a string",
+                    path.display()
+                ))
+            })?;
+            out.push((k.clone(), s.to_string()));
+        }
+        return Ok(out);
+    }
     let list = value.as_array().ok_or_else(|| {
         Error::Manifest(format!(
-            "{}: member `{member}`: `e` must be an array of \"KEY=VALUE\" strings",
+            "{}: member `{member}`: `env` must be a table `{{ KEY = \"value\" }}` or an array of \"KEY=VALUE\" strings",
             path.display()
         ))
     })?;
@@ -836,19 +854,19 @@ fn parse_env(
     for item in list {
         let s = item.as_str().ok_or_else(|| {
             Error::Manifest(format!(
-                "{}: member `{member}`: every `e` entry must be a \"KEY=VALUE\" string",
+                "{}: member `{member}`: every `env` entry must be a \"KEY=VALUE\" string",
                 path.display()
             ))
         })?;
         let Some((k, v)) = s.split_once('=') else {
             return Err(Error::Manifest(format!(
-                "{}: member `{member}`: `e` entry `{s}` is not KEY=VALUE",
+                "{}: member `{member}`: `env` entry `{s}` is not KEY=VALUE",
                 path.display()
             )));
         };
         if k.is_empty() {
             return Err(Error::Manifest(format!(
-                "{}: member `{member}`: `e` entry `{s}` has an empty key",
+                "{}: member `{member}`: `env` entry `{s}` has an empty key",
                 path.display()
             )));
         }
@@ -1985,6 +2003,37 @@ scale = 2
         let b = stack_of("[[app]]\nrun = \"git@github.com:iluxav/rm-server.git\"\n");
         assert_eq!(b.members[0].name, "rm-server");
         assert!(matches!(b.members[0].source, MemberSource::Repo { .. }));
+    }
+
+    #[test]
+    fn member_env_accepts_a_table_like_the_manifest() {
+        let stack = stack_of(
+            "[[app]]\nrun = \"postgres@17\"\nname = \"db\"\nenv = { POSTGRES_PASSWORD = \"x\", FOO = \"bar\" }\n",
+        );
+        let env = &stack.members[0].env;
+        assert!(env.contains(&("POSTGRES_PASSWORD".to_string(), "x".to_string())));
+        assert!(env.contains(&("FOO".to_string(), "bar".to_string())));
+    }
+
+    #[test]
+    fn member_env_still_accepts_the_key_value_array() {
+        let stack = stack_of(
+            "[[app]]\nrun = \"postgres@17\"\nname = \"db\"\nenv = [\"POSTGRES_PASSWORD=x\"]\n",
+        );
+        assert_eq!(
+            stack.members[0].env,
+            vec![("POSTGRES_PASSWORD".to_string(), "x".to_string())]
+        );
+    }
+
+    #[test]
+    fn member_env_table_rejects_a_non_string_value() {
+        let err =
+            stack_err("[[app]]\nrun = \"postgres@17\"\nname = \"db\"\nenv = { PORT = 5432 }\n");
+        assert!(
+            err.contains("PORT") && err.contains("must be a string"),
+            "{err}"
+        );
     }
 
     #[test]
