@@ -1321,14 +1321,20 @@ fn detect_deploy(checkout: &std::path::Path) -> Option<DetectedRecipe> {
             .any(|k| pkg.get(k).and_then(|d| d.get(name)).is_some())
     };
     if has_dep("next") {
+        // `npm ci` needs a committed lockfile; fall back to `npm install` when
+        // the repo has none (a real project usually commits one).
+        let install = if checkout.join("package-lock.json").exists() {
+            "npm ci"
+        } else {
+            "npm install"
+        };
         return Some(DetectedRecipe {
             what: "Next.js (standalone)",
-            // build, then fold static/public into the standalone tree so it
-            // ships them even when the repo has no postbuild step of its own.
-            build: Some(
-                "npm ci && npm run build && cp -r .next/static .next/standalone/.next/ && { [ -d public ] && cp -r public .next/standalone/ || true; }"
-                    .into(),
-            ),
+            // install, build, then fold static/public into the standalone tree
+            // so it ships them even when the repo has no postbuild step.
+            build: Some(format!(
+                "{install} && npm run build && cp -r .next/static .next/standalone/.next/ && {{ [ -d public ] && cp -r public .next/standalone/ || true; }}"
+            )),
             entrypoint: vec!["node".into(), ".next/standalone/server.js".into()],
             include: vec![".next/standalone/".into()],
             runtime: "node@24".into(),

@@ -508,7 +508,7 @@ fn inspect_repo(app: &mut App) {
     let Some((owner, repo)) = parse_github(&url) else {
         return;
     };
-    match fetch_ply_toml(&owner, &repo, &token) {
+    match fetch_repo_file(&owner, &repo, "ply.toml", &token) {
         Ok(Some(text)) => {
             if let Ok(Some(stack)) = ply_core::stack::parse(&text, std::path::Path::new("ply.toml"))
             {
@@ -537,8 +537,18 @@ fn inspect_repo(app: &mut App) {
             }
         }
         Ok(None) => {
-            app.status =
-                format!("{repo}: no ply.toml — set a Build command, or it must be ply-native")
+            // No ply.toml — will the host auto-detect the framework?
+            app.status = match fetch_repo_file(&owner, &repo, "package.json", &token) {
+                Ok(Some(pkg)) if pkg.contains("\"next\"") => {
+                    format!("✓ {repo}: no ply.toml — Next.js detected, deploys as-is (built here)")
+                }
+                Ok(Some(_)) => {
+                    format!("{repo}: no ply.toml — a Node app; set a Build command, or run `ply init` and commit the ply.toml")
+                }
+                _ => format!(
+                    "{repo}: no ply.toml — run `ply init` in the repo, or set a Build command"
+                ),
+            };
         }
         Err(e) => {
             app.status = format!("couldn't read {repo}/ply.toml — {e} (private? add a Token)")
@@ -561,10 +571,15 @@ fn parse_github(url: &str) -> Option<(String, String)> {
     (!owner.is_empty() && !repo.is_empty()).then_some((owner, repo))
 }
 
-/// GET the repo's ply.toml via the GitHub contents API (works for public and,
-/// with a token, private). `Ok(None)` = no ply.toml (404).
-fn fetch_ply_toml(owner: &str, repo: &str, token: &str) -> Result<Option<String>, String> {
-    let url = format!("https://api.github.com/repos/{owner}/{repo}/contents/ply.toml");
+/// GET a file from the repo via the GitHub contents API (works for public and,
+/// with a token, private). `Ok(None)` = the file isn't there (404).
+fn fetch_repo_file(
+    owner: &str,
+    repo: &str,
+    path: &str,
+    token: &str,
+) -> Result<Option<String>, String> {
+    let url = format!("https://api.github.com/repos/{owner}/{repo}/contents/{path}");
     let mut req = ureq::get(&url)
         .header("User-Agent", "ply")
         .header("Accept", "application/vnd.github.raw+json");
