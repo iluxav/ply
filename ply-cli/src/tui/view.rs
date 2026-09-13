@@ -6,7 +6,9 @@
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState, Wrap};
+use ratatui::widgets::{
+    Block, BorderType, Borders, Cell, Clear, Paragraph, Row, Table, TableState, Wrap,
+};
 use ratatui::Frame;
 
 use super::data::{human_duration, human_size, now, AppRow, ServiceStatus};
@@ -46,18 +48,19 @@ pub fn render(f: &mut Frame, app: &App) {
     }
 }
 
-/// The new-deployment form: a source selector, the fields for that source
-/// (all visible), a hint for the focused field, and a Deploy button.
+/// The new-deployment form: a source selector, one bordered input box per
+/// field (labeled, focused = orange), a hint, and a Deploy button.
 fn deploy_form_modal(f: &mut Frame, area: Rect, form: &DeployForm) {
     let fields = form.fields();
-    let w = area.width.clamp(48, 84);
-    // source + blank + fields + blank + hint + submit
-    let inner_h = 1 + 1 + fields.len() as u16 + 1 + 1 + 1;
+    let w = area.width.clamp(52, 90);
+    // source(1) + gap(1) + fields×3 + hint(1) + deploy(1)
+    let inner_h = 1 + 1 + fields.len() as u16 * 3 + 1 + 1;
+    let box_h = (inner_h + 2).min(area.height.saturating_sub(2));
     let box_area = Rect {
         x: area.x + (area.width.saturating_sub(w)) / 2,
-        y: area.y + area.height.saturating_sub(inner_h + 2) / 3,
+        y: area.y + 1,
         width: w,
-        height: inner_h + 2,
+        height: box_h,
     };
     f.render_widget(Clear, box_area);
     let block = Block::bordered()
@@ -69,10 +72,15 @@ fn deploy_form_modal(f: &mut Frame, area: Rect, form: &DeployForm) {
     let inner = block.inner(box_area);
     f.render_widget(block, box_area);
 
-    let mut lines: Vec<Line> = Vec::new();
+    // Vertical layout: source, gap, a 3-row box per field, hint, deploy.
+    let mut constraints = vec![Constraint::Length(1), Constraint::Length(1)];
+    constraints.extend(fields.iter().map(|_| Constraint::Length(3)));
+    constraints.push(Constraint::Length(1)); // hint
+    constraints.push(Constraint::Length(1)); // deploy
+    let rows = Layout::vertical(constraints).split(inner);
 
-    // --- source selector row ---
-    let mut spans = vec![Span::styled("source  ", Style::new().fg(MUTED))];
+    // --- source selector ---
+    let mut spans = vec![Span::styled("source   ", Style::new().fg(MUTED))];
     for (i, (label, _, _)) in SOURCES.iter().enumerate() {
         let picked = i == form.source;
         let mut st = Style::new().fg(if picked { ORANGE } else { MUTED });
@@ -88,49 +96,50 @@ fn deploy_form_modal(f: &mut Frame, area: Rect, form: &DeployForm) {
         ));
     }
     if form.is_source_focus() {
-        spans.push(Span::styled("  ‹←→›", Style::new().fg(ORANGE)));
+        spans.push(Span::styled("   ‹←→›", Style::new().fg(ORANGE)));
     }
-    lines.push(Line::from(spans));
-    lines.push(Line::from(""));
+    f.render_widget(Paragraph::new(Line::from(spans)), rows[0]);
 
-    // --- fields (filled input boxes) ---
+    // --- one bordered box per field ---
     let focused = form.focused_field();
-    let box_w = (inner.width as usize).saturating_sub(12).max(10);
-    for &field in &fields {
+    for (i, &field) in fields.iter().enumerate() {
+        let fr = rows[2 + i];
         let (label, _) = form.field_meta(field);
         let is_focus = focused == Some(field);
+        let (border, title) = if is_focus {
+            (
+                Style::new().fg(ORANGE),
+                Style::new().fg(ORANGE).add_modifier(Modifier::BOLD),
+            )
+        } else {
+            (
+                Style::new().fg(Color::Rgb(0x5A, 0x5A, 0x5A)),
+                Style::new().fg(MUTED),
+            )
+        };
+        let fblock = Block::bordered()
+            .border_type(BorderType::Rounded)
+            .border_style(border)
+            .title(Span::styled(format!(" {label} "), title));
+        let finner = fblock.inner(fr);
+        f.render_widget(fblock, fr);
         let raw = form.value_of(field);
         let shown = if field == FormField::Token {
             "*".repeat(raw.chars().count())
         } else {
             raw.to_string()
         };
-        let label_style = if is_focus {
-            Style::new().fg(ORANGE).add_modifier(Modifier::BOLD)
-        } else {
-            Style::new().fg(MUTED)
-        };
-        // the input area: value + cursor, padded on a filled background so it
-        // reads as a real field. Focused = warm bg + white text + cursor.
         let cursor = if is_focus { "▏" } else { "" };
-        let content = format!("{shown}{cursor}");
-        let pad = box_w.saturating_sub(content.chars().count());
-        let (box_bg, box_fg) = if is_focus {
-            (Color::Rgb(0x4d, 0x3b, 0x1c), Color::White) // warm, clearly focused
-        } else {
-            (Color::Rgb(0x33, 0x33, 0x36), Color::Rgb(0xCC, 0xCC, 0xCC)) // a visible box on black
-        };
-        lines.push(Line::from(vec![
-            Span::styled(format!("{label:<9} "), label_style),
-            Span::styled(
-                format!(" {content}{} ", " ".repeat(pad)),
-                Style::new().fg(box_fg).bg(box_bg),
-            ),
-        ]));
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                format!("{shown}{cursor}"),
+                Style::new().fg(Color::White),
+            ))),
+            finner,
+        );
     }
-    lines.push(Line::from(""));
 
-    // --- hint for the current focus ---
+    // --- hint + deploy ---
     let hint = if form.is_source_focus() {
         SOURCES[form.source].2
     } else if let Some(field) = focused {
@@ -138,9 +147,10 @@ fn deploy_form_modal(f: &mut Frame, area: Rect, form: &DeployForm) {
     } else {
         "Enter deploys · every source follows-latest by default"
     };
-    lines.push(Line::from(Span::styled(hint, Style::new().fg(MUTED))));
-
-    // --- submit + footer ---
+    f.render_widget(
+        Paragraph::new(Span::styled(hint, Style::new().fg(MUTED))),
+        rows[2 + fields.len()],
+    );
     let deploy_style = if form.is_submit_focus() {
         Style::new()
             .fg(Color::Black)
@@ -149,15 +159,16 @@ fn deploy_form_modal(f: &mut Frame, area: Rect, form: &DeployForm) {
     } else {
         Style::new().fg(GREEN)
     };
-    lines.push(Line::from(vec![
-        Span::styled(" Deploy ", deploy_style),
-        Span::styled(
-            "   Tab/↑↓ move · ←→ source · Enter deploy · Esc cancel",
-            Style::new().fg(MUTED),
-        ),
-    ]));
-
-    f.render_widget(Paragraph::new(lines), inner);
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(" Deploy ", deploy_style),
+            Span::styled(
+                "   Tab/↑↓ move · ←→ source · Enter deploy · Esc cancel",
+                Style::new().fg(MUTED),
+            ),
+        ])),
+        rows[2 + fields.len() + 1],
+    );
 }
 
 fn input_modal(f: &mut Frame, area: Rect, input: &Input) {
