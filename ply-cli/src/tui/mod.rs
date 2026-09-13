@@ -4,8 +4,9 @@
 //! shelling out to the same `ply` and `systemctl` commands you would type.
 //!
 //! Status: apps + app-detail (live logs, cpu/mem gauges), the host tab (edge,
-//! services, add-domain) and the deploy tab (list, new-from-URL, pin/rollback)
-//! are wired to real data and real actions. The notify tab is still read-only.
+//! services, add-domain) and the deploy tab (list, a source-selector new
+//! deployment form with repo inspect/prefill, pin/rollback, remove) are wired
+//! to real data and real actions. The notify tab is still read-only.
 
 mod data;
 mod view;

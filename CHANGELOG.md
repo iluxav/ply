@@ -5,6 +5,27 @@ breaking changes, and known limitations. Write under **Unreleased** as work
 lands; `make release-cli` turns that heading into the version and date, and
 the release workflow publishes the entry as the GitHub release notes.
 
+## Unreleased
+
+### What changed
+- **Deploy any repo — no `ply.toml` needed.** A `repo=` deployment whose repo
+  ships no `ply.toml` is auto-detected (Next.js standalone first): the host
+  synthesizes the recipe (build, entrypoint, include, port) and builds it. So
+  "point ply at a repo and it just works" — the Heroku/Coolify path, on your
+  own box.
+- **`ply ui` new-deployment is a real form.** A source selector (GitHub repo /
+  registry app / image URL), bordered input fields, and a Deploy button.
+  Pasting a repo URL inspects it and **prefills**: publish from a declared
+  port, a note for a composition, and for a no-`ply.toml` repo it detects the
+  framework and prefills the Build command (so you never type `npm ci` into a
+  lockless repo). A spinner shows "deploying…" instead of a misleading red ✗
+  while a build runs.
+- **Removing an app cleans up.** Removal now also drops the build checkout
+  (`builds/<name>` — clone + node_modules + build output, often hundreds of
+  MB), the image hardlinks, and secrets — on any removal path (ply ui,
+  `ply rm`, or a deleted deployment file). Data volumes are kept; the store
+  `.img` stays `ply gc`'s job.
+
 ## v0.1.98 — 2026-09-12
 
 ### What changed
