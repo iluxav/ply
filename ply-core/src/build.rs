@@ -216,7 +216,9 @@ pub fn build(opts: &BuildOptions) -> Result<BuildOutcome> {
     // What would ship, before it ships: credential-shaped files refuse the
     // build, and an implicit pack says how much it swept up (a squashfs of
     // 200 MB of node_modules can report a few KiB, so size is no signal).
-    let (packed_files, packed_bytes, secrets) = audit_tree(&opts.dir, &filter, &include);
+    let (packed_files, packed_bytes, secrets, native_addons) =
+        audit_tree(&opts.dir, &filter, &include);
+    check_native_addons(&opts.dir, &native_addons, arch)?;
     if !secrets.is_empty() && !opts.allow_secrets {
         let list: Vec<String> = secrets
             .iter()
@@ -402,8 +404,8 @@ fn audit_tree(
     dir: &Path,
     filter: &dyn Fn(&Path) -> bool,
     includes: &[PathBuf],
-) -> (u64, u64, Vec<PathBuf>) {
-    let (mut files, mut bytes, mut secrets) = (0u64, 0u64, Vec::new());
+) -> (u64, u64, Vec<PathBuf>, Vec<PathBuf>) {
+    let (mut files, mut bytes, mut secrets, mut native) = (0u64, 0u64, Vec::new(), Vec::new());
     let mut stack = vec![PathBuf::new()];
     while let Some(rel) = stack.pop() {
         let Ok(entries) = std::fs::read_dir(dir.join(&rel)) else {
@@ -444,9 +446,43 @@ fn audit_tree(
             }
             files += 1;
             bytes += md.len();
+            // Compiled native addons — checked later against the target arch so
+            // host-foreign node_modules (e.g. a macOS build) never ship silently.
+            if name.ends_with(".node") {
+                native.push(child);
+            }
         }
     }
-    (files, bytes, secrets)
+    (files, bytes, secrets, native)
+}
+
+/// Refuse a native addon (`*.node`) built for a platform/arch other than the
+/// image's target — macOS `node_modules` packed into a Linux image, or the
+/// wrong Linux arch, load nowhere and fail at runtime far from the cause. Only
+/// a POSITIVE mismatch refuses; an unreadable or unrecognized header is left
+/// alone (never a false refusal).
+fn check_native_addons(dir: &Path, native: &[PathBuf], target: Arch) -> Result<()> {
+    use std::io::Read;
+    for rel in native {
+        let Ok(mut f) = std::fs::File::open(dir.join(rel)) else {
+            continue;
+        };
+        let mut head = [0u8; 20];
+        let n = f.read(&mut head).unwrap_or(0);
+        let kind = crate::nativeaddon::classify(&head[..n]);
+        if kind.is_foreign_for(target) {
+            return Err(Error::Build(format!(
+                "native addon `{}` is {} binary, but this image targets linux-{arch} — its \
+                 node_modules were built on a different platform. Declare a `[build]` step so ply \
+                 builds them in the image, or rebuild node_modules for linux-{arch}, then run \
+                 `ply build` again.",
+                rel.display(),
+                kind.label(),
+                arch = target.as_str(),
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn human_bytes(n: u64) -> String {
@@ -575,6 +611,40 @@ mod tests {
         let two = build(&opts).unwrap();
         assert_eq!(one.digest, two.digest, "rebuild must be byte-identical");
         assert_eq!(one.size_bytes, two.size_bytes);
+    }
+
+    /// A native addon built for a foreign platform/arch is a refusal, not a
+    /// silently-broken image; a matching one and a pure-JS tree sail through.
+    #[test]
+    fn native_addon_of_a_foreign_platform_is_refused() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path();
+        let mut elf = vec![0u8; 20];
+        elf[0] = 0x7f;
+        elf[1..4].copy_from_slice(b"ELF");
+        elf[4] = 2;
+        elf[5] = 1;
+        elf[18] = 0x3e; // x86-64
+
+        std::fs::write(p.join("mac.node"), [0xcf, 0xfa, 0xed, 0xfe, 0, 0, 0, 0]).unwrap();
+        let err = check_native_addons(p, &[PathBuf::from("mac.node")], Arch::X64)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("mac.node"), "{err}");
+        assert!(err.contains("Mach-O") || err.contains("macOS"), "{err}");
+        assert!(err.contains("linux-x64"), "{err}");
+
+        std::fs::write(p.join("ok.node"), &elf).unwrap();
+        assert!(check_native_addons(p, &[PathBuf::from("ok.node")], Arch::X64).is_ok());
+
+        let mut arm = elf.clone();
+        arm[18] = 0xb7; // aarch64 — wrong for an x64 image
+        std::fs::write(p.join("arm.node"), &arm).unwrap();
+        assert!(check_native_addons(p, &[PathBuf::from("arm.node")], Arch::X64).is_err());
+
+        // no native addons, and an unreadable path, are both fine
+        assert!(check_native_addons(p, &[], Arch::X64).is_ok());
+        assert!(check_native_addons(p, &[PathBuf::from("gone.node")], Arch::X64).is_ok());
     }
 
     #[test]

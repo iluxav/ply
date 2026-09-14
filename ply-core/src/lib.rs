@@ -20,6 +20,7 @@ pub mod image;
 pub mod lifecycle;
 pub mod lockfile;
 pub mod manifest;
+pub mod nativeaddon;
 pub mod notify;
 pub mod oci;
 pub mod params;

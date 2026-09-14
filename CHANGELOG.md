@@ -5,6 +5,19 @@ breaking changes, and known limitations. Write under **Unreleased** as work
 lands; `make release-cli` turns that heading into the version and date, and
 the release workflow publishes the entry as the GitHub release notes.
 
+## Unreleased
+
+### Fixes
+- **`ply build` refuses foreign native addons instead of shipping a broken
+  image.** Packing a directory whose `node_modules` were built on another
+  platform (classic case: `npm install` on macOS, then `ply build` for a Linux
+  image) used to succeed and fail only at runtime when Node couldn't load the
+  addon. Build now scans the `*.node` files it's about to pack and refuses a
+  positively-foreign one (Mach-O, PE, or the wrong Linux arch), naming the file
+  and pointing at a `[build]` step. Matching addons and pure-JS trees are
+  unaffected; an unrecognized header is never a false refusal. (The CD/`git+`
+  path already built inside a Linux builder image and was never affected.)
+
 ## v0.1.108 — 2026-09-14
 
 ### Fixes
