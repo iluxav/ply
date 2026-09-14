@@ -907,6 +907,16 @@ fn fetch_image(name: &str, spec: &Spec) -> Result<Fetched> {
             let shown = resolved.to_string();
             (named_image(name, &path, &shown)?, shown)
         }
+        _ if spec.docker.is_some() => {
+            // Import (or reuse the cache for) a `docker://` image on this host,
+            // the same on-demand path `ply run docker://` uses.
+            let reference = spec.docker.as_deref().expect("guard");
+            let path = ply_core::oci::ensure_local(reference, false)
+                .with_context(|| format!("importing {reference}"))?;
+            println!("{name}: {reference} (docker import)");
+            image_fact = Some(reference.to_string());
+            (named_image(name, &path, reference)?, reference.to_string())
+        }
         (None, None, Some(repo)) => {
             let token = read_token(spec)?;
             let asset_app = spec.asset.clone().unwrap_or_else(|| name.to_string());

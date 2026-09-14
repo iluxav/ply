@@ -52,6 +52,12 @@ pub struct Spec {
     /// …or a local image path…
     #[serde(default)]
     pub image: Option<String>,
+    /// …or a `docker://image[:tag]` OCI image, imported and cached on this
+    /// host on first converge — the same on-demand import `ply run docker://`
+    /// uses. The escape hatch for what the registry lacks (larger; imported
+    /// images run with Docker's default capabilities).
+    #[serde(default)]
+    pub docker: Option<String>,
     /// …or a direct image URL (`url = "https://…/<name>-<ver>-linux-<arch>.img"`)
     /// — a CI artifact on any static host. Fetched once: the URL is treated
     /// as immutable, so deploying a new version means a new URL.
@@ -159,14 +165,15 @@ impl Spec {
             + spec.image.is_some() as u8
             + spec.url.is_some() as u8
             + spec.github.is_some() as u8
-            + spec.repo.is_some() as u8;
+            + spec.repo.is_some() as u8
+            + spec.docker.is_some() as u8;
         match sources {
             1 => Ok(spec),
             0 => Err(Error::Manifest(
-                "a deployment needs `from` (a registry ref, a path, a URL, or github:org/repo) or `repo` (build it here)".into(),
+                "a deployment needs `from` (a registry ref, a path, a URL, github:org/repo, or docker://image), or `repo` (build it here)".into(),
             )),
             _ => Err(Error::Manifest(
-                "a deployment names ONE source: `from` (or one of the older `app`/`image`/`url`/`github`), or `repo`".into(),
+                "a deployment names ONE source: `from` (or one of the older `app`/`image`/`url`/`github`/`docker`), or `repo`".into(),
             )),
         }
     }
@@ -185,13 +192,16 @@ impl Spec {
             || self.url.is_some()
             || self.github.is_some()
             || self.repo.is_some()
+            || self.docker.is_some()
         {
             return Err(Error::Manifest(
-                "`from` is the source — remove the `app`/`image`/`url`/`github`/`repo` beside it"
+                "`from` is the source — remove the `app`/`image`/`url`/`github`/`repo`/`docker` beside it"
                     .into(),
             ));
         }
-        if let Some(repo) = from.strip_prefix("github:") {
+        if from.starts_with("docker://") {
+            self.docker = Some(from);
+        } else if let Some(repo) = from.strip_prefix("github:") {
             self.github = Some(repo.to_string());
         } else if from.starts_with("https://") || from.starts_with("http://") {
             self.url = Some(from);
@@ -316,6 +326,36 @@ impl Spec {
                 ..Default::default()
             });
         }
+        // A docker:// member imports on this host (the same cached OCI import
+        // `ply run docker://` uses) — routed as a `docker=` spec.
+        if let MemberSource::Docker(reference) = &member.source {
+            let env = crate::stack::expand_member_env(member, lookup)?
+                .into_iter()
+                .collect();
+            return Ok(Spec {
+                docker: Some(reference.clone()),
+                env,
+                publish: crate::stack::expand_member_list(
+                    &member.publish,
+                    &member.name,
+                    "publish",
+                    lookup,
+                )?,
+                domain: crate::stack::expand_member_list(
+                    &member.domain,
+                    &member.name,
+                    "domain",
+                    lookup,
+                )?,
+                volumes: member.volume.clone(),
+                after: member.after.clone(),
+                scale: member.scale,
+                egress: member.egress.clone(),
+                stack: stack_name.map(str::to_string),
+                auto: true,
+                ..Default::default()
+            });
+        }
         let (app, version, url) = match &member.source {
             MemberSource::Run { name, version } => (Some(name.clone()), version.clone(), None),
             MemberSource::Url(u) => (None, None, Some(u.clone())),
@@ -326,12 +366,7 @@ impl Spec {
                     p.display()
                 )))
             }
-            MemberSource::Docker(r) => {
-                return Err(Error::Manifest(format!(
-                    "stack member `{}`: `run = \"{r}\"` is a docker:// image — a deployment file has no OCI source yet; `ply import` it and publish the image, or use a registry ref",
-                    member.name
-                )))
-            }
+            MemberSource::Docker(_) => unreachable!("docker members handled above"),
             MemberSource::Repo { .. } => unreachable!("repo members handled above"),
         };
         let env = crate::stack::expand_member_env(member, lookup)?
@@ -611,6 +646,36 @@ REDIS_PASSWORD = "s3cret"
             .unwrap_err()
             .to_string();
         assert!(err.contains("$MISSING"), "{err}");
+    }
+
+    #[test]
+    fn docker_member_routes_to_a_docker_spec() {
+        let stack = stack_of(
+            "[[app]]\nrun=\"docker://postgres:17\"\nname=\"db\"\npublish=[\"internal:5432\"]\n",
+        );
+        let spec = Spec::from_stack_member(&stack.members[0], Some("shop"), &|_: &str| None)
+            .expect("a docker:// member routes instead of erroring");
+        assert_eq!(spec.docker.as_deref(), Some("docker://postgres:17"));
+        assert_eq!(spec.publish, vec!["internal:5432".to_string()]);
+        assert_eq!(spec.stack.as_deref(), Some("shop"));
+    }
+
+    #[test]
+    fn docker_deploys_as_an_order_and_via_from() {
+        assert_eq!(
+            Spec::parse("docker = \"docker://redis:7\"\n")
+                .unwrap()
+                .docker
+                .as_deref(),
+            Some("docker://redis:7")
+        );
+        assert_eq!(
+            Spec::parse("from = \"docker://mongo:6\"\n")
+                .unwrap()
+                .docker
+                .as_deref(),
+            Some("docker://mongo:6")
+        );
     }
 
     #[test]

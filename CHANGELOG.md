@@ -5,6 +5,19 @@ breaking changes, and known limitations. Write under **Unreleased** as work
 lands; `make release-cli` turns that heading into the version and date, and
 the release workflow publishes the entry as the GitHub release notes.
 
+## Unreleased
+
+### What changed
+- **`docker://` is a first-class deploy source — on the host, in a stack.** A
+  deployment order (`from = "docker://postgres:17"` / `docker = "…"`) or a
+  composition member (`run = "docker://…"`) now imports and caches the OCI
+  image on the box on first converge (the same on-demand import `ply run
+  docker://` uses) and runs it — wired like any other member. Previously a
+  `docker://` member was rejected ("no OCI source yet"). It's the escape hatch
+  for what the registry lacks: an imported image is larger and runs with
+  Docker's default capabilities (so egress-enforce refuses it), so prefer a
+  native `ply/<name>` package when one exists.
+
 ## v0.1.102 — 2026-09-13
 
 ### What changed
