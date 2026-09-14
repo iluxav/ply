@@ -65,6 +65,18 @@ impl SecretStore {
         }
     }
 
+    /// Delete a secret. Missing is success (idempotent — a rotation that
+    /// removes then re-adds, or a second `ply secret rm`, must not error);
+    /// any other IO failure propagates.
+    pub fn remove(&self, member: &str, param: &str) -> Result<()> {
+        let path = self.path(member, param);
+        match std::fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(Error::Io { path, source: e }),
+        }
+    }
+
     /// Write a secret to a file (mode 0600, created atomically).
     ///
     /// Creates parent directories (mode 0700) if needed, writes to a temporary
@@ -240,6 +252,18 @@ mod tests {
         assert_eq!(s.len(), 32);
         assert!(s.chars().all(|c| c.is_ascii_alphanumeric()));
         assert_ne!(mint().unwrap(), s);
+    }
+
+    #[test]
+    fn remove_deletes_and_is_idempotent() {
+        let td = tempfile::tempdir().unwrap();
+        let s = SecretStore::for_stack(td.path());
+        s.set("api", "STRIPE_KEY", "sk_live").unwrap();
+        assert!(s.get("api", "STRIPE_KEY").unwrap().is_some());
+        s.remove("api", "STRIPE_KEY").unwrap();
+        assert!(s.get("api", "STRIPE_KEY").unwrap().is_none());
+        // removing a missing secret is a no-op, not an error
+        s.remove("api", "STRIPE_KEY").unwrap();
     }
 
     #[test]
