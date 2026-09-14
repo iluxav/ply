@@ -88,6 +88,12 @@ pub struct Member {
     /// operator's word on what this member may reach, over whatever its
     /// image's manifest declares. `allow` REPLACES the manifest's list.
     pub egress: Option<crate::egress::EgressOverride>,
+    /// `secret_env = ["KEY", …]` — env-var names whose VALUES live only in
+    /// the host secret store (`SecretStore::for_deployments`), never in this
+    /// file. Reconcile looks each up and injects it as a tainted env entry
+    /// (0600 `--env-file`, off the world-readable unit). Operator lane: no
+    /// manifest `[params]` decl and no `{}` ref required.
+    pub secret_env: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -534,9 +540,33 @@ pub fn parse(text: &str, path: &Path) -> Result<Option<Stack>> {
 }
 
 const MEMBER_KEYS: &[&str] = &[
-    "run", "name", "env", "e", "after", "publish", "volume", "domain", "scale", "params", "egress",
-    "build", "runtime", "ref",
+    "run",
+    "name",
+    "env",
+    "e",
+    "after",
+    "publish",
+    "volume",
+    "domain",
+    "scale",
+    "params",
+    "egress",
+    "build",
+    "runtime",
+    "ref",
+    "secret_env",
 ];
+
+/// A valid environment-variable name: `[A-Za-z_][A-Za-z0-9_]*`. `secret_env`
+/// keys become env vars a service reads, so they must pass the same shape.
+fn is_env_name(s: &str) -> bool {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
 
 /// A member's environment: `env` is the spelling, `e` the original alias.
 /// Every other member key is written out in full (`publish`, `domain`,
@@ -703,6 +733,24 @@ fn parse_member(index: usize, entry: &toml::Value, path: &Path) -> Result<Member
         }
     };
 
+    let secret_env = string_list(table.get("secret_env"), "secret_env", &name, path)?;
+    for key in &secret_env {
+        if !is_env_name(key) {
+            return Err(Error::Manifest(format!(
+                "{}: member `{name}`: `secret_env` key `{key}` is not an environment variable name \
+                 (letters, digits, underscore; not starting with a digit)",
+                path.display()
+            )));
+        }
+        if env.iter().any(|(k, _)| k == key) {
+            return Err(Error::Manifest(format!(
+                "{}: member `{name}`: `{key}` is both `env` and `secret_env` — a value can't be \
+                 public and secret",
+                path.display()
+            )));
+        }
+    }
+
     Ok(Member {
         name,
         source,
@@ -714,6 +762,7 @@ fn parse_member(index: usize, entry: &toml::Value, path: &Path) -> Result<Member
         domain,
         scale,
         egress,
+        secret_env,
     })
 }
 
@@ -2464,6 +2513,7 @@ scale = 2
             domain: vec![],
             scale: None,
             egress: None,
+            secret_env: vec![],
         };
         let e = env(&[("X", "1")]);
         let out = expand_member_env(&m, &e).unwrap();
@@ -2789,6 +2839,43 @@ mod stack_ref_tests {
                 .is_none()
         );
     }
+
+    #[test]
+    fn member_parses_secret_env() {
+        let stack = parse(
+            "[[app]]\nrun=\"git+https://x/y\"\nname=\"api\"\nsecret_env=[\"STRIPE_KEY\",\"SENDGRID_KEY\"]\n",
+            Path::new("d.toml"),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            stack.members[0].secret_env,
+            vec!["STRIPE_KEY", "SENDGRID_KEY"]
+        );
+    }
+
+    #[test]
+    fn member_rejects_invalid_secret_env_name() {
+        let err = parse(
+            "[[app]]\nrun=\"git+https://x/y\"\nname=\"api\"\nsecret_env=[\"bad-key\"]\n",
+            Path::new("d.toml"),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("bad-key"), "{err}");
+    }
+
+    #[test]
+    fn member_rejects_key_that_is_both_env_and_secret() {
+        let err = parse(
+            "[[app]]\nrun=\"git+https://x/y\"\nname=\"api\"\ne=[\"STRIPE_KEY=pk\"]\nsecret_env=[\"STRIPE_KEY\"]\n",
+            Path::new("d.toml"),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("STRIPE_KEY"), "{err}");
+        assert!(err.contains("public and secret"), "{err}");
+    }
 }
 
 #[cfg(test)]
@@ -2810,6 +2897,7 @@ mod member_hole_tests {
             domain: domain.iter().map(|s| s.to_string()).collect(),
             scale: None,
             egress: None,
+            secret_env: vec![],
         }
     }
 

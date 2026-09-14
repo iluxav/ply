@@ -2101,6 +2101,7 @@ mod secret_env_tests {
             domain: vec!["{cdn.hostname}".to_string()],
             scale: None,
             egress: None,
+            secret_env: Vec::new(),
         };
         assert_eq!(
             member_edges(&web),
