@@ -1509,6 +1509,10 @@ pub enum EnvSource {
     /// it (e.g. `"secrets/db.password"`), shown so a reader can go straight
     /// to it.
     Minted(String),
+    /// An operator secret injected from `secret_env` — no manifest decl and
+    /// no `{}` ref, the value read straight from the host store. The string
+    /// is the secret's file as [`SecretStore::label`] names it.
+    OperatorSecret(String),
 }
 
 impl std::fmt::Display for EnvSource {
@@ -1519,6 +1523,7 @@ impl std::fmt::Display for EnvSource {
             EnvSource::SelfEnv => write!(f, "manifest [env]"),
             EnvSource::Override => write!(f, "params (stack override)"),
             EnvSource::Minted(path) => write!(f, "minted  {path}"),
+            EnvSource::OperatorSecret(path) => write!(f, "secret  {path}"),
         }
     }
 }
