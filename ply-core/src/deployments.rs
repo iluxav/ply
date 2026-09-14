@@ -127,6 +127,13 @@ pub struct Spec {
     /// Secrets that should not live in this file: a root-owned env file.
     #[serde(default)]
     pub env_file: Option<String>,
+    /// `secret_env = ["KEY", …]` — env-var names whose VALUES live only in
+    /// the host secret store (`SecretStore::for_deployments`), never in this
+    /// file. Reconcile looks each up and injects it as a tainted env entry
+    /// (a 0600 `--env-file`, off the world-readable unit); `flags()` emits
+    /// nothing for them.
+    #[serde(default)]
+    pub secret_env: Vec<String>,
     /// Mount the [requests] links the image asks for (dashboard-style apps).
     #[serde(default)]
     pub grant_links: bool,
@@ -322,6 +329,7 @@ impl Spec {
                 scale: member.scale,
                 egress: member.egress.clone(),
                 stack: stack_name.map(str::to_string),
+                secret_env: member.secret_env.clone(),
                 auto: true,
                 ..Default::default()
             });
@@ -352,6 +360,7 @@ impl Spec {
                 scale: member.scale,
                 egress: member.egress.clone(),
                 stack: stack_name.map(str::to_string),
+                secret_env: member.secret_env.clone(),
                 auto: true,
                 ..Default::default()
             });
@@ -394,6 +403,7 @@ impl Spec {
             scale: member.scale,
             egress: member.egress.clone(),
             stack: stack_name.map(str::to_string),
+            secret_env: member.secret_env.clone(),
             auto: true,
             ..Default::default()
         })
@@ -498,6 +508,26 @@ pub fn list() -> Result<Vec<(String, Result<Spec>)>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spec_parses_and_carries_secret_env() {
+        let s = Spec::parse("app=\"api\"\nsecret_env=[\"STRIPE_KEY\"]\n").unwrap();
+        assert_eq!(s.secret_env, vec!["STRIPE_KEY"]);
+    }
+
+    #[test]
+    fn from_stack_member_carries_secret_env() {
+        let stack = crate::stack::parse(
+            "[[app]]\nrun=\"postgres@17\"\nname=\"db\"\nsecret_env=[\"ADMIN_TOKEN\"]\n",
+            std::path::Path::new("t.toml"),
+        )
+        .unwrap()
+        .unwrap();
+        let spec = Spec::from_stack_member(&stack.members[0], Some("t"), &|_: &str| None).unwrap();
+        assert_eq!(spec.secret_env, vec!["ADMIN_TOKEN"]);
+        // and a secret key never becomes a runtime flag on the world-readable unit
+        assert!(!spec.flags().join(" ").contains("ADMIN_TOKEN"));
+    }
 
     #[test]
     fn spec_parses_and_builds_flags() {
