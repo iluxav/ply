@@ -1,4 +1,4 @@
-//! `ply secret ls|set` — a thin CLI over [`SecretStore`] (Task 3). Nothing
+//! `ply secret ls|set|rm` — a thin CLI over [`SecretStore`] (Task 3). Nothing
 //! here re-implements the store: `ls`/`set` below are one-line wrappers so
 //! tests can drive them without clap, and the `exec_*` functions parse args
 //! and print. Secret values never appear in output, logs, or error strings.
@@ -10,7 +10,7 @@ use anyhow::{bail, Context, Result};
 
 use ply_core::secrets::SecretStore;
 
-use crate::cli::{SecretLsArgs, SecretSealArgs, SecretSetArgs};
+use crate::cli::{SecretLsArgs, SecretRmArgs, SecretSealArgs, SecretSetArgs};
 
 /// Pick the store the `-C DIR` / `--deployments STACK` selector names.
 /// Clap's `conflicts_with` keeps them mutually exclusive; `deployments`
@@ -64,6 +64,14 @@ fn set(store: &SecretStore, name: &str, value: &str) -> Result<PathBuf> {
     Ok(store.path(&member, &param))
 }
 
+/// Validate `name` and delete it (idempotent). Returns the store label for
+/// the message — never the value, which is never read here.
+fn rm(store: &SecretStore, name: &str) -> Result<String> {
+    let (member, param) = parse_name(name)?;
+    store.remove(&member, &param)?;
+    Ok(store.label(&member, &param))
+}
+
 /// Trim exactly one trailing newline — `"\n"` or `"\r\n"` — and nothing
 /// else, so a secret with meaningful internal or leading whitespace round-trips.
 fn trim_trailing_newline(s: &str) -> &str {
@@ -113,6 +121,13 @@ pub fn exec_set(args: &SecretSetArgs) -> Result<()> {
     };
     let path = set(&store, &args.name, &value)?;
     println!("wrote {} (0600)", path.display());
+    Ok(())
+}
+
+pub fn exec_rm(args: &SecretRmArgs) -> Result<()> {
+    let store = select_store(&args.dir, args.deployments.as_deref());
+    let label = rm(&store, &args.name)?;
+    println!("removed {label}");
     Ok(())
 }
 
@@ -228,6 +243,25 @@ mod tests {
         assert_eq!(mode & 0o777, 0o600);
 
         assert_eq!(ls(&store).unwrap(), vec!["db.password".to_string()]);
+    }
+
+    #[test]
+    fn rm_deletes_the_secret_and_is_idempotent() {
+        let td = tempfile::tempdir().unwrap();
+        let store = SecretStore::for_stack(td.path());
+        set(&store, "api.STRIPE_KEY", "sk_live").unwrap();
+        assert_eq!(ls(&store).unwrap(), vec!["api.STRIPE_KEY".to_string()]);
+        rm(&store, "api.STRIPE_KEY").unwrap();
+        assert!(ls(&store).unwrap().is_empty());
+        // a second removal (or removing a never-set one) is not an error
+        rm(&store, "api.STRIPE_KEY").unwrap();
+    }
+
+    #[test]
+    fn rm_rejects_a_malformed_name() {
+        let td = tempfile::tempdir().unwrap();
+        let store = SecretStore::for_stack(td.path());
+        assert!(rm(&store, "db").is_err());
     }
 
     #[test]

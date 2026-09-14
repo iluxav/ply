@@ -1038,6 +1038,8 @@ pub enum SecretCommand {
     Ls(SecretLsArgs),
     /// Set a secret's value (external secrets need this before `ply up` will run)
     Set(SecretSetArgs),
+    /// Remove a secret (idempotent — a missing one is not an error)
+    Rm(SecretRmArgs),
     /// Print this host's sealing key (the public half); made on first use
     ///
     /// Values sealed for it (`ply secret seal … --for <key>`) can sit in a
@@ -1099,6 +1101,30 @@ pub struct SecretSetArgs {
     /// shell history)
     #[arg(value_name = "VALUE")]
     pub value: Option<String>,
+
+    /// Directory containing the stack (its secrets live in `.ply/secrets/`)
+    #[arg(
+        short = 'C',
+        long,
+        value_name = "DIR",
+        default_value = ".",
+        conflicts_with = "deployments"
+    )]
+    pub dir: PathBuf,
+
+    /// Manage the deployments-side store instead, keyed by stack name: files
+    /// live under the deployments dir's `.secrets/<stack>/`
+    /// (/var/lib/ply/deployments/.secrets/<stack>/ by default) — that root
+    /// is normally only writable as root.
+    #[arg(long, value_name = "STACK", conflicts_with = "dir")]
+    pub deployments: Option<String>,
+}
+
+#[derive(Args)]
+pub struct SecretRmArgs {
+    /// Secret name: MEMBER.PARAM, e.g. db.password
+    #[arg(value_name = "NAME")]
+    pub name: String,
 
     /// Directory containing the stack (its secrets live in `.ply/secrets/`)
     #[arg(
