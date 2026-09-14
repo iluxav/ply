@@ -1622,6 +1622,24 @@ fn current_build(checkout: &Path, fingerprint: &str) -> Option<PathBuf> {
     (!image.as_os_str().is_empty() && image.exists()).then_some(image)
 }
 
+/// The language runtime a repo's own `ply.toml` declares, as `name@version`,
+/// so the builder image compiles native addons against the SAME interpreter the
+/// runtime image bundles. Checked in priority order (node first). Returns None
+/// when there is no ply.toml or it declares no known runtime — the caller then
+/// keeps its default. Only interpreted/toolchain runtimes with a build step are
+/// listed; a compiled-binary base without one just falls through.
+fn repo_runtime(checkout: &Path) -> Option<String> {
+    const RUNTIMES: &[&str] = &["node", "bun", "deno", "python", "ruby"];
+    let text = std::fs::read_to_string(checkout.join("ply.toml")).ok()?;
+    let manifest = ply_core::manifest::Manifest::parse(&text).ok()?;
+    RUNTIMES.iter().find_map(|rt| {
+        manifest
+            .dependencies
+            .get(*rt)
+            .map(|dep| format!("{rt}@{}", dep.spec(rt).constraint))
+    })
+}
+
 fn build_from_repo(name: &str, spec: &Spec) -> Result<(PathBuf, String, bool)> {
     let repo = spec.repo.as_deref().expect("caller checked");
     let (checkout, commit) = sync_repo(name, spec)?;
@@ -1640,10 +1658,18 @@ fn build_from_repo(name: &str, spec: &Spec) -> Result<(PathBuf, String, bool)> {
         .build
         .clone()
         .or_else(|| detected.as_ref().and_then(|d| d.build.clone()));
+    // The builder's interpreter must be the one the RUNTIME image bundles, or
+    // native addons compiled here (against, say, node@24's ABI) fail to load
+    // under the app's declared node@22 at runtime (NODE_MODULE_VERSION) — a
+    // break that only surfaces after deploy. Precedence: an explicit
+    // deployment `runtime=` wins, then the detected recipe (no-ply.toml case),
+    // then the repo's OWN ply.toml runtime (so a hand-written manifest pins the
+    // builder too), then the last-resort default.
     let build_runtime = spec
         .runtime
         .clone()
         .or_else(|| detected.as_ref().map(|d| d.runtime.clone()))
+        .or_else(|| repo_runtime(&checkout))
         .unwrap_or_else(|| "node@24".into());
 
     // Nothing new to build? (same commit, same spec, and the exact image the
@@ -2111,6 +2137,28 @@ mod secret_env_tests {
         .unwrap_err()
         .to_string();
         assert!(err.contains("STRIPE_KEY"), "{err}");
+    }
+
+    /// The builder pins to the repo's OWN declared runtime, so native addons
+    /// build against the interpreter the runtime image will bundle — no
+    /// `node@24`-builds-then-`node@22`-runs ABI mismatch. No ply.toml, or no
+    /// known runtime in it, → None (caller keeps its default).
+    #[test]
+    fn repo_runtime_reads_the_declared_interpreter() {
+        let d = tempfile::tempdir().unwrap();
+        assert_eq!(repo_runtime(d.path()), None, "no ply.toml → default");
+        std::fs::write(
+            d.path().join("ply.toml"),
+            "[package]\nname = \"api\"\nversion = \"0.1.0\"\nentrypoint = [\"node\", \"i.js\"]\nbase = \"debian@13\"\n\n[dependencies]\nnode = \"22\"\n",
+        )
+        .unwrap();
+        assert_eq!(repo_runtime(d.path()).as_deref(), Some("node@22"));
+        std::fs::write(
+            d.path().join("ply.toml"),
+            "[package]\nname = \"api\"\nversion = \"0.1.0\"\nentrypoint = [\"x\"]\nbase = \"debian@13\"\n\n[dependencies]\nffmpeg = \"6\"\n",
+        )
+        .unwrap();
+        assert_eq!(repo_runtime(d.path()), None, "no known runtime → default");
     }
 
     /// A rotated secret value must change the unit text so `apply` restarts the

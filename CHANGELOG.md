@@ -5,6 +5,19 @@ breaking changes, and known limitations. Write under **Unreleased** as work
 lands; `make release-cli` turns that heading into the version and date, and
 the release workflow publishes the entry as the GitHub release notes.
 
+## Unreleased
+
+### Fixes
+- **A repo build now compiles against the interpreter it will run under.** The
+  builder image defaulted to `node@24` while the runtime image used the app's
+  own declared runtime — so a repo pinning `node = "22"` had its native addons
+  built against 24's ABI and failed to load under 22 at runtime
+  (`NODE_MODULE_VERSION`), a break that only surfaced after deploy. The builder
+  now pins to the repo's own `ply.toml` runtime (node/bun/deno/python/ruby)
+  when the deployment doesn't set `runtime=` explicitly, so build ABI == run
+  ABI. Repos with no ply.toml were already consistent (build and run share the
+  detected recipe).
+
 ## v0.1.107 — 2026-09-14
 
 ### Fixes
