@@ -5,6 +5,24 @@ breaking changes, and known limitations. Write under **Unreleased** as work
 lands; `make release-cli` turns that heading into the version and date, and
 the release workflow publishes the entry as the GitHub release notes.
 
+## Unreleased
+
+### Features
+- **Operator-injected secrets: `secret_env` on a deployment or stack member.**
+  A `secret_env = ["STRIPE_KEY", …]` list names env-var keys whose VALUES live
+  only in this host's secret store (`.secrets/<stack>/`, 0600), never in the
+  deployment file, the systemd unit, git, logs, or events. On each beat
+  reconcile looks each key up and injects it as a tainted value through the
+  existing 0600 `--env-file` path — off the world-readable unit. No manifest
+  `[params]` declaration and no `{}` reference required, so an operator can add
+  a runtime secret to a service without touching the app. A missing value fails
+  just that member (peers keep converging) with a message pointing at
+  `ply secret set`; a key that is both `env` and `secret_env` is refused. For a
+  single-app deployment `secret_env` and `env_file` can't both be set — the
+  store owns the one `--env-file` slot (`env_file` stays the dev lane).
+- **`ply secret rm MEMBER.PARAM`** (`--deployments <stack>` for the host store)
+  — idempotent secret removal, for rotation and cleanup.
+
 ## v0.1.105 — 2026-09-14
 
 ### Fixes
