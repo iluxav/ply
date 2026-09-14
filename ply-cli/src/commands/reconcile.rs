@@ -625,14 +625,28 @@ fn converge_stack(
 
     // --- apply, one unit per member -----------------------------------------
     for (member, mut spec, fetched) in pending {
-        let entries = resolution
+        let base = resolution
             .env
             .get(&member)
             .map(Vec::as_slice)
             .unwrap_or_default();
+        // Operator secrets (`secret_env`): looked up in this host's store and
+        // injected as tainted entries, so they ride the same 0600 env-file
+        // path as declared/minted secrets — never the world-readable unit.
+        let entries =
+            match inject_operator_secrets(base.to_vec(), &spec.secret_env, &member, &secrets) {
+                Ok(entries) => entries,
+                Err(e) => {
+                    deployments::write_status(&member, false, &format!("{e:#}"));
+                    ply_core::runtime::events::emit(&member, "deploy-failed", &format!("{e:#}"));
+                    eprintln!("ply: reconcile {member}: {e:#}");
+                    errs.push(format!("{member}: {e}"));
+                    continue;
+                }
+            };
         // Secret-tainted values never reach the unit: units live
         // world-readable under /etc/systemd/system, the env file is 0600.
-        let (flags, file) = split_env(entries);
+        let (flags, file) = split_env(&entries);
         spec.env = flags.into_iter().collect();
         let had_secrets = !file.is_empty();
         match write_member_secrets_file(name, &member, &file) {
@@ -798,6 +812,45 @@ fn split_env(entries: &[ply_core::stack::ResolvedEnv]) -> EnvSplit {
         }
     }
     (flags, file)
+}
+
+/// The operator lane: for each key a deployment lists in `secret_env`, read
+/// its value from the host store and append it as a TAINTED entry, so it
+/// rides the same 0600 env-file path as declared/minted secrets — never the
+/// world-readable unit. No manifest `[params]` decl and no `{}` ref: the
+/// deployment names the key, the store holds the value, and neither ever
+/// touches the spec. A missing value or a collision with a plain entry
+/// fails the member (the caller keeps its peers converging); the error
+/// names the key and the fix, never the value.
+fn inject_operator_secrets(
+    mut entries: Vec<ply_core::stack::ResolvedEnv>,
+    secret_env: &[String],
+    member: &str,
+    store: &ply_core::secrets::SecretStore,
+) -> Result<Vec<ply_core::stack::ResolvedEnv>> {
+    use ply_core::stack::{EnvSource, ResolvedEnv};
+    for key in secret_env {
+        if entries.iter().any(|e| &e.key == key) {
+            bail!(
+                "member `{member}`: `{key}` is both a plain env value and in `secret_env` — \
+                 a value can't be public and secret"
+            );
+        }
+        match store.get(member, key)? {
+            Some(value) => entries.push(ResolvedEnv {
+                key: key.clone(),
+                value,
+                secret: true,
+                source: EnvSource::OperatorSecret(store.label(member, key)),
+            }),
+            None => bail!(
+                "member `{member}`: secret env `{key}` has no value in the store ({}) — \
+                 set it with `ply secret set --deployments <stack> {member}.{key}`",
+                store.label(member, key)
+            ),
+        }
+    }
+    Ok(entries)
 }
 
 /// Where a stack member's secret env lives:
@@ -1883,6 +1936,61 @@ mod secret_env_tests {
                 EnvSource::StackE
             },
         }
+    }
+
+    /// An operator secret (`secret_env`) is looked up in the store and
+    /// appended as a TAINTED entry, so `split_env` routes it to the 0600
+    /// file, never the world-readable unit flags.
+    #[test]
+    fn operator_secret_is_injected_tainted_and_hidden_from_flags() {
+        let d = tempfile::tempdir().unwrap();
+        let store = ply_core::secrets::SecretStore::for_stack(d.path());
+        store.set("api", "STRIPE_KEY", "sk_live").unwrap();
+        let entries = inject_operator_secrets(
+            vec![entry("NODE_ENV", "production", false)],
+            &["STRIPE_KEY".to_string()],
+            "api",
+            &store,
+        )
+        .unwrap();
+        let (flags, file) = split_env(&entries);
+        assert!(!flags.iter().any(|(k, _)| k == "STRIPE_KEY"));
+        assert_eq!(
+            file,
+            vec![("STRIPE_KEY".to_string(), "sk_live".to_string())]
+        );
+    }
+
+    /// A secret_env key with no value in the store fails the member with a
+    /// message that names the KEY and the fix — never the value (there is
+    /// none to leak, but the failure path must stay value-free by habit).
+    #[test]
+    fn a_missing_operator_secret_errors_naming_the_key_not_the_value() {
+        let d = tempfile::tempdir().unwrap();
+        let store = ply_core::secrets::SecretStore::for_stack(d.path());
+        let err = inject_operator_secrets(vec![], &["STRIPE_KEY".to_string()], "api", &store)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("STRIPE_KEY"), "{err}");
+        assert!(err.contains("ply secret set"), "{err}");
+    }
+
+    /// A secret_env key that is also a plain entry is a collision — a value
+    /// can't be public and secret at once.
+    #[test]
+    fn an_operator_secret_that_collides_with_a_plain_entry_errors() {
+        let d = tempfile::tempdir().unwrap();
+        let store = ply_core::secrets::SecretStore::for_stack(d.path());
+        store.set("api", "STRIPE_KEY", "sk_live").unwrap();
+        let err = inject_operator_secrets(
+            vec![entry("STRIPE_KEY", "pk_public", false)],
+            &["STRIPE_KEY".to_string()],
+            "api",
+            &store,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("STRIPE_KEY"), "{err}");
     }
 
     /// Secret-tainted entries go to the env FILE (mode 0600, unreadable to
