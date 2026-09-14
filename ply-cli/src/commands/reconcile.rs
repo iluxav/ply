@@ -188,10 +188,53 @@ pub fn exec(args: crate::cli::ReconcileArgs) -> Result<()> {
                         }
                     }
                 }
+                // Operator secrets: a single-app deployment's `secret_env`
+                // values come from this host's store and ride a 0600
+                // `--env-file`, never the world-readable unit — the same
+                // taint split the stack path uses.
+                if !spec.secret_env.is_empty() {
+                    let store = ply_core::secrets::SecretStore::for_deployments(&name);
+                    match single_app_secret_split(&name, &spec, &store) {
+                        Ok((flags, file)) => {
+                            spec.env = flags.into_iter().collect();
+                            match write_member_secrets_file(&name, &name, &file) {
+                                Ok(path) => spec.env_file = path,
+                                Err(e) => {
+                                    desired.insert(name.clone());
+                                    deployments::write_status(&name, false, &format!("{e:#}"));
+                                    ply_core::runtime::events::emit(
+                                        &name,
+                                        "deploy-failed",
+                                        &format!("{e:#}"),
+                                    );
+                                    eprintln!("ply: reconcile {name}: {e:#}");
+                                    continue;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            desired.insert(name.clone());
+                            deployments::write_status(&name, false, &format!("{e:#}"));
+                            ply_core::runtime::events::emit(
+                                &name,
+                                "deploy-failed",
+                                &format!("{e:#}"),
+                            );
+                            eprintln!("ply: reconcile {name}: {e:#}");
+                            continue;
+                        }
+                    }
+                }
                 match apply(&name, &spec, &mut app_names, None) {
                     Ok(applied) => {
                         changed_units |= applied.changed;
                         desired.insert(name.clone());
+                        // A deployment that stopped using secret_env leaves a
+                        // stale 0600 file behind; the unit no longer names it
+                        // (apply just rewrote it), so dropping it now is safe.
+                        if spec.secret_env.is_empty() {
+                            remove_member_secrets_file(&name, &name);
+                        }
                         deployments::write_status(&name, true, &applied.detail);
                         // journal state changes only — "unchanged" is silence
                         if !applied.detail.starts_with("unchanged") {
@@ -851,6 +894,38 @@ fn inject_operator_secrets(
         }
     }
     Ok(entries)
+}
+
+/// The single-app counterpart: a deployment's own `env` becomes plain
+/// resolved entries, its `secret_env` is injected from the store, and the
+/// pair is split into unit flags and 0600 file lines. The store key is
+/// `<deployment>.<KEY>` (member == the deployment name). A deployment that
+/// also sets `env_file` is refused: `ply run` takes one `--env-file`, and a
+/// deployment using `secret_env` gives that slot to the store (env_file is
+/// the dev lane).
+fn single_app_secret_split(
+    name: &str,
+    spec: &Spec,
+    store: &ply_core::secrets::SecretStore,
+) -> Result<EnvSplit> {
+    if spec.env_file.is_some() {
+        bail!(
+            "`{name}`: `secret_env` and `env_file` can't both be set — the secret store owns the \
+             one `--env-file` slot (env_file is the dev lane; move its values into the store)"
+        );
+    }
+    let base: Vec<ply_core::stack::ResolvedEnv> = spec
+        .env
+        .iter()
+        .map(|(k, v)| ply_core::stack::ResolvedEnv {
+            key: k.clone(),
+            value: v.clone(),
+            secret: false,
+            source: ply_core::stack::EnvSource::StackE,
+        })
+        .collect();
+    let entries = inject_operator_secrets(base, &spec.secret_env, name, store)?;
+    Ok(split_env(&entries))
 }
 
 /// Where a stack member's secret env lives:
@@ -1936,6 +2011,33 @@ mod secret_env_tests {
                 EnvSource::StackE
             },
         }
+    }
+
+    /// A single-app deployment's `secret_env` splits the same way: plain env
+    /// stays flags, the store value becomes the 0600 file. And it refuses to
+    /// coexist with an `env_file` — there is one `--env-file` slot, and the
+    /// store owns it.
+    #[test]
+    fn single_app_secret_split_taints_and_rejects_env_file_conflict() {
+        let d = tempfile::tempdir().unwrap();
+        let store = ply_core::secrets::SecretStore::for_stack(d.path());
+        store.set("api", "STRIPE_KEY", "sk_live").unwrap();
+        let mut spec = Spec::parse(
+            "app=\"api\"\nsecret_env=[\"STRIPE_KEY\"]\n\n[env]\nNODE_ENV=\"production\"\n",
+        )
+        .unwrap();
+        let (flags, file) = single_app_secret_split("api", &spec, &store).unwrap();
+        assert!(flags
+            .iter()
+            .any(|(k, v)| k == "NODE_ENV" && v == "production"));
+        assert!(!flags.iter().any(|(k, _)| k == "STRIPE_KEY"));
+        assert_eq!(
+            file,
+            vec![("STRIPE_KEY".to_string(), "sk_live".to_string())]
+        );
+        // secret_env + env_file → conflict (one --env-file slot)
+        spec.env_file = Some(".env/api.env".to_string());
+        assert!(single_app_secret_split("api", &spec, &store).is_err());
     }
 
     /// An operator secret (`secret_env`) is looked up in the store and
