@@ -915,7 +915,14 @@ fn fetch_image(name: &str, spec: &Spec) -> Result<Fetched> {
                 .with_context(|| format!("importing {reference}"))?;
             println!("{name}: {reference} (docker import)");
             image_fact = Some(reference.to_string());
-            (named_image(name, &path, reference)?, reference.to_string())
+            // the imported image's own filename (a slug, no `/` or `:`) is the
+            // link name — the raw `docker://…` ref is not a valid file name.
+            let filename = path
+                .file_name()
+                .and_then(|f| f.to_str())
+                .unwrap_or("image.img")
+                .to_string();
+            (named_image(name, &path, &filename)?, filename)
         }
         (None, None, Some(repo)) => {
             let token = read_token(spec)?;

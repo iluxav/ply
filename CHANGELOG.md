@@ -5,6 +5,16 @@ breaking changes, and known limitations. Write under **Unreleased** as work
 lands; `make release-cli` turns that heading into the version and date, and
 the release workflow publishes the entry as the GitHub release notes.
 
+## Unreleased
+
+### Fixes
+- **`docker://` deploys now link the imported image correctly.** The import
+  itself worked, but `fetch_image` used the raw `docker://name:tag` reference
+  as the on-disk link name — its `/` and `:` made a nonexistent nested path,
+  so the deploy failed with "No such file or directory" right after pulling
+  every layer. It now links under the imported image's own basename. (Fixes
+  the v0.1.103 docker source; use `docker://` in a stack or order and it lands.)
+
 ## v0.1.103 — 2026-09-14
 
 ### What changed
