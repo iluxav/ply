@@ -5,6 +5,18 @@ breaking changes, and known limitations. Write under **Unreleased** as work
 lands; `make release-cli` turns that heading into the version and date, and
 the release workflow publishes the entry as the GitHub release notes.
 
+## Unreleased
+
+### Fixes
+- **Rotating a secret now restarts the service that reads it.** A `secret_env`
+  value change (or adding/removing a key while others remain) leaves the
+  member's `--env-file` PATH unchanged, so the systemd unit was byte-identical
+  and the running process kept its old environment until it happened to restart.
+  Reconcile now folds a hash of the secret env-file's CONTENT into the unit
+  (`# ply-secrets-rev: …` — the hash, never a value), so a rotation changes the
+  unit text and triggers a restart. Scoped to `.secrets/` files; units with no
+  secret env-file are byte-identical to before (no restart on upgrade).
+
 ## v0.1.106 — 2026-09-14
 
 ### Features

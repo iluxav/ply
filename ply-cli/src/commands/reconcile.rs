@@ -1172,6 +1172,23 @@ fn fetch_image(name: &str, spec: &Spec) -> Result<Fetched> {
     })
 }
 
+/// The `# ply-secrets-rev: <hash>` line folded into a unit whose `--env-file`
+/// is a host secret file, so rotating a secret value (or adding/dropping a key
+/// while others remain) — which leaves the `--env-file` PATH unchanged —
+/// changes the unit text and triggers a restart; otherwise the running process
+/// keeps its old environment until it restarts for some other reason. Scoped to
+/// `.secrets/` files (operator + minted secrets): only the hash, never a value,
+/// reaches the world-readable unit, and a unit with no secret env-file stays
+/// byte-identical to before (no mass restart on upgrade). The changed line is
+/// not `ExecStart=`, so `image_only_change` returns false → restart, not roll.
+fn secrets_rev_line(env_file: Option<&str>) -> String {
+    env_file
+        .filter(|f| f.contains("/.secrets/"))
+        .and_then(|f| ply_core::digest::sha256_file(std::path::Path::new(f)).ok())
+        .map(|h| format!("# ply-secrets-rev: {}\n", &h[..h.len().min(16)]))
+        .unwrap_or_default()
+}
+
 /// Converge one deployment onto its unit. `fetched` is the image a caller
 /// already resolved (the stack path, which must fetch every member up
 /// front); a single-app deployment passes `None` and resolves its own.
@@ -1207,7 +1224,8 @@ fn apply(
     }
 
     let unit_text = format!(
-        "{UNIT_MARKER}\n{}",
+        "{UNIT_MARKER}\n{}{}",
+        secrets_rev_line(spec.env_file.as_deref()),
         ply_core::lifecycle::systemd_unit(&image, &flags, &spec.after, false)?
     );
     let unit_path = PathBuf::from(UNIT_DIR).join(format!("ply-{name}.service"));
@@ -2093,6 +2111,34 @@ mod secret_env_tests {
         .unwrap_err()
         .to_string();
         assert!(err.contains("STRIPE_KEY"), "{err}");
+    }
+
+    /// A rotated secret value must change the unit text so `apply` restarts the
+    /// member — even though the `--env-file` PATH is unchanged. The rev line
+    /// tracks the file's CONTENT; it's empty for no env-file and for a non-
+    /// secret (`.env/`) one, so ordinary units stay byte-identical.
+    #[test]
+    fn secrets_rev_line_tracks_content_and_only_for_secret_files() {
+        assert_eq!(secrets_rev_line(None), "");
+        assert_eq!(
+            secrets_rev_line(Some("/var/lib/ply/deployments/.env/shared.env")),
+            "",
+            "the dev env_file lane is untouched"
+        );
+        let d = tempfile::tempdir().unwrap();
+        let sub = d.path().join(".secrets").join("app").join("env");
+        std::fs::create_dir_all(&sub).unwrap();
+        let f = sub.join("app.env");
+        let p = f.to_str().unwrap();
+        std::fs::write(&f, "STRIPE_KEY=\"v1\"\n").unwrap();
+        let a = secrets_rev_line(Some(p));
+        assert!(a.starts_with("# ply-secrets-rev: "), "{a:?}");
+        std::fs::write(&f, "STRIPE_KEY=\"v2\"\n").unwrap();
+        let b = secrets_rev_line(Some(p));
+        assert_ne!(
+            a, b,
+            "a rotated value must change the rev line → unit diff → restart"
+        );
     }
 
     /// Secret-tainted entries go to the env FILE (mode 0600, unreadable to
