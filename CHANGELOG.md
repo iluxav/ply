@@ -5,6 +5,18 @@ breaking changes, and known limitations. Write under **Unreleased** as work
 lands; `make release-cli` turns that heading into the version and date, and
 the release workflow publishes the entry as the GitHub release notes.
 
+## Unreleased
+
+### Fixes
+- **Deleting a deployment no longer leaves ghost status files.** A composition
+  has no unit named after the deployment (only its members do), so the
+  deletion sweep — which cleans by unit — never removed the stack-level
+  `.status/<name>.{status,members,stack.toml}`. Reconcile now also sweeps any
+  status/members/recipe file whose deployment `.toml` is gone and that owns no
+  live unit this beat, so a delete (incl. the dashboard's delete / delete +
+  data) leaves nothing behind. Held deployments keep their files (their `.toml`
+  is still present).
+
 ## v0.1.104 — 2026-09-14
 
 ### Fixes

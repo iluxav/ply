@@ -255,6 +255,34 @@ pub fn exec(args: crate::cli::ReconcileArgs) -> Result<()> {
         changed_units = true;
     }
 
+    // Sweep ghost status files. A composition has no unit named after the
+    // deployment (only its members do), so the unit sweep above never cleans
+    // its stack-level `.status/<name>.{status,members,stack.toml}` when the
+    // deployment is deleted. Anything whose deployment file is gone AND that
+    // owns no live unit this beat is a leftover — delete should leave nothing.
+    if let Ok(entries) = std::fs::read_dir(deployments::status_dir()) {
+        for e in entries.flatten() {
+            let fname = e.file_name().to_string_lossy().into_owned();
+            let stem = if let Some(s) = fname.strip_suffix(".stack.toml") {
+                s
+            } else if let Some(s) = fname.strip_suffix(".members") {
+                s
+            } else if let Some(s) = fname.strip_suffix(".status") {
+                s
+            } else {
+                continue; // volumes.json, reap, fleet.json, *.tmp, dotfiles
+            };
+            if stem.is_empty() || stem.starts_with('.') {
+                continue;
+            }
+            // `.toml` gone (not held — held keeps its file) and no live unit
+            // this beat (not a member of some other stack) → a ghost.
+            if !deployments::spec_path(stem).exists() && !desired.contains(stem) {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+    }
+
     if changed_units {
         run("systemctl", &["daemon-reload"])?;
     }
