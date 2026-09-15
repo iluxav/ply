@@ -5,6 +5,16 @@ breaking changes, and known limitations. Write under **Unreleased** as work
 lands; `make release-cli` turns that heading into the version and date, and
 the release workflow publishes the entry as the GitHub release notes.
 
+## Unreleased
+
+### Features
+- **`ply init` writes a default `[build] command` for JS projects.** A detected
+  Node or Bun project gets `command = "npm install"` (or `bun install`), plus
+  `&& … run build` when package.json has a `build` script — so `ply build`
+  installs deps inside the Linux builder for the target instead of shipping
+  host-native node_modules. Other project types get a commented `# command = …`
+  hint so the field is discoverable. Edit or delete the line freely.
+
 ## v0.1.111 — 2026-09-15
 
 ### Changed

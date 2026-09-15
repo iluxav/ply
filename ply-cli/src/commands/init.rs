@@ -108,6 +108,10 @@ pub(crate) struct Defaults {
     /// Environment the runtime needs to behave inside an instance — the
     /// kind of thing a person would only learn from a failure.
     pub env: Vec<(String, String)>,
+    /// A default `[build] command` for detected JS projects (install deps, and
+    /// run the build script if one exists), so `ply build` produces the image's
+    /// node_modules inside a Linux builder rather than packing host-native ones.
+    pub build_command: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -119,6 +123,7 @@ pub(crate) struct Answers {
     pub runtime: Option<(String, String)>,
     pub port: Option<u16>,
     pub env: Vec<(String, String)>,
+    pub build_command: Option<String>,
 }
 
 /// Lowercase, `[a-z0-9-]` only, runs collapsed, trimmed; `app` if nothing is left.
@@ -139,6 +144,24 @@ pub(crate) fn sanitize_name(raw: &str) -> String {
         "app".to_string()
     } else {
         out
+    }
+}
+
+/// The default `[build] command` for a JS project: install deps with `tool`
+/// ("npm" or "bun") so the image's node_modules are built inside a Linux
+/// builder for the target, and run the `build` script if package.json has one.
+fn js_build_command(dir: &Path, tool: &str) -> String {
+    let has_build = package_json(dir)
+        .and_then(|p| {
+            p.get("scripts")
+                .and_then(|s| s.get("build"))
+                .map(|b| b.is_string())
+        })
+        .unwrap_or(false);
+    if has_build {
+        format!("{tool} install && {tool} run build")
+    } else {
+        format!("{tool} install")
     }
 }
 
@@ -275,6 +298,7 @@ pub(crate) fn detect(dir: &Path, latest: &Latest) -> Defaults {
             .unwrap_or_else(|| "index.ts".into());
         return Defaults {
             name,
+            build_command: Some(js_build_command(dir, "bun")),
             entrypoint: vec!["bun".into(), "run".into(), main],
             runtime: runtime("bun"),
             port: Some(3000),
@@ -288,6 +312,7 @@ pub(crate) fn detect(dir: &Path, latest: &Latest) -> Defaults {
             .unwrap_or_else(|| "index.ts".into());
         return Defaults {
             name,
+            build_command: Some(js_build_command(dir, "bun")),
             entrypoint: vec!["bun".into(), "run".into(), main],
             runtime: runtime("bun"),
             port: Some(3000),
@@ -300,6 +325,7 @@ pub(crate) fn detect(dir: &Path, latest: &Latest) -> Defaults {
         // plain `http` server every tutorial writes; nothing to detect.
         return Defaults {
             name,
+            build_command: Some(js_build_command(dir, "npm")),
             entrypoint: vec!["node".into(), node_main(dir)],
             runtime: runtime("node"),
             port: Some(3000),
@@ -314,6 +340,7 @@ pub(crate) fn detect(dir: &Path, latest: &Latest) -> Defaults {
             .unwrap_or("main.ts");
         return Defaults {
             name,
+            build_command: None,
             entrypoint: vec!["deno".into(), "run".into(), "-A".into(), main.into()],
             runtime: runtime("deno"),
             port: Some(8000),
@@ -327,6 +354,7 @@ pub(crate) fn detect(dir: &Path, latest: &Latest) -> Defaults {
     if let Some(main) = ts_entry(dir) {
         return Defaults {
             name,
+            build_command: Some(js_build_command(dir, "bun")),
             entrypoint: vec!["bun".into(), "run".into(), main.into()],
             runtime: runtime("bun"),
             port: Some(3000),
@@ -343,6 +371,7 @@ pub(crate) fn detect(dir: &Path, latest: &Latest) -> Defaults {
         let gotmpdir = format!("/opt/{name}");
         return Defaults {
             name,
+            build_command: None,
             entrypoint: vec!["go".into(), "run".into(), ".".into()],
             runtime: runtime("go"),
             port: Some(8080),
@@ -357,6 +386,7 @@ pub(crate) fn detect(dir: &Path, latest: &Latest) -> Defaults {
     if has("Cargo.toml") {
         return Defaults {
             name,
+            build_command: None,
             entrypoint: vec!["cargo".into(), "run".into(), "--release".into()],
             runtime: runtime("rust"),
             port: Some(8080),
@@ -376,6 +406,7 @@ pub(crate) fn detect(dir: &Path, latest: &Latest) -> Defaults {
         };
         return Defaults {
             name,
+            build_command: None,
             entrypoint,
             runtime: runtime("ruby"),
             port: Some(port),
@@ -411,6 +442,7 @@ pub(crate) fn detect(dir: &Path, latest: &Latest) -> Defaults {
         };
         return Defaults {
             name,
+            build_command: None,
             entrypoint,
             runtime: runtime("python3"),
             port: Some(port),
@@ -424,6 +456,7 @@ pub(crate) fn detect(dir: &Path, latest: &Latest) -> Defaults {
     }
     Defaults {
         name,
+        build_command: None,
         entrypoint: vec!["/bin/sh".into(), "-c".into(), "echo hello from ply".into()],
         runtime: None,
         port: None,
@@ -526,6 +559,7 @@ pub(crate) fn prompt(
             runtime: d.runtime.clone(),
             port: d.port,
             env: d.env.clone(),
+            build_command: d.build_command.clone(),
         });
     }
     writeln!(
@@ -580,6 +614,7 @@ pub(crate) fn prompt(
         runtime,
         port,
         env: d.env.clone(),
+        build_command: d.build_command.clone(),
     })
 }
 
@@ -599,6 +634,15 @@ pub(crate) fn render_manifest(a: &Answers) -> String {
     t.push_str("\n[build]\n");
     t.push_str(&format!("base = {}\n", toml_str(&a.base)));
     t.push_str("# include = [\"dist/\"]   # ship only these paths (default: everything in this directory)\n");
+    // A build step ply runs inside a Linux builder image before packing, so the
+    // image's deps are built for the target (not the host). Active when detected
+    // for a JS project; a hint otherwise.
+    match &a.build_command {
+        Some(cmd) => t.push_str(&format!("command = {}\n", toml_str(cmd))),
+        None => t.push_str(
+            "# command = \"npm ci && npm run build\"   # run this in a builder image before packing\n",
+        ),
+    }
     if let Some((name, range)) = &a.runtime {
         t.push_str(&format!(
             "dependencies = {{ {name} = {} }}\n",
@@ -701,6 +745,59 @@ mod tests {
         assert_eq!(d.runtime, Some(("node".into(), "24".into())));
         assert_eq!(d.entrypoint, vec!["node", "dist/index.js"]);
         assert_eq!(d.port, Some(3000));
+        // a default build step: install deps in the builder image
+        assert_eq!(d.build_command.as_deref(), Some("npm install"));
+    }
+
+    #[test]
+    fn node_build_command_runs_the_build_script_when_present() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"x","scripts":{"build":"tsc"}}"#,
+        )
+        .unwrap();
+        let d = detect(dir.path(), &latest());
+        assert_eq!(
+            d.build_command.as_deref(),
+            Some("npm install && npm run build")
+        );
+        // and it renders as a grouped `[build] command`, parseable by ply build
+        let a = prompt(
+            &mut std::io::empty(),
+            &mut std::io::sink(),
+            &d,
+            &latest(),
+            true,
+        )
+        .unwrap();
+        let text = render_manifest(&a);
+        assert!(text.contains("command = \"npm install && npm run build\""));
+        let m = Manifest::parse(&text).expect("ply build must accept what init wrote");
+        assert_eq!(
+            m.build_command.as_deref(),
+            Some("npm install && npm run build")
+        );
+    }
+
+    #[test]
+    fn a_non_js_project_gets_a_build_hint_not_a_command() {
+        // python: no default build command, but the manifest teaches the field.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("app.py"), "print(1)\n").unwrap();
+        let d = detect(dir.path(), &latest());
+        assert_eq!(d.build_command, None);
+        let a = prompt(
+            &mut std::io::empty(),
+            &mut std::io::sink(),
+            &d,
+            &latest(),
+            true,
+        )
+        .unwrap();
+        let text = render_manifest(&a);
+        assert!(text.contains("# command ="), "{text}");
+        Manifest::parse(&text).expect("hint-only manifest still parses");
     }
 
     /// What `npm start` runs is the truest answer: a project with
@@ -973,6 +1070,7 @@ mod tests {
             runtime: Some(("python3".into(), "3.13".into())),
             port: Some(8000),
             evidence: Some("a Python project"),
+            build_command: None,
             env: Vec::new(),
         }
     }
@@ -1023,6 +1121,7 @@ mod tests {
             version: "0.1.0".into(),
             entrypoint: vec!["python3".into(), "app.py".into()],
             base: "debian@13".into(),
+            build_command: None,
             runtime: Some(("python3".into(), "3.13".into())),
             port: Some(8000),
             env: Vec::new(),
@@ -1055,6 +1154,7 @@ mod tests {
             version: "0.1.0".into(),
             entrypoint: vec!["/bin/sh".into(), "-c".into(), "echo hi".into()],
             base: "debian@13".into(),
+            build_command: None,
             runtime: None,
             port: None,
             env: Vec::new(),
