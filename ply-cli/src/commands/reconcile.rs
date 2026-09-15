@@ -1629,7 +1629,12 @@ fn current_build(checkout: &Path, fingerprint: &str) -> Option<PathBuf> {
 /// keeps its default. Only interpreted/toolchain runtimes with a build step are
 /// listed; a compiled-binary base without one just falls through.
 pub(crate) fn repo_runtime(checkout: &Path) -> Option<String> {
-    const RUNTIMES: &[&str] = &["node", "bun", "deno", "python", "ruby"];
+    // The language runtimes the registry carries and a build step needs — the
+    // same set `ply init` detects. Missing `go`/`rust` here made a Go or Rust
+    // repo fall back to the node default builder (`go: not found`).
+    const RUNTIMES: &[&str] = &[
+        "node", "bun", "deno", "go", "rust", "python3", "python", "ruby",
+    ];
     let text = std::fs::read_to_string(checkout.join("ply.toml")).ok()?;
     let manifest = ply_core::manifest::Manifest::parse(&text).ok()?;
     RUNTIMES.iter().find_map(|rt| {
@@ -2187,6 +2192,13 @@ mod secret_env_tests {
         )
         .unwrap();
         assert_eq!(repo_runtime(d.path()).as_deref(), Some("node@22"));
+        // a compiled language (Go) must be recognized too, not fall back to node
+        std::fs::write(
+            d.path().join("ply.toml"),
+            "[package]\nname = \"svc\"\nversion = \"0.1.0\"\nentrypoint = [\"./svc\"]\nbase = \"debian@13\"\n\n[dependencies]\ngo = \"1.24\"\n",
+        )
+        .unwrap();
+        assert_eq!(repo_runtime(d.path()).as_deref(), Some("go@1.24"));
         std::fs::write(
             d.path().join("ply.toml"),
             "[package]\nname = \"api\"\nversion = \"0.1.0\"\nentrypoint = [\"x\"]\nbase = \"debian@13\"\n\n[dependencies]\nffmpeg = \"6\"\n",

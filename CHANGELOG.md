@@ -5,6 +5,15 @@ breaking changes, and known limitations. Write under **Unreleased** as work
 lands; `make release-cli` turns that heading into the version and date, and
 the release workflow publishes the entry as the GitHub release notes.
 
+## Unreleased
+
+### Fixes
+- **The build stage recognizes Go and Rust projects.** The builder-runtime
+  detector only knew node/bun/deno/python/ruby, so a repo declaring `go` (or
+  `rust`) fell back to the node builder — `ply build` on a Go project failed with
+  `go: not found`. It now covers go/rust (and python3) too, so the builder image
+  gets the interpreter the project actually declares.
+
 ## v0.1.112 — 2026-09-15
 
 ### Features
