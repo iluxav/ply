@@ -1789,89 +1789,17 @@ fn build_from_repo(name: &str, spec: &Spec) -> Result<(PathBuf, String, bool)> {
                 d.what
             );
         }
-        let runtime = build_runtime.as_str();
-        let (rt_name, rt_version) = match runtime.split_once('@') {
-            Some((n, v)) => (n, v),
-            None => (runtime, "*"),
-        };
-        guard_memory(rt_name)?;
-
-        let builder_dir = checkout.join(".ply-build");
-        std::fs::create_dir_all(&builder_dir)?;
-        let mem_max = builder_mem_bytes();
-        let manifest = format!(
-            "[package]\nname = \"{name}-builder\"\nversion = \"0.1.0\"\nentrypoint = [\"/bin/sh\", \"-c\", {build:?}]\nworkdir = \"/work\"\nbase = \"debian@13\"\n\n[dependencies]\n{rt_name} = \"{rt_version}\"\n\n[resources]\nmem = \"{mem_max}\"\ncpu_weight = 25\n\n[sources]\ndefault = \"https://registry.plybox.sh/ply/{{package}}\"\n",
-        );
-        std::fs::write(builder_dir.join("ply.toml"), manifest)?;
-        let outcome = ply_core::build::build(&ply_core::build::BuildOptions {
-            dir: builder_dir.clone(),
-            output: None,
-            allow_insecure: false,
-            arch: None,
-            // CD lanes are non-interactive: a repo that carries a .env
-            // must fail loudly, never ship it.
-            allow_secrets: false,
-            manifest: None,
-        })
-        .context("building the builder image")?;
-
-        // Builds take minutes; the status file is the dashboard's only
-        // window in — say what is happening before going quiet.
+        // Builds take minutes; the status file is the dashboard's only window
+        // in — say what is happening before going quiet.
         deployments::write_status(name, true, &format!("building @ {commit}…"));
-        println!("{name}: build `{build}` (fenced at {mem_max}, {runtime})");
-        let mut cli_env: Vec<(String, String)> = spec
+        // The build runs inside a Linux builder image (the app's runtime) with
+        // the checkout mounted — shared with `ply build`'s build stage.
+        let env: Vec<(String, String)> = spec
             .env
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
-        if rt_name == "node" {
-            // Generous heap, tight residency: the cgroup fence + swap decide
-            // where pages LIVE; node's own limit must not strangle the build
-            // (node sizes its default heap from host RAM — on a 512MB droplet
-            // that's a guaranteed JS heap OOM regardless of swap).
-            let heap_mb = if meminfo("SwapTotal") > 0 {
-                1536
-            } else {
-                (mem_bytes_to_mb(&mem_max) * 9 / 10).max(512)
-            };
-            cli_env.push((
-                "NODE_OPTIONS".into(),
-                format!("--max-old-space-size={heap_mb}"),
-            ));
-            // The overlay is RAM-backed tmpfs — caches must land on disk, in
-            // the checkout, where they also persist between builds.
-            cli_env.push(("npm_config_cache".into(), "/work/.npm-cache".into()));
-            cli_env.push(("npm_config_update_notifier".into(), "false".into()));
-        }
-        // scratch space on disk for every runtime, not in the tmpfs overlay
-        cli_env.push(("TMPDIR".into(), "/work/.tmp".into()));
-        std::fs::create_dir_all(checkout.join(".tmp"))?;
-        let code = ply_core::runtime::run::run(&ply_core::runtime::run::RunOptions {
-            image: outcome.image_path,
-            name: None,
-            cli_env,
-            allow_insecure: true,
-            scale: 1,
-            links: vec![(checkout.clone(), "/work".into())],
-            publish: vec![],
-            network: None,
-            network_peers: vec![],
-            network_dns: None,
-            after: vec![],
-            after_timeout: std::time::Duration::from_secs(60),
-            privileged: false,
-            entrypoint: None,
-            domains: vec![],
-            volumes: vec![],
-            // The BUILD container, not a deployed member: a build fetches
-            // whatever its lockfile and package manager need, and no
-            // deployment file describes it.
-            egress: None,
-        })
-        .context("running the build container")?;
-        if code != 0 {
-            bail!("build failed (exit {code}) — `ply logs {name}-builder` has the output");
-        }
+        run_build_stage(name, &checkout, &build_runtime, build, &env)?;
     }
 
     // the app manifest: the repo's own ply.toml wins; else the spec's explicit

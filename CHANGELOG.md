@@ -5,6 +5,26 @@ breaking changes, and known limitations. Write under **Unreleased** as work
 lands; `make release-cli` turns that heading into the version and date, and
 the release workflow publishes the entry as the GitHub release notes.
 
+## Unreleased
+
+### Changed
+- **The CD repo build and `ply build`'s build stage are now one code path.**
+  `build_from_repo` (the `git+`/`repo=` deploy builder) now calls the same
+  `run_build_stage` helper `ply build` uses, so both build inside an identical
+  Linux builder image — no drift between "how it builds on the host" and "how it
+  builds locally". No behavior change (same builder image, memory fence, runtime
+  pin, and env).
+- **`ply build` no longer prints a spurious "packing nothing" line** while
+  building its internal `<name>-builder` image (that image is entrypoint-only by
+  design). User-authored builds still get the no-`include` hint.
+
+### Notes
+- The build stage handles native addons that ship **prebuilt** binaries
+  (esbuild, bcrypt, most popular packages) — verified. It cannot yet **compile**
+  a native addon from source: the `debian@13` builder image has no
+  gcc/make/python3, and the registry doesn't carry the compilers. Use a package
+  with a linux prebuilt, or wait for a toolchain-bearing builder base.
+
 ## v0.1.110 — 2026-09-15
 
 ### Features

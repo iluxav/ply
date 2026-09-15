@@ -234,7 +234,10 @@ pub fn build(opts: &BuildOptions) -> Result<BuildOutcome> {
             list.join("\n")
         )));
     }
-    if include.is_empty() {
+    // The internal build-stage image (`<name>-builder`) is entrypoint-only by
+    // design — it packs no app files — so the "no include" hint is just noise
+    // for it. Every user-authored build still gets it.
+    if include.is_empty() && !manifest.package.name.ends_with("-builder") {
         if packed_files == 0 {
             eprintln!(
                 "ply: packing nothing — {} holds only ply.toml (no `include`, so anything added later ships)",
