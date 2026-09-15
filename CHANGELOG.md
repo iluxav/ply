@@ -5,7 +5,7 @@ breaking changes, and known limitations. Write under **Unreleased** as work
 lands; `make release-cli` turns that heading into the version and date, and
 the release workflow publishes the entry as the GitHub release notes.
 
-## Unreleased
+## v0.1.111 — 2026-09-15
 
 ### Changed
 - **The CD repo build and `ply build`'s build stage are now one code path.**
