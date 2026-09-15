@@ -1628,7 +1628,7 @@ fn current_build(checkout: &Path, fingerprint: &str) -> Option<PathBuf> {
 /// when there is no ply.toml or it declares no known runtime — the caller then
 /// keeps its default. Only interpreted/toolchain runtimes with a build step are
 /// listed; a compiled-binary base without one just falls through.
-fn repo_runtime(checkout: &Path) -> Option<String> {
+pub(crate) fn repo_runtime(checkout: &Path) -> Option<String> {
     const RUNTIMES: &[&str] = &["node", "bun", "deno", "python", "ruby"];
     let text = std::fs::read_to_string(checkout.join("ply.toml")).ok()?;
     let manifest = ply_core::manifest::Manifest::parse(&text).ok()?;
@@ -1638,6 +1638,99 @@ fn repo_runtime(checkout: &Path) -> Option<String> {
             .get(*rt)
             .map(|dep| format!("{rt}@{}", dep.spec(rt).constraint))
     })
+}
+
+/// The synthesized manifest for a one-shot builder image: a `debian@13` base
+/// plus the runtime, whose entrypoint IS the build command, memory-fenced and
+/// pointed at the registry. Pure (no I/O) so it's unit-testable.
+fn builder_manifest(label: &str, runtime: &str, command: &str, mem_max: &str) -> String {
+    let (rt_name, rt_version) = match runtime.split_once('@') {
+        Some((n, v)) => (n, v),
+        None => (runtime, "*"),
+    };
+    format!(
+        "[package]\nname = \"{label}-builder\"\nversion = \"0.1.0\"\nentrypoint = [\"/bin/sh\", \"-c\", {command:?}]\nworkdir = \"/work\"\nbase = \"debian@13\"\n\n[dependencies]\n{rt_name} = \"{rt_version}\"\n\n[resources]\nmem = \"{mem_max}\"\ncpu_weight = 25\n\n[sources]\ndefault = \"https://registry.plybox.sh/ply/{{package}}\"\n",
+    )
+}
+
+/// Run a build command INSIDE a Linux builder image (`debian@13` + `runtime`)
+/// with `src` mounted at `/work`, memory-fenced, toolchain from the registry —
+/// the shared core of both the CD repo build and `ply build`'s build stage. The
+/// command writes its output (node_modules, dist, …) into `src`; `.ply-build`
+/// and `.tmp` are created under it. `label` names the builder image and appears
+/// in errors. Ok when the command exits 0. (`build_from_repo` still has its own
+/// inline copy for now; unifying them is a deliberate follow-up.)
+pub(crate) fn run_build_stage(
+    label: &str,
+    src: &Path,
+    runtime: &str,
+    command: &str,
+    env: &[(String, String)],
+) -> Result<()> {
+    let (rt_name, _) = match runtime.split_once('@') {
+        Some((n, v)) => (n, v),
+        None => (runtime, "*"),
+    };
+    guard_memory(rt_name)?;
+
+    let builder_dir = src.join(".ply-build");
+    std::fs::create_dir_all(&builder_dir)?;
+    let mem_max = builder_mem_bytes();
+    std::fs::write(
+        builder_dir.join("ply.toml"),
+        builder_manifest(label, runtime, command, &mem_max),
+    )?;
+    let outcome = ply_core::build::build(&ply_core::build::BuildOptions {
+        dir: builder_dir.clone(),
+        output: None,
+        allow_insecure: false,
+        arch: None,
+        allow_secrets: false,
+        manifest: None,
+    })
+    .context("building the builder image")?;
+
+    println!("{label}: build `{command}` (fenced at {mem_max}, {runtime})");
+    let mut cli_env: Vec<(String, String)> = env.to_vec();
+    if rt_name == "node" {
+        let heap_mb = if meminfo("SwapTotal") > 0 {
+            1536
+        } else {
+            (mem_bytes_to_mb(&mem_max) * 9 / 10).max(512)
+        };
+        cli_env.push((
+            "NODE_OPTIONS".into(),
+            format!("--max-old-space-size={heap_mb}"),
+        ));
+        cli_env.push(("npm_config_cache".into(), "/work/.npm-cache".into()));
+        cli_env.push(("npm_config_update_notifier".into(), "false".into()));
+    }
+    cli_env.push(("TMPDIR".into(), "/work/.tmp".into()));
+    std::fs::create_dir_all(src.join(".tmp"))?;
+    let code = ply_core::runtime::run::run(&ply_core::runtime::run::RunOptions {
+        image: outcome.image_path,
+        name: None,
+        cli_env,
+        allow_insecure: true,
+        scale: 1,
+        links: vec![(src.to_path_buf(), "/work".into())],
+        publish: vec![],
+        network: None,
+        network_peers: vec![],
+        network_dns: None,
+        after: vec![],
+        after_timeout: std::time::Duration::from_secs(60),
+        privileged: false,
+        entrypoint: None,
+        domains: vec![],
+        volumes: vec![],
+        egress: None,
+    })
+    .context("running the build container")?;
+    if code != 0 {
+        bail!("build failed (exit {code}) — `ply logs {label}-builder` has the output");
+    }
+    Ok(())
 }
 
 fn build_from_repo(name: &str, spec: &Spec) -> Result<(PathBuf, String, bool)> {
@@ -2137,6 +2230,19 @@ mod secret_env_tests {
         .unwrap_err()
         .to_string();
         assert!(err.contains("STRIPE_KEY"), "{err}");
+    }
+
+    /// The synthesized builder manifest pins the runtime, makes the build
+    /// command the entrypoint, and is itself a valid, parseable manifest.
+    #[test]
+    fn builder_manifest_is_valid_and_pins_the_runtime() {
+        let m = builder_manifest("api", "node@22", "npm ci && npm run build", "1536M");
+        assert!(m.contains("name = \"api-builder\""));
+        assert!(m.contains("node = \"22\""), "{m}");
+        assert!(m.contains("npm ci && npm run build"), "{m}");
+        assert!(m.contains("mem = \"1536M\""), "{m}");
+        // it must parse as a real manifest
+        ply_core::manifest::Manifest::parse(&m).expect("builder manifest parses");
     }
 
     /// The builder pins to the repo's OWN declared runtime, so native addons

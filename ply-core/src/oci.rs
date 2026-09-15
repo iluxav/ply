@@ -466,6 +466,7 @@ pub fn import(spec: &str, output: &Path) -> Result<ImportOutcome> {
             isolation: "ns".into(),
         },
         dependencies: Default::default(),
+        build_command: None,
         env,
         params: None,
         ports,

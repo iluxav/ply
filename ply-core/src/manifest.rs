@@ -19,6 +19,14 @@ pub struct Manifest {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub dependencies: BTreeMap<String, Dependency>,
 
+    /// `[build] command = "npm ci && npm run build"` — a build step ply runs
+    /// INSIDE a Linux builder image (this app's base + runtime) before packing,
+    /// so `ply build` on any host produces correct Linux artifacts (native
+    /// addons compiled for the target). Build-time only; the grouped form's
+    /// `[build] command` maps here (see `ungroup_build_run`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_command: Option<String>,
+
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
 
@@ -718,6 +726,10 @@ fn ungroup_build_run(value: toml::Value) -> toml::Value {
         for (k, v) in tbl {
             if pkg_keys.contains(&k.as_str()) {
                 package.insert(k, v);
+            } else if group == "build" && k == "command" {
+                // `[build] command` is build-time only; give it a distinct flat
+                // key so it never collides with `[run] entrypoint`.
+                root.insert("build_command".into(), v);
             } else {
                 root.insert(k, v);
             }
@@ -1399,6 +1411,29 @@ mod tests {
         let g = Manifest::parse(grouped).unwrap();
         let f = Manifest::parse(flat).unwrap();
         assert_eq!(g.to_toml().unwrap(), f.to_toml().unwrap());
+    }
+
+    #[test]
+    fn build_command_parses_grouped_and_flat() {
+        let grouped = "[package]\nname = \"x\"\nversion = \"0.1.0\"\nentrypoint = [\"node\", \"i.js\"]\n\n[build]\ncommand = \"npm ci && npm run build\"\ndependencies = { node = \"22\" }\n";
+        let g = Manifest::parse(grouped).unwrap();
+        assert_eq!(g.build_command.as_deref(), Some("npm ci && npm run build"));
+        // grouped [build] command maps to the flat top-level build_command key
+        let flat = "build_command = \"npm ci && npm run build\"\n\n[package]\nname = \"x\"\nversion = \"0.1.0\"\nentrypoint = [\"node\", \"i.js\"]\n\n[dependencies]\nnode = \"22\"\n";
+        let f = Manifest::parse(flat).unwrap();
+        assert_eq!(f.build_command.as_deref(), Some("npm ci && npm run build"));
+        assert_eq!(g.to_toml().unwrap(), f.to_toml().unwrap());
+        // absent → None; and [build] command must not become an entrypoint
+        let none = Manifest::parse(
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\nentrypoint = [\"node\", \"i.js\"]\n",
+        )
+        .unwrap();
+        assert_eq!(none.build_command, None);
+        // the command went to build_command, NOT the entrypoint
+        assert_eq!(
+            g.package.entrypoint,
+            Some(vec!["node".to_string(), "i.js".to_string()])
+        );
     }
 
     #[test]

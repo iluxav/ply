@@ -5,6 +5,20 @@ breaking changes, and known limitations. Write under **Unreleased** as work
 lands; `make release-cli` turns that heading into the version and date, and
 the release workflow publishes the entry as the GitHub release notes.
 
+## Unreleased
+
+### Features
+- **`[build] command` — `ply build` builds inside a Linux image, on any host.**
+  Declare a build step in the manifest (`[build]\ncommand = "npm ci && npm run
+  build"`) and `ply build` runs it INSIDE a builder image (debian@13 + the app's
+  declared runtime) over a COPY of the source, then packs the result — so `ply
+  build` on macOS (or any host) produces a correct Linux image with native
+  addons compiled for the target, the way the CD/`git+` path already did. Your
+  working directory is never mutated. Without a `[build] command`, `ply build`
+  is unchanged (and the v0.1.109 foreign-arch scan still backstops a stale local
+  node_modules). On macOS the stage runs in the microVM backend (needs the
+  kernel); Linux uses a namespace sandbox.
+
 ## v0.1.109 — 2026-09-14
 
 ### Fixes
