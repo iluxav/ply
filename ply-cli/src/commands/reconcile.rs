@@ -1712,6 +1712,18 @@ pub(crate) fn run_build_stage(
     }
     cli_env.push(("TMPDIR".into(), "/work/.tmp".into()));
     std::fs::create_dir_all(src.join(".tmp"))?;
+    // Ship ply's CA bundle over the /work mount and point the common HTTPS
+    // build tools at it: the minimal builder base has no system trust store, so
+    // Go/git/curl (Node bundles its own roots) otherwise can't verify TLS to
+    // fetch a toolchain, modules, or crates. Written after the builder image is
+    // built so it isn't packed into that image; pushed LAST so it wins over any
+    // SSL_CERT_FILE inherited from the manifest's runtime env. A build command
+    // that sets one inline still overrides this.
+    const CA_BUNDLE: &[u8] = include_bytes!("../../assets/ca-certificates.crt");
+    std::fs::write(builder_dir.join("ca-certificates.crt"), CA_BUNDLE)?;
+    for var in ["SSL_CERT_FILE", "GIT_SSL_CAINFO", "CURL_CA_BUNDLE"] {
+        cli_env.push((var.into(), "/work/.ply-build/ca-certificates.crt".into()));
+    }
     let code = ply_core::runtime::run::run(&ply_core::runtime::run::RunOptions {
         image: outcome.image_path,
         name: None,
@@ -2163,6 +2175,20 @@ mod secret_env_tests {
         .unwrap_err()
         .to_string();
         assert!(err.contains("STRIPE_KEY"), "{err}");
+    }
+
+    /// The embedded CA bundle ply injects into every builder image is a real,
+    /// non-trivial PEM bundle — a truncated or missing file would silently
+    /// reintroduce the TLS-verify failures this fixes.
+    #[test]
+    fn embedded_ca_bundle_is_a_real_pem_bundle() {
+        let ca = include_bytes!("../../assets/ca-certificates.crt");
+        let text = std::str::from_utf8(ca).expect("CA bundle is UTF-8");
+        assert!(
+            text.matches("BEGIN CERTIFICATE").count() > 50,
+            "too few roots"
+        );
+        assert!(ca.len() > 100_000, "CA bundle suspiciously small");
     }
 
     /// The synthesized builder manifest pins the runtime, makes the build

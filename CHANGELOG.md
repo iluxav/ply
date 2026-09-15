@@ -5,6 +5,18 @@ breaking changes, and known limitations. Write under **Unreleased** as work
 lands; `make release-cli` turns that heading into the version and date, and
 the release workflow publishes the entry as the GitHub release notes.
 
+## Unreleased
+
+### Fixes
+- **The build stage ships CA roots, so HTTPS-fetching builds just work.** The
+  minimal builder base has no system trust store, and Go/Rust/git/curl use it
+  (Node bundles its own), so fetching a Go toolchain, modules, or crates failed
+  with `x509: certificate signed by unknown authority`. ply now embeds a CA
+  bundle and injects it into every builder image over the `/work` mount,
+  pointing `SSL_CERT_FILE`/`GIT_SSL_CAINFO`/`CURL_CA_BUNDLE` at it — no more
+  per-project `cacert.pem` to build. (A build command that sets one inline still
+  wins.) Runtime images still ship their own CA certs as before.
+
 ## v0.1.113 — 2026-09-15
 
 ### Fixes
